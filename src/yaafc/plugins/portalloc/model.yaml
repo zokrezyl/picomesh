@@ -1,0 +1,51 @@
+methods:
+  - slot: store_allocate
+    domain: portalloc
+    owning_class: store
+    return_type: struct yaafc_uint32_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: service_id
+        type: uint32_t
+  - slot: store_release
+    domain: portalloc
+    owning_class: store
+    return_type: struct yaafc_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: port
+        type: uint32_t
+  - slot: store_count_used
+    domain: portalloc
+    owning_class: store
+    return_type: struct yaafc_size_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+classes:
+  - name: store
+    domain: portalloc
+    accessor: portalloc_store_class_get
+    type: regular
+    source_file: /home/misi/work/my/yaafc/src/yaafc/plugins/portalloc/portalloc.c
+    parent: null
+    mixins: []
+    data: struct portalloc_store_data
+    ops:
+      - slot: store_allocate
+        slot_domain: portalloc
+        impl: portalloc_store_allocate_impl
+      - slot: store_release
+        slot_domain: portalloc
+        impl: portalloc_store_release_impl
+      - slot: store_count_used
+        slot_domain: portalloc
+        impl: portalloc_store_count_used_impl

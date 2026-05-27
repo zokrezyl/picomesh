@@ -1,0 +1,117 @@
+# git-yaafc — mirror of yaapp's scenarios/git-yaapp/yaapp.yaml.
+#
+# A "mesh" parent process spawns each backend as a child yaafc serving
+# JSON-RPC over yttp on the listed port. Real portalloc integration
+# would assign ports dynamically; for today every service has an
+# explicit `port:` so the mesh can spawn deterministically.
+#
+# To bring it up:
+#
+#   make build-desktop-release
+#   ./scenarios/git-yaafc/mesh-up.sh
+#
+# The script connects to the parent's control yttp, calls
+# `mesh_store_reconcile_from_config`, then probes a few children.
+
+name: mesh
+
+# Parent process control port — clients (including the smoke script)
+# talk to the mesh here.
+control:
+  host: 127.0.0.1
+  port: 8800
+
+mesh:
+  auto_reconcile: true
+  services:
+
+    portalloc:
+      port: 8201
+      plugins: [portalloc]
+      config:
+        portalloc:
+          port_range: "8201-8299"
+
+    storage:
+      port: 8202
+      plugins: [storage]
+      config:
+        storage:
+          backend: sqlite
+          db_path: /tmp/git-yaafc/central.db
+
+    session:
+      port: 8203
+      plugins: [session]
+      config:
+        remotes:
+          - service: token_issuer
+            port: 8207
+
+    accounts:
+      port: 8204
+      plugins: [accounts]
+      config:
+        remotes:
+          - service: storage
+            port: 8202
+
+    password_authn:
+      port: 8205
+      plugins: [password_authn]
+      config:
+        remotes:
+          - service: storage
+            port: 8202
+          - service: accounts
+            port: 8204
+
+    github_authn:
+      port: 8206
+      plugins: [github_authn]
+      config:
+        remotes:
+          - service: storage
+            port: 8202
+
+    token_issuer:
+      port: 8207
+      plugins: [token_issuer]
+      config:
+        remotes:
+          - service: storage
+            port: 8202
+          - service: accounts
+            port: 8204
+
+    issues:
+      port: 8208
+      plugins: [issues]
+      config:
+        remotes:
+          - service: storage
+            port: 8202
+
+    git_repo:
+      port: 8209
+      plugins: [git_repo]
+      config:
+        remotes:
+          - service: storage
+            port: 8202
+
+    git_pipeline:
+      port: 8210
+      plugins: [git_pipeline]
+      config:
+        remotes:
+          - service: storage
+            port: 8202
+
+    personal_access_tokens:
+      port: 8211
+      plugins: [personal_access_tokens]
+      config:
+        remotes:
+          - service: storage
+            port: 8202

@@ -1,0 +1,81 @@
+methods:
+  - slot: store_open
+    domain: issues
+    owning_class: store
+    return_type: struct yaafc_uint32_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: repo_id
+        type: uint32_t
+      - name: author_id
+        type: uint32_t
+  - slot: store_close
+    domain: issues
+    owning_class: store
+    return_type: struct yaafc_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: issue_id
+        type: uint32_t
+  - slot: store_status
+    domain: issues
+    owning_class: store
+    return_type: struct yaafc_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: issue_id
+        type: uint32_t
+  - slot: store_count_open_in_repo
+    domain: issues
+    owning_class: store
+    return_type: struct yaafc_size_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: repo_id
+        type: uint32_t
+  - slot: store_count_total
+    domain: issues
+    owning_class: store
+    return_type: struct yaafc_size_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+classes:
+  - name: store
+    domain: issues
+    accessor: issues_store_class_get
+    type: regular
+    source_file: /home/misi/work/my/yaafc/src/yaafc/plugins/issues/store.c
+    parent: null
+    mixins: []
+    data: struct issues_store_data
+    ops:
+      - slot: store_open
+        slot_domain: issues
+        impl: issues_store_open_impl
+      - slot: store_close
+        slot_domain: issues
+        impl: issues_store_close_impl
+      - slot: store_status
+        slot_domain: issues
+        impl: issues_store_status_impl
+      - slot: store_count_open_in_repo
+        slot_domain: issues
+        impl: issues_store_count_open_in_repo_impl
+      - slot: store_count_total
+        slot_domain: issues
+        impl: issues_store_count_total_impl

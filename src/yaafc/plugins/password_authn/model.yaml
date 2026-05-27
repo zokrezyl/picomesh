@@ -1,0 +1,71 @@
+methods:
+  - slot: store_register
+    domain: password_authn
+    owning_class: store
+    return_type: struct yaafc_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: user_id
+        type: uint32_t
+      - name: hash
+        type: int64_t
+  - slot: store_authenticate
+    domain: password_authn
+    owning_class: store
+    return_type: struct yaafc_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: user_id
+        type: uint32_t
+      - name: hash
+        type: int64_t
+  - slot: store_change_password
+    domain: password_authn
+    owning_class: store
+    return_type: struct yaafc_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: user_id
+        type: uint32_t
+      - name: hash
+        type: int64_t
+  - slot: store_count_registered
+    domain: password_authn
+    owning_class: store
+    return_type: struct yaafc_size_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+classes:
+  - name: store
+    domain: password_authn
+    accessor: password_authn_store_class_get
+    type: regular
+    source_file: /home/misi/work/my/yaafc/src/yaafc/plugins/password_authn/store.c
+    parent: null
+    mixins: []
+    data: struct password_authn_store_data
+    ops:
+      - slot: store_register
+        slot_domain: password_authn
+        impl: password_authn_store_register_impl
+      - slot: store_authenticate
+        slot_domain: password_authn
+        impl: password_authn_store_authenticate_impl
+      - slot: store_change_password
+        slot_domain: password_authn
+        impl: password_authn_store_change_password_impl
+      - slot: store_count_registered
+        slot_domain: password_authn
+        impl: password_authn_store_count_registered_impl

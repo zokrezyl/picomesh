@@ -1,0 +1,81 @@
+/* Tiny RPC runtime.
+ *
+ * Wire request:
+ *   u32 header     — bits 31:28 = enum rpc_op, bits 27:0 = id
+ *                    (id is the slot index for RPC_OP_CALL, 0 otherwise)
+ *   u32 body_len
+ *   u8  body[body_len]
+ *
+ * Wire response:
+ *   u32 resp_len
+ *   u8  resp[resp_len]
+ *
+ * Admin and call live in different op-spaces — the slot id never collides
+ * with a sentinel. */
+
+#ifndef YAAFC_YCLASS_RPC_H
+#define YAAFC_YCLASS_RPC_H
+
+#include <yaafc/yclass/class.h>
+
+#include <stddef.h>
+#include <stdint.h>
+
+struct rpc_session;
+
+/* Wire-bytes → typed-call bridge for one slot. */
+typedef size_t (*rpc_skel_fn)(const void *body, size_t body_len, void *resp, size_t resp_max);
+
+enum rpc_op {
+    RPC_OP_CALL = 0,        /* id = slot index; body = packed args */
+    RPC_OP_RESOLVE_SLOT,    /* body = slot name; resp = u32 server slot id */
+    RPC_OP_GET_CLASS,       /* body = class name; resp = (u16 nl, name, u32 id)* */
+    RPC_OP_CREATE,          /* body = class name; resp = u64 handle */
+};
+
+#define RPC_OP_SHIFT 28
+#define RPC_OP_MASK 0xFu
+#define RPC_ID_MASK 0x0FFFFFFFu
+#define RPC_HDR_MAKE(op, id) (((uint32_t)(op) << RPC_OP_SHIFT) | ((id) & RPC_ID_MASK))
+#define RPC_HDR_OP(h) ((enum rpc_op)(((h) >> RPC_OP_SHIFT) & RPC_OP_MASK))
+#define RPC_HDR_ID(h) ((h) & RPC_ID_MASK)
+
+/* ---- Server side -------------------------------------------------- */
+
+void rpc_init(void);
+uint64_t rpc_register_object(void *obj);
+void *rpc_handle_resolve(uint64_t handle);
+
+/* Read/write callbacks supplied by the transport. The blocking-fd variant
+ * uses POSIX read()/write(); the yloop variant uses yloop_read/yloop_write
+ * (which yields the coroutine). Both should return n on success, 0 on EOF
+ * or unrecoverable error. */
+typedef size_t (*rpc_io_read_fn)(void *ud, void *buf, size_t n);
+typedef size_t (*rpc_io_write_fn)(void *ud, const void *buf, size_t n);
+
+void rpc_server_run_io(void *ud, rpc_io_read_fn rd, rpc_io_write_fn wr);
+
+/* Blocking POSIX fd convenience wrapper. */
+void rpc_server_run(int fd);
+
+typedef rpc_skel_fn (*skel_lookup_fn)(method_slot slot);
+void rpc_add_skel_lookup(skel_lookup_fn fn);
+rpc_skel_fn rpc_skel_for(method_slot slot);
+
+/* ---- Client side -------------------------------------------------- */
+
+struct rpc_session *rpc_session_create(int fd);
+void rpc_session_destroy(struct rpc_session *s);
+
+size_t rpc_call(struct rpc_session *s, enum rpc_op op, uint32_t id, const void *body,
+                size_t body_len, void *resp, size_t resp_max);
+
+#define RPC_REMOTE_ID_UNRESOLVED UINT32_MAX
+
+uint32_t rpc_session_remote_id(struct rpc_session *s, method_slot local_slot);
+void rpc_session_set_remote_id(struct rpc_session *s, method_slot local_slot, uint32_t remote_id);
+
+int rpc_session_translate_class(struct rpc_session *s, const char *class_name);
+uint32_t rpc_session_ensure_remote_id(struct rpc_session *s, method_slot local_slot);
+
+#endif /* YAAFC_YCLASS_RPC_H */

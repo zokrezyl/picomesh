@@ -1,0 +1,1 @@
+yaafc_add_plugin(personal_access_tokens SOURCES store.c)

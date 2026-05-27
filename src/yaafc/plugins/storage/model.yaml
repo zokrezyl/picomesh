@@ -1,0 +1,132 @@
+methods:
+  - slot: kv_set
+    domain: storage
+    owning_class: kv
+    return_type: struct yaafc_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: key_id
+        type: uint32_t
+      - name: value
+        type: int32_t
+  - slot: kv_get
+    domain: storage
+    owning_class: kv
+    return_type: struct yaafc_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: key_id
+        type: uint32_t
+  - slot: kv_count
+    domain: storage
+    owning_class: kv
+    return_type: struct yaafc_size_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+  - slot: sql_set
+    domain: storage
+    owning_class: sql
+    return_type: struct yaafc_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: key
+        type: "const char *"
+      - name: value
+        type: int64_t
+  - slot: sql_get
+    domain: storage
+    owning_class: sql
+    return_type: struct yaafc_int64_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: key
+        type: "const char *"
+  - slot: sql_exists
+    domain: storage
+    owning_class: sql
+    return_type: struct yaafc_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: key
+        type: "const char *"
+  - slot: sql_del
+    domain: storage
+    owning_class: sql
+    return_type: struct yaafc_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: key
+        type: "const char *"
+  - slot: sql_count
+    domain: storage
+    owning_class: sql
+    return_type: struct yaafc_size_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+classes:
+  - name: kv
+    domain: storage
+    accessor: storage_kv_class_get
+    type: regular
+    source_file: /home/misi/work/my/yaafc/src/yaafc/plugins/storage/kv.c
+    parent: null
+    mixins: []
+    data: struct storage_kv_data
+    ops:
+      - slot: kv_set
+        slot_domain: storage
+        impl: storage_kv_set_impl
+      - slot: kv_get
+        slot_domain: storage
+        impl: storage_kv_get_impl
+      - slot: kv_count
+        slot_domain: storage
+        impl: storage_kv_count_impl
+  - name: sql
+    domain: storage
+    accessor: storage_sql_class_get
+    type: regular
+    source_file: /home/misi/work/my/yaafc/src/yaafc/plugins/storage/sql.c
+    parent: null
+    mixins: []
+    data: struct storage_sql_data
+    ops:
+      - slot: sql_set
+        slot_domain: storage
+        impl: storage_sql_set_impl
+      - slot: sql_get
+        slot_domain: storage
+        impl: storage_sql_get_impl
+      - slot: sql_exists
+        slot_domain: storage
+        impl: storage_sql_exists_impl
+      - slot: sql_del
+        slot_domain: storage
+        impl: storage_sql_del_impl
+      - slot: sql_count
+        slot_domain: storage
+        impl: storage_sql_count_impl
