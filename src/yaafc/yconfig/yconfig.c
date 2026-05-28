@@ -769,6 +769,38 @@ const struct yconfig_node *yconfig_root(const struct yconfig *c)
     return c ? c->root : NULL;
 }
 
+struct yaafc_void_result yconfig_promote_subtree(struct yconfig *c, const char *dot_path)
+{
+    if (!c || !dot_path) {
+        return YAAFC_ERR(yaafc_void, "yconfig_promote_subtree: NULL args");
+    }
+    char buf[256];
+    size_t l = strlen(dot_path);
+    if (l >= sizeof(buf)) {
+        return YAAFC_ERR(yaafc_void, "yconfig_promote_subtree: path too long");
+    }
+    memcpy(buf, dot_path, l + 1);
+
+    const struct yconfig_node *sub = c->root;
+    for (char *tok = strtok(buf, "."); tok; tok = strtok(NULL, ".")) {
+        if (!sub || sub->kind != YCONFIG_MAP) {
+            sub = NULL;
+            break;
+        }
+        sub = map_get(sub, tok);
+    }
+    /* Subtree absent or not a map → no projection, but not an error.
+     * The caller (engine) projects optimistically; missing entries
+     * just mean "no service-local config to flatten". */
+    if (!sub || sub->kind != YCONFIG_MAP) {
+        return YAAFC_OK_VOID();
+    }
+    if (merge_into(c->root, sub) < 0) {
+        return YAAFC_ERR(yaafc_void, "yconfig_promote_subtree: merge failed");
+    }
+    return YAAFC_OK_VOID();
+}
+
 /* ---------------- dot-path lookup ---------------------------------- */
 
 static const struct yconfig_node *walk_path(const struct yconfig_node *n, const char *path)

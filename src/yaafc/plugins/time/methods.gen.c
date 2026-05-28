@@ -26,18 +26,36 @@ struct yaafc_int64_result time_clock_now_ms(struct ctx * ctx, struct object * ob
             return YAAFC_ERR(yaafc_int64, "time_clock_now_ms: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* gh#2: propagate auth context (uid, sid) across RPC. The
+         * skeleton on the server side reads these back into its
+         * `struct ctx _local` before invoking the impl. */
+        {
+            uint32_t _u = _s->uid, _i = _s->sid;
+            if (_off + 8 > sizeof(_a))
+                return YAAFC_ERR(yaafc_int64, "time_clock_now_ms: pack overflow");
+            memcpy(_a + _off, &_u, 4); _off += 4;
+            memcpy(_a + _off, &_i, 4); _off += 4;
+        }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
                 return YAAFC_ERR(yaafc_int64, "time_clock_now_ms: pack overflow");
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        uint8_t _wbuf[1 + sizeof(int64_t)];
+        uint8_t _wbuf[1 + 4 + 256];
         size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         if (_wn < 1) return YAAFC_ERR(yaafc_int64, "time_clock_now_ms: short RPC response");
-        if (_wbuf[0] != 0) return YAAFC_ERR(yaafc_int64, "time_clock_now_ms: remote impl returned error");
-        if (_wn != sizeof(_wbuf)) return YAAFC_ERR(yaafc_int64, "time_clock_now_ms: truncated RPC payload");
+        if (_wbuf[0] != 0) {
+            uint32_t _msg_len = 0;
+            if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
+            char _msg[260];
+            size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
+            if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
+            _msg[_copy] = 0;
+            return YAAFC_ERR(yaafc_int64, _msg[0] ? strdup(_msg) : "time_clock_now_ms: remote error (no msg)");
+        }
+        if (_wn != 1 + sizeof(int64_t)) return YAAFC_ERR(yaafc_int64, "time_clock_now_ms: truncated RPC payload");
         int64_t _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
         return YAAFC_OK(yaafc_int64, _v);
@@ -68,6 +86,16 @@ struct yaafc_int64_result time_clock_sleep_ms(struct ctx * ctx, struct object * 
             return YAAFC_ERR(yaafc_int64, "time_clock_sleep_ms: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* gh#2: propagate auth context (uid, sid) across RPC. The
+         * skeleton on the server side reads these back into its
+         * `struct ctx _local` before invoking the impl. */
+        {
+            uint32_t _u = _s->uid, _i = _s->sid;
+            if (_off + 8 > sizeof(_a))
+                return YAAFC_ERR(yaafc_int64, "time_clock_sleep_ms: pack overflow");
+            memcpy(_a + _off, &_u, 4); _off += 4;
+            memcpy(_a + _off, &_i, 4); _off += 4;
+        }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -77,12 +105,20 @@ struct yaafc_int64_result time_clock_sleep_ms(struct ctx * ctx, struct object * 
         if (_off + sizeof(ms) > sizeof(_a))
             return YAAFC_ERR(yaafc_int64, "time_clock_sleep_ms: pack overflow");
         memcpy(_a + _off, &ms, sizeof(ms)); _off += sizeof(ms);
-        uint8_t _wbuf[1 + sizeof(int64_t)];
+        uint8_t _wbuf[1 + 4 + 256];
         size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         if (_wn < 1) return YAAFC_ERR(yaafc_int64, "time_clock_sleep_ms: short RPC response");
-        if (_wbuf[0] != 0) return YAAFC_ERR(yaafc_int64, "time_clock_sleep_ms: remote impl returned error");
-        if (_wn != sizeof(_wbuf)) return YAAFC_ERR(yaafc_int64, "time_clock_sleep_ms: truncated RPC payload");
+        if (_wbuf[0] != 0) {
+            uint32_t _msg_len = 0;
+            if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
+            char _msg[260];
+            size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
+            if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
+            _msg[_copy] = 0;
+            return YAAFC_ERR(yaafc_int64, _msg[0] ? strdup(_msg) : "time_clock_sleep_ms: remote error (no msg)");
+        }
+        if (_wn != 1 + sizeof(int64_t)) return YAAFC_ERR(yaafc_int64, "time_clock_sleep_ms: truncated RPC payload");
         int64_t _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
         return YAAFC_OK(yaafc_int64, _v);

@@ -16,6 +16,7 @@
 #define YAAFC_YENGINE_ENGINE_H
 
 #include <yaafc/ycore/result.h>
+#include <yaafc/yclass/class.h>
 
 struct yaafc_engine;
 struct yloop;
@@ -100,6 +101,20 @@ struct yaafc_void_result yaafc_engine_add_remote(struct yaafc_engine *e,
 /* Borrow the registered session, or NULL if unknown. The session
  * stays owned by the engine. */
 struct rpc_session *yaafc_engine_remote(struct yaafc_engine *e, const char *name);
+
+/* Auto-dispatch helper: produce a `struct ctx` for talking to `service`.
+ * If the engine has a registered remote with that name, `ctx.session`
+ * is filled in — generated method stubs will RPC. If not (e.g. the
+ * service lives in this same process), `ctx.session` stays NULL and
+ * the generated stubs dispatch locally. Either way callers write the
+ * same code:
+ *
+ *     struct ctx c = yaafc_engine_service_ctx(e, "storage");
+ *     struct object_ptr_result o = storage_sql_create(&c);
+ *
+ * which removes the manual `c.session = yaafc_engine_remote(...)`
+ * boilerplate at every call site (gh#2). */
+struct ctx yaafc_engine_service_ctx(struct yaafc_engine *e, const char *service);
 
 /* Walk the engine's yconfig for `<plugin>.remotes.<idx>.{service,host,port}`
  * entries and call `yaafc_engine_add_remote` for each. Returns the

@@ -26,6 +26,16 @@ struct yaafc_int_result mesh_store_register_service(struct ctx * ctx, struct obj
             return YAAFC_ERR(yaafc_int, "mesh_store_register_service: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* gh#2: propagate auth context (uid, sid) across RPC. The
+         * skeleton on the server side reads these back into its
+         * `struct ctx _local` before invoking the impl. */
+        {
+            uint32_t _u = _s->uid, _i = _s->sid;
+            if (_off + 8 > sizeof(_a))
+                return YAAFC_ERR(yaafc_int, "mesh_store_register_service: pack overflow");
+            memcpy(_a + _off, &_u, 4); _off += 4;
+            memcpy(_a + _off, &_i, 4); _off += 4;
+        }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -38,12 +48,20 @@ struct yaafc_int_result mesh_store_register_service(struct ctx * ctx, struct obj
         if (_off + sizeof(port) > sizeof(_a))
             return YAAFC_ERR(yaafc_int, "mesh_store_register_service: pack overflow");
         memcpy(_a + _off, &port, sizeof(port)); _off += sizeof(port);
-        uint8_t _wbuf[1 + sizeof(int)];
+        uint8_t _wbuf[1 + 4 + 256];
         size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         if (_wn < 1) return YAAFC_ERR(yaafc_int, "mesh_store_register_service: short RPC response");
-        if (_wbuf[0] != 0) return YAAFC_ERR(yaafc_int, "mesh_store_register_service: remote impl returned error");
-        if (_wn != sizeof(_wbuf)) return YAAFC_ERR(yaafc_int, "mesh_store_register_service: truncated RPC payload");
+        if (_wbuf[0] != 0) {
+            uint32_t _msg_len = 0;
+            if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
+            char _msg[260];
+            size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
+            if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
+            _msg[_copy] = 0;
+            return YAAFC_ERR(yaafc_int, _msg[0] ? strdup(_msg) : "mesh_store_register_service: remote error (no msg)");
+        }
+        if (_wn != 1 + sizeof(int)) return YAAFC_ERR(yaafc_int, "mesh_store_register_service: truncated RPC payload");
         int _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
         return YAAFC_OK(yaafc_int, _v);
@@ -74,6 +92,16 @@ struct yaafc_uint32_result mesh_store_resolve(struct ctx * ctx, struct object * 
             return YAAFC_ERR(yaafc_uint32, "mesh_store_resolve: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* gh#2: propagate auth context (uid, sid) across RPC. The
+         * skeleton on the server side reads these back into its
+         * `struct ctx _local` before invoking the impl. */
+        {
+            uint32_t _u = _s->uid, _i = _s->sid;
+            if (_off + 8 > sizeof(_a))
+                return YAAFC_ERR(yaafc_uint32, "mesh_store_resolve: pack overflow");
+            memcpy(_a + _off, &_u, 4); _off += 4;
+            memcpy(_a + _off, &_i, 4); _off += 4;
+        }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -83,12 +111,20 @@ struct yaafc_uint32_result mesh_store_resolve(struct ctx * ctx, struct object * 
         if (_off + sizeof(service_id) > sizeof(_a))
             return YAAFC_ERR(yaafc_uint32, "mesh_store_resolve: pack overflow");
         memcpy(_a + _off, &service_id, sizeof(service_id)); _off += sizeof(service_id);
-        uint8_t _wbuf[1 + sizeof(uint32_t)];
+        uint8_t _wbuf[1 + 4 + 256];
         size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         if (_wn < 1) return YAAFC_ERR(yaafc_uint32, "mesh_store_resolve: short RPC response");
-        if (_wbuf[0] != 0) return YAAFC_ERR(yaafc_uint32, "mesh_store_resolve: remote impl returned error");
-        if (_wn != sizeof(_wbuf)) return YAAFC_ERR(yaafc_uint32, "mesh_store_resolve: truncated RPC payload");
+        if (_wbuf[0] != 0) {
+            uint32_t _msg_len = 0;
+            if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
+            char _msg[260];
+            size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
+            if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
+            _msg[_copy] = 0;
+            return YAAFC_ERR(yaafc_uint32, _msg[0] ? strdup(_msg) : "mesh_store_resolve: remote error (no msg)");
+        }
+        if (_wn != 1 + sizeof(uint32_t)) return YAAFC_ERR(yaafc_uint32, "mesh_store_resolve: truncated RPC payload");
         uint32_t _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
         return YAAFC_OK(yaafc_uint32, _v);
@@ -119,6 +155,16 @@ struct yaafc_int_result mesh_store_forget(struct ctx * ctx, struct object * obj,
             return YAAFC_ERR(yaafc_int, "mesh_store_forget: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* gh#2: propagate auth context (uid, sid) across RPC. The
+         * skeleton on the server side reads these back into its
+         * `struct ctx _local` before invoking the impl. */
+        {
+            uint32_t _u = _s->uid, _i = _s->sid;
+            if (_off + 8 > sizeof(_a))
+                return YAAFC_ERR(yaafc_int, "mesh_store_forget: pack overflow");
+            memcpy(_a + _off, &_u, 4); _off += 4;
+            memcpy(_a + _off, &_i, 4); _off += 4;
+        }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -128,12 +174,20 @@ struct yaafc_int_result mesh_store_forget(struct ctx * ctx, struct object * obj,
         if (_off + sizeof(service_id) > sizeof(_a))
             return YAAFC_ERR(yaafc_int, "mesh_store_forget: pack overflow");
         memcpy(_a + _off, &service_id, sizeof(service_id)); _off += sizeof(service_id);
-        uint8_t _wbuf[1 + sizeof(int)];
+        uint8_t _wbuf[1 + 4 + 256];
         size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         if (_wn < 1) return YAAFC_ERR(yaafc_int, "mesh_store_forget: short RPC response");
-        if (_wbuf[0] != 0) return YAAFC_ERR(yaafc_int, "mesh_store_forget: remote impl returned error");
-        if (_wn != sizeof(_wbuf)) return YAAFC_ERR(yaafc_int, "mesh_store_forget: truncated RPC payload");
+        if (_wbuf[0] != 0) {
+            uint32_t _msg_len = 0;
+            if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
+            char _msg[260];
+            size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
+            if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
+            _msg[_copy] = 0;
+            return YAAFC_ERR(yaafc_int, _msg[0] ? strdup(_msg) : "mesh_store_forget: remote error (no msg)");
+        }
+        if (_wn != 1 + sizeof(int)) return YAAFC_ERR(yaafc_int, "mesh_store_forget: truncated RPC payload");
         int _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
         return YAAFC_OK(yaafc_int, _v);
@@ -164,18 +218,36 @@ struct yaafc_size_result mesh_store_count_services(struct ctx * ctx, struct obje
             return YAAFC_ERR(yaafc_size, "mesh_store_count_services: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* gh#2: propagate auth context (uid, sid) across RPC. The
+         * skeleton on the server side reads these back into its
+         * `struct ctx _local` before invoking the impl. */
+        {
+            uint32_t _u = _s->uid, _i = _s->sid;
+            if (_off + 8 > sizeof(_a))
+                return YAAFC_ERR(yaafc_size, "mesh_store_count_services: pack overflow");
+            memcpy(_a + _off, &_u, 4); _off += 4;
+            memcpy(_a + _off, &_i, 4); _off += 4;
+        }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
                 return YAAFC_ERR(yaafc_size, "mesh_store_count_services: pack overflow");
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        uint8_t _wbuf[1 + sizeof(size_t)];
+        uint8_t _wbuf[1 + 4 + 256];
         size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         if (_wn < 1) return YAAFC_ERR(yaafc_size, "mesh_store_count_services: short RPC response");
-        if (_wbuf[0] != 0) return YAAFC_ERR(yaafc_size, "mesh_store_count_services: remote impl returned error");
-        if (_wn != sizeof(_wbuf)) return YAAFC_ERR(yaafc_size, "mesh_store_count_services: truncated RPC payload");
+        if (_wbuf[0] != 0) {
+            uint32_t _msg_len = 0;
+            if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
+            char _msg[260];
+            size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
+            if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
+            _msg[_copy] = 0;
+            return YAAFC_ERR(yaafc_size, _msg[0] ? strdup(_msg) : "mesh_store_count_services: remote error (no msg)");
+        }
+        if (_wn != 1 + sizeof(size_t)) return YAAFC_ERR(yaafc_size, "mesh_store_count_services: truncated RPC payload");
         size_t _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
         return YAAFC_OK(yaafc_size, _v);
@@ -206,6 +278,16 @@ struct yaafc_int_result mesh_store_spawn_yaafc(struct ctx * ctx, struct object *
             return YAAFC_ERR(yaafc_int, "mesh_store_spawn_yaafc: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* gh#2: propagate auth context (uid, sid) across RPC. The
+         * skeleton on the server side reads these back into its
+         * `struct ctx _local` before invoking the impl. */
+        {
+            uint32_t _u = _s->uid, _i = _s->sid;
+            if (_off + 8 > sizeof(_a))
+                return YAAFC_ERR(yaafc_int, "mesh_store_spawn_yaafc: pack overflow");
+            memcpy(_a + _off, &_u, 4); _off += 4;
+            memcpy(_a + _off, &_i, 4); _off += 4;
+        }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -215,12 +297,20 @@ struct yaafc_int_result mesh_store_spawn_yaafc(struct ctx * ctx, struct object *
         if (_off + sizeof(port) > sizeof(_a))
             return YAAFC_ERR(yaafc_int, "mesh_store_spawn_yaafc: pack overflow");
         memcpy(_a + _off, &port, sizeof(port)); _off += sizeof(port);
-        uint8_t _wbuf[1 + sizeof(int)];
+        uint8_t _wbuf[1 + 4 + 256];
         size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         if (_wn < 1) return YAAFC_ERR(yaafc_int, "mesh_store_spawn_yaafc: short RPC response");
-        if (_wbuf[0] != 0) return YAAFC_ERR(yaafc_int, "mesh_store_spawn_yaafc: remote impl returned error");
-        if (_wn != sizeof(_wbuf)) return YAAFC_ERR(yaafc_int, "mesh_store_spawn_yaafc: truncated RPC payload");
+        if (_wbuf[0] != 0) {
+            uint32_t _msg_len = 0;
+            if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
+            char _msg[260];
+            size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
+            if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
+            _msg[_copy] = 0;
+            return YAAFC_ERR(yaafc_int, _msg[0] ? strdup(_msg) : "mesh_store_spawn_yaafc: remote error (no msg)");
+        }
+        if (_wn != 1 + sizeof(int)) return YAAFC_ERR(yaafc_int, "mesh_store_spawn_yaafc: truncated RPC payload");
         int _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
         return YAAFC_OK(yaafc_int, _v);
@@ -251,6 +341,16 @@ struct yaafc_int_result mesh_store_kill_pid(struct ctx * ctx, struct object * ob
             return YAAFC_ERR(yaafc_int, "mesh_store_kill_pid: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* gh#2: propagate auth context (uid, sid) across RPC. The
+         * skeleton on the server side reads these back into its
+         * `struct ctx _local` before invoking the impl. */
+        {
+            uint32_t _u = _s->uid, _i = _s->sid;
+            if (_off + 8 > sizeof(_a))
+                return YAAFC_ERR(yaafc_int, "mesh_store_kill_pid: pack overflow");
+            memcpy(_a + _off, &_u, 4); _off += 4;
+            memcpy(_a + _off, &_i, 4); _off += 4;
+        }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -260,12 +360,20 @@ struct yaafc_int_result mesh_store_kill_pid(struct ctx * ctx, struct object * ob
         if (_off + sizeof(pid) > sizeof(_a))
             return YAAFC_ERR(yaafc_int, "mesh_store_kill_pid: pack overflow");
         memcpy(_a + _off, &pid, sizeof(pid)); _off += sizeof(pid);
-        uint8_t _wbuf[1 + sizeof(int)];
+        uint8_t _wbuf[1 + 4 + 256];
         size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         if (_wn < 1) return YAAFC_ERR(yaafc_int, "mesh_store_kill_pid: short RPC response");
-        if (_wbuf[0] != 0) return YAAFC_ERR(yaafc_int, "mesh_store_kill_pid: remote impl returned error");
-        if (_wn != sizeof(_wbuf)) return YAAFC_ERR(yaafc_int, "mesh_store_kill_pid: truncated RPC payload");
+        if (_wbuf[0] != 0) {
+            uint32_t _msg_len = 0;
+            if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
+            char _msg[260];
+            size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
+            if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
+            _msg[_copy] = 0;
+            return YAAFC_ERR(yaafc_int, _msg[0] ? strdup(_msg) : "mesh_store_kill_pid: remote error (no msg)");
+        }
+        if (_wn != 1 + sizeof(int)) return YAAFC_ERR(yaafc_int, "mesh_store_kill_pid: truncated RPC payload");
         int _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
         return YAAFC_OK(yaafc_int, _v);
@@ -296,18 +404,36 @@ struct yaafc_size_result mesh_store_count_children(struct ctx * ctx, struct obje
             return YAAFC_ERR(yaafc_size, "mesh_store_count_children: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* gh#2: propagate auth context (uid, sid) across RPC. The
+         * skeleton on the server side reads these back into its
+         * `struct ctx _local` before invoking the impl. */
+        {
+            uint32_t _u = _s->uid, _i = _s->sid;
+            if (_off + 8 > sizeof(_a))
+                return YAAFC_ERR(yaafc_size, "mesh_store_count_children: pack overflow");
+            memcpy(_a + _off, &_u, 4); _off += 4;
+            memcpy(_a + _off, &_i, 4); _off += 4;
+        }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
                 return YAAFC_ERR(yaafc_size, "mesh_store_count_children: pack overflow");
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        uint8_t _wbuf[1 + sizeof(size_t)];
+        uint8_t _wbuf[1 + 4 + 256];
         size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         if (_wn < 1) return YAAFC_ERR(yaafc_size, "mesh_store_count_children: short RPC response");
-        if (_wbuf[0] != 0) return YAAFC_ERR(yaafc_size, "mesh_store_count_children: remote impl returned error");
-        if (_wn != sizeof(_wbuf)) return YAAFC_ERR(yaafc_size, "mesh_store_count_children: truncated RPC payload");
+        if (_wbuf[0] != 0) {
+            uint32_t _msg_len = 0;
+            if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
+            char _msg[260];
+            size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
+            if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
+            _msg[_copy] = 0;
+            return YAAFC_ERR(yaafc_size, _msg[0] ? strdup(_msg) : "mesh_store_count_children: remote error (no msg)");
+        }
+        if (_wn != 1 + sizeof(size_t)) return YAAFC_ERR(yaafc_size, "mesh_store_count_children: truncated RPC payload");
         size_t _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
         return YAAFC_OK(yaafc_size, _v);
@@ -338,18 +464,36 @@ struct yaafc_int_result mesh_store_reconcile_from_config(struct ctx * ctx, struc
             return YAAFC_ERR(yaafc_int, "mesh_store_reconcile_from_config: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* gh#2: propagate auth context (uid, sid) across RPC. The
+         * skeleton on the server side reads these back into its
+         * `struct ctx _local` before invoking the impl. */
+        {
+            uint32_t _u = _s->uid, _i = _s->sid;
+            if (_off + 8 > sizeof(_a))
+                return YAAFC_ERR(yaafc_int, "mesh_store_reconcile_from_config: pack overflow");
+            memcpy(_a + _off, &_u, 4); _off += 4;
+            memcpy(_a + _off, &_i, 4); _off += 4;
+        }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
                 return YAAFC_ERR(yaafc_int, "mesh_store_reconcile_from_config: pack overflow");
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        uint8_t _wbuf[1 + sizeof(int)];
+        uint8_t _wbuf[1 + 4 + 256];
         size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         if (_wn < 1) return YAAFC_ERR(yaafc_int, "mesh_store_reconcile_from_config: short RPC response");
-        if (_wbuf[0] != 0) return YAAFC_ERR(yaafc_int, "mesh_store_reconcile_from_config: remote impl returned error");
-        if (_wn != sizeof(_wbuf)) return YAAFC_ERR(yaafc_int, "mesh_store_reconcile_from_config: truncated RPC payload");
+        if (_wbuf[0] != 0) {
+            uint32_t _msg_len = 0;
+            if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
+            char _msg[260];
+            size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
+            if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
+            _msg[_copy] = 0;
+            return YAAFC_ERR(yaafc_int, _msg[0] ? strdup(_msg) : "mesh_store_reconcile_from_config: remote error (no msg)");
+        }
+        if (_wn != 1 + sizeof(int)) return YAAFC_ERR(yaafc_int, "mesh_store_reconcile_from_config: truncated RPC payload");
         int _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
         return YAAFC_OK(yaafc_int, _v);
@@ -380,18 +524,36 @@ struct yaafc_int_result mesh_store_reconcile(struct ctx * ctx, struct object * o
             return YAAFC_ERR(yaafc_int, "mesh_store_reconcile: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* gh#2: propagate auth context (uid, sid) across RPC. The
+         * skeleton on the server side reads these back into its
+         * `struct ctx _local` before invoking the impl. */
+        {
+            uint32_t _u = _s->uid, _i = _s->sid;
+            if (_off + 8 > sizeof(_a))
+                return YAAFC_ERR(yaafc_int, "mesh_store_reconcile: pack overflow");
+            memcpy(_a + _off, &_u, 4); _off += 4;
+            memcpy(_a + _off, &_i, 4); _off += 4;
+        }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
                 return YAAFC_ERR(yaafc_int, "mesh_store_reconcile: pack overflow");
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        uint8_t _wbuf[1 + sizeof(int)];
+        uint8_t _wbuf[1 + 4 + 256];
         size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         if (_wn < 1) return YAAFC_ERR(yaafc_int, "mesh_store_reconcile: short RPC response");
-        if (_wbuf[0] != 0) return YAAFC_ERR(yaafc_int, "mesh_store_reconcile: remote impl returned error");
-        if (_wn != sizeof(_wbuf)) return YAAFC_ERR(yaafc_int, "mesh_store_reconcile: truncated RPC payload");
+        if (_wbuf[0] != 0) {
+            uint32_t _msg_len = 0;
+            if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
+            char _msg[260];
+            size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
+            if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
+            _msg[_copy] = 0;
+            return YAAFC_ERR(yaafc_int, _msg[0] ? strdup(_msg) : "mesh_store_reconcile: remote error (no msg)");
+        }
+        if (_wn != 1 + sizeof(int)) return YAAFC_ERR(yaafc_int, "mesh_store_reconcile: truncated RPC payload");
         int _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
         return YAAFC_OK(yaafc_int, _v);

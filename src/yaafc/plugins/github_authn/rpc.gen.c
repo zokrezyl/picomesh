@@ -17,6 +17,12 @@ static size_t github_authn_store_set_credentials_skel(const void *_body, size_t 
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
+    /* gh#2: every CALL is prefixed by the caller's auth context
+     * (uid, sid) — see the matching pack in the public stub. */
+    struct ctx _local = {0};
+    if (_off + 8 > _body_len) goto _short_body;
+    memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
+    memcpy(&_local.sid, (const uint8_t *)_body + _off, 4); _off += 4;
     struct object *_obj = NULL;
     {
         if (_off + 8 > _body_len) goto _short_body;
@@ -32,14 +38,23 @@ static size_t github_authn_store_set_credentials_skel(const void *_body, size_t 
     if (_off + sizeof(_v2) > _body_len) goto _short_body;
     memcpy(&_v2, (const uint8_t *)_body + _off, sizeof(_v2));
     _off += sizeof(_v2);
-    struct ctx _local = {0};
     struct yaafc_int_result _r = github_authn_store_set_credentials(&_local, _obj, _v1, _v2);
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
         yaafc_error_print(stderr, "[skel] github_authn_store_set_credentials", _r.error);
-        yaafc_error_destroy(_r.error);
+        const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
+        uint32_t _ml = (uint32_t)strlen(_msg);
+        if (_ml > 256) _ml = 256;
+        if (_resp_max < 1 + 4 + _ml) {
+            yaafc_error_destroy(_r.error);
+            ((uint8_t *)_resp)[0] = 1;
+            return _resp_max >= 1 ? 1 : 0;
+        }
         ((uint8_t *)_resp)[0] = 1;
-        return 1;
+        memcpy((uint8_t *)_resp + 1, &_ml, 4);
+        memcpy((uint8_t *)_resp + 5, _msg, _ml);
+        yaafc_error_destroy(_r.error);
+        return 1 + 4 + _ml;
     }
     if (_resp_max < 1 + sizeof(_r.value)) return 0;
     ((uint8_t *)_resp)[0] = 0;
@@ -54,6 +69,12 @@ static size_t github_authn_store_register_code_skel(const void *_body, size_t _b
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
+    /* gh#2: every CALL is prefixed by the caller's auth context
+     * (uid, sid) — see the matching pack in the public stub. */
+    struct ctx _local = {0};
+    if (_off + 8 > _body_len) goto _short_body;
+    memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
+    memcpy(&_local.sid, (const uint8_t *)_body + _off, 4); _off += 4;
     struct object *_obj = NULL;
     {
         if (_off + 8 > _body_len) goto _short_body;
@@ -69,14 +90,23 @@ static size_t github_authn_store_register_code_skel(const void *_body, size_t _b
     if (_off + sizeof(_v2) > _body_len) goto _short_body;
     memcpy(&_v2, (const uint8_t *)_body + _off, sizeof(_v2));
     _off += sizeof(_v2);
-    struct ctx _local = {0};
     struct yaafc_int_result _r = github_authn_store_register_code(&_local, _obj, _v1, _v2);
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
         yaafc_error_print(stderr, "[skel] github_authn_store_register_code", _r.error);
-        yaafc_error_destroy(_r.error);
+        const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
+        uint32_t _ml = (uint32_t)strlen(_msg);
+        if (_ml > 256) _ml = 256;
+        if (_resp_max < 1 + 4 + _ml) {
+            yaafc_error_destroy(_r.error);
+            ((uint8_t *)_resp)[0] = 1;
+            return _resp_max >= 1 ? 1 : 0;
+        }
         ((uint8_t *)_resp)[0] = 1;
-        return 1;
+        memcpy((uint8_t *)_resp + 1, &_ml, 4);
+        memcpy((uint8_t *)_resp + 5, _msg, _ml);
+        yaafc_error_destroy(_r.error);
+        return 1 + 4 + _ml;
     }
     if (_resp_max < 1 + sizeof(_r.value)) return 0;
     ((uint8_t *)_resp)[0] = 0;
@@ -91,6 +121,12 @@ static size_t github_authn_store_resolve_skel(const void *_body, size_t _body_le
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
+    /* gh#2: every CALL is prefixed by the caller's auth context
+     * (uid, sid) — see the matching pack in the public stub. */
+    struct ctx _local = {0};
+    if (_off + 8 > _body_len) goto _short_body;
+    memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
+    memcpy(&_local.sid, (const uint8_t *)_body + _off, 4); _off += 4;
     struct object *_obj = NULL;
     {
         if (_off + 8 > _body_len) goto _short_body;
@@ -102,14 +138,23 @@ static size_t github_authn_store_resolve_skel(const void *_body, size_t _body_le
     if (_off + sizeof(_v1) > _body_len) goto _short_body;
     memcpy(&_v1, (const uint8_t *)_body + _off, sizeof(_v1));
     _off += sizeof(_v1);
-    struct ctx _local = {0};
     struct yaafc_uint32_result _r = github_authn_store_resolve(&_local, _obj, _v1);
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
         yaafc_error_print(stderr, "[skel] github_authn_store_resolve", _r.error);
-        yaafc_error_destroy(_r.error);
+        const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
+        uint32_t _ml = (uint32_t)strlen(_msg);
+        if (_ml > 256) _ml = 256;
+        if (_resp_max < 1 + 4 + _ml) {
+            yaafc_error_destroy(_r.error);
+            ((uint8_t *)_resp)[0] = 1;
+            return _resp_max >= 1 ? 1 : 0;
+        }
         ((uint8_t *)_resp)[0] = 1;
-        return 1;
+        memcpy((uint8_t *)_resp + 1, &_ml, 4);
+        memcpy((uint8_t *)_resp + 5, _msg, _ml);
+        yaafc_error_destroy(_r.error);
+        return 1 + 4 + _ml;
     }
     if (_resp_max < 1 + sizeof(_r.value)) return 0;
     ((uint8_t *)_resp)[0] = 0;
@@ -124,6 +169,12 @@ static size_t github_authn_store_count_codes_skel(const void *_body, size_t _bod
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
+    /* gh#2: every CALL is prefixed by the caller's auth context
+     * (uid, sid) — see the matching pack in the public stub. */
+    struct ctx _local = {0};
+    if (_off + 8 > _body_len) goto _short_body;
+    memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
+    memcpy(&_local.sid, (const uint8_t *)_body + _off, 4); _off += 4;
     struct object *_obj = NULL;
     {
         if (_off + 8 > _body_len) goto _short_body;
@@ -131,14 +182,23 @@ static size_t github_authn_store_count_codes_skel(const void *_body, size_t _bod
         memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
         _obj = (struct object *)rpc_handle_resolve(_h);
     }
-    struct ctx _local = {0};
     struct yaafc_size_result _r = github_authn_store_count_codes(&_local, _obj);
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
         yaafc_error_print(stderr, "[skel] github_authn_store_count_codes", _r.error);
-        yaafc_error_destroy(_r.error);
+        const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
+        uint32_t _ml = (uint32_t)strlen(_msg);
+        if (_ml > 256) _ml = 256;
+        if (_resp_max < 1 + 4 + _ml) {
+            yaafc_error_destroy(_r.error);
+            ((uint8_t *)_resp)[0] = 1;
+            return _resp_max >= 1 ? 1 : 0;
+        }
         ((uint8_t *)_resp)[0] = 1;
-        return 1;
+        memcpy((uint8_t *)_resp + 1, &_ml, 4);
+        memcpy((uint8_t *)_resp + 5, _msg, _ml);
+        yaafc_error_destroy(_r.error);
+        return 1 + 4 + _ml;
     }
     if (_resp_max < 1 + sizeof(_r.value)) return 0;
     ((uint8_t *)_resp)[0] = 0;

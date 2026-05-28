@@ -6,9 +6,29 @@
  *   u32 body_len
  *   u8  body[body_len]
  *
+ * For RPC_OP_CALL, the body shape is:
+ *   u32 caller_uid    — auth context propagated across the wire.
+ *   u32 caller_sid    — caller's session id (0 if anonymous).
+ *   ... packed args follow ...
+ *
  * Wire response:
  *   u32 resp_len
  *   u8  resp[resp_len]
+ *
+ * For RPC_OP_CALL skel responses, the first response byte is a status:
+ *   0 = ok       → followed by sizeof(value_type) value bytes.
+ *   1 = error    → followed by u32 msg_len + msg_bytes. The client side
+ *                  rebuilds a `yaafc_error` with that message so the
+ *                  caller's chain doesn't collapse to a generic string.
+ *
+ * Argument types on the wire:
+ *   - Scalar PODs (uint32, int64, size_t, etc.) → memcpy'd in place.
+ *   - Strings (`const char *`) → u32 length + UTF-8 bytes.
+ *   - Richer shapes (records, lists) → carried as a string in a
+ *     well-known encoding (JSON / msgpack) chosen by the impl.
+ *     Anything that wants strong typing across the wire today should
+ *     hand-roll its pack/unpack via the string slot; the codegen
+ *     supports this without runtime changes.
  *
  * Admin and call live in different op-spaces — the slot id never collides
  * with a sentinel. */
@@ -31,6 +51,7 @@ enum rpc_op {
     RPC_OP_RESOLVE_SLOT,    /* body = slot name; resp = u32 server slot id */
     RPC_OP_GET_CLASS,       /* body = class name; resp = (u16 nl, name, u32 id)* */
     RPC_OP_CREATE,          /* body = class name; resp = u64 handle */
+    RPC_OP_DESTROY,         /* body = u64 handle; resp = u8 (1 if removed) */
 };
 
 #define RPC_OP_SHIFT 28

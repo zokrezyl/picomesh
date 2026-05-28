@@ -100,6 +100,26 @@ struct yaafc_engine_ptr_result yaafc_engine_create(const struct yaafc_engine_arg
     }
     e->config = cr.value;
 
+    /* Service projection (gh#1): if `--name X` matches a service in
+     * mesh.services.X, flatten that service's config block onto the
+     * root so plugins see their config at natural paths. Example:
+     * `mesh.services.storage.config.storage.db_path` becomes reachable
+     * as plain `storage.db_path`. Without this, child processes can't
+     * find their YAML-supplied config and silently fall back to defaults. */
+    const char *self_name = NULL;
+    if (e->cli) self_name = yargv_get_string(e->cli, "name", NULL);
+    if (self_name && *self_name) {
+        char path[256];
+        snprintf(path, sizeof(path), "mesh.services.%s.config", self_name);
+        struct yaafc_void_result pr = yconfig_promote_subtree(e->config, path);
+        if (YAAFC_IS_ERR(pr)) {
+            ywarn("engine: projecting %s onto root failed (continuing)", path);
+            yaafc_error_destroy(pr.error);
+        } else {
+            ydebug("engine: projected %s onto root", path);
+        }
+    }
+
     struct yloop_ptr_result lr = yloop_create();
     if (YAAFC_IS_ERR(lr)) {
         yconfig_destroy(e->config);
@@ -193,6 +213,14 @@ struct rpc_session *yaafc_engine_remote(struct yaafc_engine *e, const char *name
         if (strcmp(r->name, name) == 0) return r->session;
     }
     return NULL;
+}
+
+struct ctx yaafc_engine_service_ctx(struct yaafc_engine *e, const char *service)
+{
+    struct ctx c = {.session = NULL};
+    if (!e || !service) return c;
+    c.session = yaafc_engine_remote(e, service);
+    return c;
 }
 
 /* Look up the bind host/port for a named service by scanning

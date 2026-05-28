@@ -18,6 +18,12 @@ static size_t storage_kv_set_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
+    /* gh#2: every CALL is prefixed by the caller's auth context
+     * (uid, sid) — see the matching pack in the public stub. */
+    struct ctx _local = {0};
+    if (_off + 8 > _body_len) goto _short_body;
+    memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
+    memcpy(&_local.sid, (const uint8_t *)_body + _off, 4); _off += 4;
     struct object *_obj = NULL;
     {
         if (_off + 8 > _body_len) goto _short_body;
@@ -33,14 +39,23 @@ static size_t storage_kv_set_skel(const void *_body, size_t _body_len,
     if (_off + sizeof(_v2) > _body_len) goto _short_body;
     memcpy(&_v2, (const uint8_t *)_body + _off, sizeof(_v2));
     _off += sizeof(_v2);
-    struct ctx _local = {0};
     struct yaafc_int_result _r = storage_kv_set(&_local, _obj, _v1, _v2);
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
         yaafc_error_print(stderr, "[skel] storage_kv_set", _r.error);
-        yaafc_error_destroy(_r.error);
+        const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
+        uint32_t _ml = (uint32_t)strlen(_msg);
+        if (_ml > 256) _ml = 256;
+        if (_resp_max < 1 + 4 + _ml) {
+            yaafc_error_destroy(_r.error);
+            ((uint8_t *)_resp)[0] = 1;
+            return _resp_max >= 1 ? 1 : 0;
+        }
         ((uint8_t *)_resp)[0] = 1;
-        return 1;
+        memcpy((uint8_t *)_resp + 1, &_ml, 4);
+        memcpy((uint8_t *)_resp + 5, _msg, _ml);
+        yaafc_error_destroy(_r.error);
+        return 1 + 4 + _ml;
     }
     if (_resp_max < 1 + sizeof(_r.value)) return 0;
     ((uint8_t *)_resp)[0] = 0;
@@ -55,6 +70,12 @@ static size_t storage_kv_get_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
+    /* gh#2: every CALL is prefixed by the caller's auth context
+     * (uid, sid) — see the matching pack in the public stub. */
+    struct ctx _local = {0};
+    if (_off + 8 > _body_len) goto _short_body;
+    memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
+    memcpy(&_local.sid, (const uint8_t *)_body + _off, 4); _off += 4;
     struct object *_obj = NULL;
     {
         if (_off + 8 > _body_len) goto _short_body;
@@ -66,14 +87,23 @@ static size_t storage_kv_get_skel(const void *_body, size_t _body_len,
     if (_off + sizeof(_v1) > _body_len) goto _short_body;
     memcpy(&_v1, (const uint8_t *)_body + _off, sizeof(_v1));
     _off += sizeof(_v1);
-    struct ctx _local = {0};
     struct yaafc_int_result _r = storage_kv_get(&_local, _obj, _v1);
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
         yaafc_error_print(stderr, "[skel] storage_kv_get", _r.error);
-        yaafc_error_destroy(_r.error);
+        const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
+        uint32_t _ml = (uint32_t)strlen(_msg);
+        if (_ml > 256) _ml = 256;
+        if (_resp_max < 1 + 4 + _ml) {
+            yaafc_error_destroy(_r.error);
+            ((uint8_t *)_resp)[0] = 1;
+            return _resp_max >= 1 ? 1 : 0;
+        }
         ((uint8_t *)_resp)[0] = 1;
-        return 1;
+        memcpy((uint8_t *)_resp + 1, &_ml, 4);
+        memcpy((uint8_t *)_resp + 5, _msg, _ml);
+        yaafc_error_destroy(_r.error);
+        return 1 + 4 + _ml;
     }
     if (_resp_max < 1 + sizeof(_r.value)) return 0;
     ((uint8_t *)_resp)[0] = 0;
@@ -88,6 +118,12 @@ static size_t storage_kv_count_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
+    /* gh#2: every CALL is prefixed by the caller's auth context
+     * (uid, sid) — see the matching pack in the public stub. */
+    struct ctx _local = {0};
+    if (_off + 8 > _body_len) goto _short_body;
+    memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
+    memcpy(&_local.sid, (const uint8_t *)_body + _off, 4); _off += 4;
     struct object *_obj = NULL;
     {
         if (_off + 8 > _body_len) goto _short_body;
@@ -95,14 +131,23 @@ static size_t storage_kv_count_skel(const void *_body, size_t _body_len,
         memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
         _obj = (struct object *)rpc_handle_resolve(_h);
     }
-    struct ctx _local = {0};
     struct yaafc_size_result _r = storage_kv_count(&_local, _obj);
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
         yaafc_error_print(stderr, "[skel] storage_kv_count", _r.error);
-        yaafc_error_destroy(_r.error);
+        const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
+        uint32_t _ml = (uint32_t)strlen(_msg);
+        if (_ml > 256) _ml = 256;
+        if (_resp_max < 1 + 4 + _ml) {
+            yaafc_error_destroy(_r.error);
+            ((uint8_t *)_resp)[0] = 1;
+            return _resp_max >= 1 ? 1 : 0;
+        }
         ((uint8_t *)_resp)[0] = 1;
-        return 1;
+        memcpy((uint8_t *)_resp + 1, &_ml, 4);
+        memcpy((uint8_t *)_resp + 5, _msg, _ml);
+        yaafc_error_destroy(_r.error);
+        return 1 + 4 + _ml;
     }
     if (_resp_max < 1 + sizeof(_r.value)) return 0;
     ((uint8_t *)_resp)[0] = 0;
@@ -117,6 +162,12 @@ static size_t storage_sql_set_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
+    /* gh#2: every CALL is prefixed by the caller's auth context
+     * (uid, sid) — see the matching pack in the public stub. */
+    struct ctx _local = {0};
+    if (_off + 8 > _body_len) goto _short_body;
+    memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
+    memcpy(&_local.sid, (const uint8_t *)_body + _off, 4); _off += 4;
     struct object *_obj = NULL;
     {
         if (_off + 8 > _body_len) goto _short_body;
@@ -138,14 +189,23 @@ static size_t storage_sql_set_skel(const void *_body, size_t _body_len,
     if (_off + sizeof(_v2) > _body_len) goto _short_body;
     memcpy(&_v2, (const uint8_t *)_body + _off, sizeof(_v2));
     _off += sizeof(_v2);
-    struct ctx _local = {0};
     struct yaafc_int_result _r = storage_sql_set(&_local, _obj, _s1, _v2);
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
         yaafc_error_print(stderr, "[skel] storage_sql_set", _r.error);
-        yaafc_error_destroy(_r.error);
+        const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
+        uint32_t _ml = (uint32_t)strlen(_msg);
+        if (_ml > 256) _ml = 256;
+        if (_resp_max < 1 + 4 + _ml) {
+            yaafc_error_destroy(_r.error);
+            ((uint8_t *)_resp)[0] = 1;
+            return _resp_max >= 1 ? 1 : 0;
+        }
         ((uint8_t *)_resp)[0] = 1;
-        return 1;
+        memcpy((uint8_t *)_resp + 1, &_ml, 4);
+        memcpy((uint8_t *)_resp + 5, _msg, _ml);
+        yaafc_error_destroy(_r.error);
+        return 1 + 4 + _ml;
     }
     if (_resp_max < 1 + sizeof(_r.value)) return 0;
     ((uint8_t *)_resp)[0] = 0;
@@ -160,6 +220,12 @@ static size_t storage_sql_get_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
+    /* gh#2: every CALL is prefixed by the caller's auth context
+     * (uid, sid) — see the matching pack in the public stub. */
+    struct ctx _local = {0};
+    if (_off + 8 > _body_len) goto _short_body;
+    memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
+    memcpy(&_local.sid, (const uint8_t *)_body + _off, 4); _off += 4;
     struct object *_obj = NULL;
     {
         if (_off + 8 > _body_len) goto _short_body;
@@ -177,14 +243,23 @@ static size_t storage_sql_get_skel(const void *_body, size_t _body_len,
         if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
         _s1[_slen] = 0; _off += _slen;
     }
-    struct ctx _local = {0};
     struct yaafc_int64_result _r = storage_sql_get(&_local, _obj, _s1);
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
         yaafc_error_print(stderr, "[skel] storage_sql_get", _r.error);
-        yaafc_error_destroy(_r.error);
+        const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
+        uint32_t _ml = (uint32_t)strlen(_msg);
+        if (_ml > 256) _ml = 256;
+        if (_resp_max < 1 + 4 + _ml) {
+            yaafc_error_destroy(_r.error);
+            ((uint8_t *)_resp)[0] = 1;
+            return _resp_max >= 1 ? 1 : 0;
+        }
         ((uint8_t *)_resp)[0] = 1;
-        return 1;
+        memcpy((uint8_t *)_resp + 1, &_ml, 4);
+        memcpy((uint8_t *)_resp + 5, _msg, _ml);
+        yaafc_error_destroy(_r.error);
+        return 1 + 4 + _ml;
     }
     if (_resp_max < 1 + sizeof(_r.value)) return 0;
     ((uint8_t *)_resp)[0] = 0;
@@ -199,6 +274,12 @@ static size_t storage_sql_exists_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
+    /* gh#2: every CALL is prefixed by the caller's auth context
+     * (uid, sid) — see the matching pack in the public stub. */
+    struct ctx _local = {0};
+    if (_off + 8 > _body_len) goto _short_body;
+    memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
+    memcpy(&_local.sid, (const uint8_t *)_body + _off, 4); _off += 4;
     struct object *_obj = NULL;
     {
         if (_off + 8 > _body_len) goto _short_body;
@@ -216,14 +297,23 @@ static size_t storage_sql_exists_skel(const void *_body, size_t _body_len,
         if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
         _s1[_slen] = 0; _off += _slen;
     }
-    struct ctx _local = {0};
     struct yaafc_int_result _r = storage_sql_exists(&_local, _obj, _s1);
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
         yaafc_error_print(stderr, "[skel] storage_sql_exists", _r.error);
-        yaafc_error_destroy(_r.error);
+        const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
+        uint32_t _ml = (uint32_t)strlen(_msg);
+        if (_ml > 256) _ml = 256;
+        if (_resp_max < 1 + 4 + _ml) {
+            yaafc_error_destroy(_r.error);
+            ((uint8_t *)_resp)[0] = 1;
+            return _resp_max >= 1 ? 1 : 0;
+        }
         ((uint8_t *)_resp)[0] = 1;
-        return 1;
+        memcpy((uint8_t *)_resp + 1, &_ml, 4);
+        memcpy((uint8_t *)_resp + 5, _msg, _ml);
+        yaafc_error_destroy(_r.error);
+        return 1 + 4 + _ml;
     }
     if (_resp_max < 1 + sizeof(_r.value)) return 0;
     ((uint8_t *)_resp)[0] = 0;
@@ -238,6 +328,12 @@ static size_t storage_sql_del_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
+    /* gh#2: every CALL is prefixed by the caller's auth context
+     * (uid, sid) — see the matching pack in the public stub. */
+    struct ctx _local = {0};
+    if (_off + 8 > _body_len) goto _short_body;
+    memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
+    memcpy(&_local.sid, (const uint8_t *)_body + _off, 4); _off += 4;
     struct object *_obj = NULL;
     {
         if (_off + 8 > _body_len) goto _short_body;
@@ -255,14 +351,23 @@ static size_t storage_sql_del_skel(const void *_body, size_t _body_len,
         if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
         _s1[_slen] = 0; _off += _slen;
     }
-    struct ctx _local = {0};
     struct yaafc_int_result _r = storage_sql_del(&_local, _obj, _s1);
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
         yaafc_error_print(stderr, "[skel] storage_sql_del", _r.error);
-        yaafc_error_destroy(_r.error);
+        const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
+        uint32_t _ml = (uint32_t)strlen(_msg);
+        if (_ml > 256) _ml = 256;
+        if (_resp_max < 1 + 4 + _ml) {
+            yaafc_error_destroy(_r.error);
+            ((uint8_t *)_resp)[0] = 1;
+            return _resp_max >= 1 ? 1 : 0;
+        }
         ((uint8_t *)_resp)[0] = 1;
-        return 1;
+        memcpy((uint8_t *)_resp + 1, &_ml, 4);
+        memcpy((uint8_t *)_resp + 5, _msg, _ml);
+        yaafc_error_destroy(_r.error);
+        return 1 + 4 + _ml;
     }
     if (_resp_max < 1 + sizeof(_r.value)) return 0;
     ((uint8_t *)_resp)[0] = 0;
@@ -277,6 +382,12 @@ static size_t storage_sql_count_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
+    /* gh#2: every CALL is prefixed by the caller's auth context
+     * (uid, sid) — see the matching pack in the public stub. */
+    struct ctx _local = {0};
+    if (_off + 8 > _body_len) goto _short_body;
+    memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
+    memcpy(&_local.sid, (const uint8_t *)_body + _off, 4); _off += 4;
     struct object *_obj = NULL;
     {
         if (_off + 8 > _body_len) goto _short_body;
@@ -284,14 +395,23 @@ static size_t storage_sql_count_skel(const void *_body, size_t _body_len,
         memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
         _obj = (struct object *)rpc_handle_resolve(_h);
     }
-    struct ctx _local = {0};
     struct yaafc_size_result _r = storage_sql_count(&_local, _obj);
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
         yaafc_error_print(stderr, "[skel] storage_sql_count", _r.error);
-        yaafc_error_destroy(_r.error);
+        const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
+        uint32_t _ml = (uint32_t)strlen(_msg);
+        if (_ml > 256) _ml = 256;
+        if (_resp_max < 1 + 4 + _ml) {
+            yaafc_error_destroy(_r.error);
+            ((uint8_t *)_resp)[0] = 1;
+            return _resp_max >= 1 ? 1 : 0;
+        }
         ((uint8_t *)_resp)[0] = 1;
-        return 1;
+        memcpy((uint8_t *)_resp + 1, &_ml, 4);
+        memcpy((uint8_t *)_resp + 5, _msg, _ml);
+        yaafc_error_destroy(_r.error);
+        return 1 + 4 + _ml;
     }
     if (_resp_max < 1 + sizeof(_r.value)) return 0;
     ((uint8_t *)_resp)[0] = 0;

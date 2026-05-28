@@ -96,6 +96,19 @@ struct yconfig_node_ptr_result yconfig_get(const struct yconfig *c, const char *
  * to `yaapp_engine.get_config('<name>')`. */
 const struct yconfig_node *yconfig_section(const struct yconfig *c, const char *name);
 
+/* Deep-merge the subtree at `dot_path` ONTO the root. After this,
+ * every key inside that subtree also resolves at the root, with
+ * subtree values winning over any pre-existing root values.
+ *
+ * The engine uses this for the "service projection" — once a process
+ * knows it's running as service X (via --name X), it promotes
+ * `mesh.services.X.config` onto the root so plugins see their config
+ * at natural paths (`storage.db_path` rather than the long form).
+ *
+ * No-op if the path is missing or not a map. Returns Ok in either
+ * case; only out-of-memory failures error out. */
+struct yaafc_void_result yconfig_promote_subtree(struct yconfig *c, const char *dot_path);
+
 /* --- typed accessors ------------------------------------------------- */
 
 enum yconfig_kind yconfig_node_kind(const struct yconfig_node *n);

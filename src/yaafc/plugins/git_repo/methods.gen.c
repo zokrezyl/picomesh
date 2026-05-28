@@ -26,6 +26,16 @@ struct yaafc_uint32_result git_repo_store_make(struct ctx * ctx, struct object *
             return YAAFC_ERR(yaafc_uint32, "git_repo_store_make: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* gh#2: propagate auth context (uid, sid) across RPC. The
+         * skeleton on the server side reads these back into its
+         * `struct ctx _local` before invoking the impl. */
+        {
+            uint32_t _u = _s->uid, _i = _s->sid;
+            if (_off + 8 > sizeof(_a))
+                return YAAFC_ERR(yaafc_uint32, "git_repo_store_make: pack overflow");
+            memcpy(_a + _off, &_u, 4); _off += 4;
+            memcpy(_a + _off, &_i, 4); _off += 4;
+        }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -35,12 +45,20 @@ struct yaafc_uint32_result git_repo_store_make(struct ctx * ctx, struct object *
         if (_off + sizeof(owner_id) > sizeof(_a))
             return YAAFC_ERR(yaafc_uint32, "git_repo_store_make: pack overflow");
         memcpy(_a + _off, &owner_id, sizeof(owner_id)); _off += sizeof(owner_id);
-        uint8_t _wbuf[1 + sizeof(uint32_t)];
+        uint8_t _wbuf[1 + 4 + 256];
         size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         if (_wn < 1) return YAAFC_ERR(yaafc_uint32, "git_repo_store_make: short RPC response");
-        if (_wbuf[0] != 0) return YAAFC_ERR(yaafc_uint32, "git_repo_store_make: remote impl returned error");
-        if (_wn != sizeof(_wbuf)) return YAAFC_ERR(yaafc_uint32, "git_repo_store_make: truncated RPC payload");
+        if (_wbuf[0] != 0) {
+            uint32_t _msg_len = 0;
+            if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
+            char _msg[260];
+            size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
+            if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
+            _msg[_copy] = 0;
+            return YAAFC_ERR(yaafc_uint32, _msg[0] ? strdup(_msg) : "git_repo_store_make: remote error (no msg)");
+        }
+        if (_wn != 1 + sizeof(uint32_t)) return YAAFC_ERR(yaafc_uint32, "git_repo_store_make: truncated RPC payload");
         uint32_t _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
         return YAAFC_OK(yaafc_uint32, _v);
@@ -71,6 +89,16 @@ struct yaafc_int_result git_repo_store_delete(struct ctx * ctx, struct object * 
             return YAAFC_ERR(yaafc_int, "git_repo_store_delete: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* gh#2: propagate auth context (uid, sid) across RPC. The
+         * skeleton on the server side reads these back into its
+         * `struct ctx _local` before invoking the impl. */
+        {
+            uint32_t _u = _s->uid, _i = _s->sid;
+            if (_off + 8 > sizeof(_a))
+                return YAAFC_ERR(yaafc_int, "git_repo_store_delete: pack overflow");
+            memcpy(_a + _off, &_u, 4); _off += 4;
+            memcpy(_a + _off, &_i, 4); _off += 4;
+        }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -80,12 +108,20 @@ struct yaafc_int_result git_repo_store_delete(struct ctx * ctx, struct object * 
         if (_off + sizeof(repo_id) > sizeof(_a))
             return YAAFC_ERR(yaafc_int, "git_repo_store_delete: pack overflow");
         memcpy(_a + _off, &repo_id, sizeof(repo_id)); _off += sizeof(repo_id);
-        uint8_t _wbuf[1 + sizeof(int)];
+        uint8_t _wbuf[1 + 4 + 256];
         size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         if (_wn < 1) return YAAFC_ERR(yaafc_int, "git_repo_store_delete: short RPC response");
-        if (_wbuf[0] != 0) return YAAFC_ERR(yaafc_int, "git_repo_store_delete: remote impl returned error");
-        if (_wn != sizeof(_wbuf)) return YAAFC_ERR(yaafc_int, "git_repo_store_delete: truncated RPC payload");
+        if (_wbuf[0] != 0) {
+            uint32_t _msg_len = 0;
+            if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
+            char _msg[260];
+            size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
+            if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
+            _msg[_copy] = 0;
+            return YAAFC_ERR(yaafc_int, _msg[0] ? strdup(_msg) : "git_repo_store_delete: remote error (no msg)");
+        }
+        if (_wn != 1 + sizeof(int)) return YAAFC_ERR(yaafc_int, "git_repo_store_delete: truncated RPC payload");
         int _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
         return YAAFC_OK(yaafc_int, _v);
@@ -116,6 +152,16 @@ struct yaafc_uint32_result git_repo_store_owner_of(struct ctx * ctx, struct obje
             return YAAFC_ERR(yaafc_uint32, "git_repo_store_owner_of: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* gh#2: propagate auth context (uid, sid) across RPC. The
+         * skeleton on the server side reads these back into its
+         * `struct ctx _local` before invoking the impl. */
+        {
+            uint32_t _u = _s->uid, _i = _s->sid;
+            if (_off + 8 > sizeof(_a))
+                return YAAFC_ERR(yaafc_uint32, "git_repo_store_owner_of: pack overflow");
+            memcpy(_a + _off, &_u, 4); _off += 4;
+            memcpy(_a + _off, &_i, 4); _off += 4;
+        }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -125,12 +171,20 @@ struct yaafc_uint32_result git_repo_store_owner_of(struct ctx * ctx, struct obje
         if (_off + sizeof(repo_id) > sizeof(_a))
             return YAAFC_ERR(yaafc_uint32, "git_repo_store_owner_of: pack overflow");
         memcpy(_a + _off, &repo_id, sizeof(repo_id)); _off += sizeof(repo_id);
-        uint8_t _wbuf[1 + sizeof(uint32_t)];
+        uint8_t _wbuf[1 + 4 + 256];
         size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         if (_wn < 1) return YAAFC_ERR(yaafc_uint32, "git_repo_store_owner_of: short RPC response");
-        if (_wbuf[0] != 0) return YAAFC_ERR(yaafc_uint32, "git_repo_store_owner_of: remote impl returned error");
-        if (_wn != sizeof(_wbuf)) return YAAFC_ERR(yaafc_uint32, "git_repo_store_owner_of: truncated RPC payload");
+        if (_wbuf[0] != 0) {
+            uint32_t _msg_len = 0;
+            if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
+            char _msg[260];
+            size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
+            if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
+            _msg[_copy] = 0;
+            return YAAFC_ERR(yaafc_uint32, _msg[0] ? strdup(_msg) : "git_repo_store_owner_of: remote error (no msg)");
+        }
+        if (_wn != 1 + sizeof(uint32_t)) return YAAFC_ERR(yaafc_uint32, "git_repo_store_owner_of: truncated RPC payload");
         uint32_t _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
         return YAAFC_OK(yaafc_uint32, _v);
@@ -161,6 +215,16 @@ struct yaafc_size_result git_repo_store_count_for_owner(struct ctx * ctx, struct
             return YAAFC_ERR(yaafc_size, "git_repo_store_count_for_owner: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* gh#2: propagate auth context (uid, sid) across RPC. The
+         * skeleton on the server side reads these back into its
+         * `struct ctx _local` before invoking the impl. */
+        {
+            uint32_t _u = _s->uid, _i = _s->sid;
+            if (_off + 8 > sizeof(_a))
+                return YAAFC_ERR(yaafc_size, "git_repo_store_count_for_owner: pack overflow");
+            memcpy(_a + _off, &_u, 4); _off += 4;
+            memcpy(_a + _off, &_i, 4); _off += 4;
+        }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -170,12 +234,20 @@ struct yaafc_size_result git_repo_store_count_for_owner(struct ctx * ctx, struct
         if (_off + sizeof(owner_id) > sizeof(_a))
             return YAAFC_ERR(yaafc_size, "git_repo_store_count_for_owner: pack overflow");
         memcpy(_a + _off, &owner_id, sizeof(owner_id)); _off += sizeof(owner_id);
-        uint8_t _wbuf[1 + sizeof(size_t)];
+        uint8_t _wbuf[1 + 4 + 256];
         size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         if (_wn < 1) return YAAFC_ERR(yaafc_size, "git_repo_store_count_for_owner: short RPC response");
-        if (_wbuf[0] != 0) return YAAFC_ERR(yaafc_size, "git_repo_store_count_for_owner: remote impl returned error");
-        if (_wn != sizeof(_wbuf)) return YAAFC_ERR(yaafc_size, "git_repo_store_count_for_owner: truncated RPC payload");
+        if (_wbuf[0] != 0) {
+            uint32_t _msg_len = 0;
+            if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
+            char _msg[260];
+            size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
+            if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
+            _msg[_copy] = 0;
+            return YAAFC_ERR(yaafc_size, _msg[0] ? strdup(_msg) : "git_repo_store_count_for_owner: remote error (no msg)");
+        }
+        if (_wn != 1 + sizeof(size_t)) return YAAFC_ERR(yaafc_size, "git_repo_store_count_for_owner: truncated RPC payload");
         size_t _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
         return YAAFC_OK(yaafc_size, _v);
@@ -206,18 +278,36 @@ struct yaafc_size_result git_repo_store_count_total(struct ctx * ctx, struct obj
             return YAAFC_ERR(yaafc_size, "git_repo_store_count_total: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* gh#2: propagate auth context (uid, sid) across RPC. The
+         * skeleton on the server side reads these back into its
+         * `struct ctx _local` before invoking the impl. */
+        {
+            uint32_t _u = _s->uid, _i = _s->sid;
+            if (_off + 8 > sizeof(_a))
+                return YAAFC_ERR(yaafc_size, "git_repo_store_count_total: pack overflow");
+            memcpy(_a + _off, &_u, 4); _off += 4;
+            memcpy(_a + _off, &_i, 4); _off += 4;
+        }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
                 return YAAFC_ERR(yaafc_size, "git_repo_store_count_total: pack overflow");
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        uint8_t _wbuf[1 + sizeof(size_t)];
+        uint8_t _wbuf[1 + 4 + 256];
         size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         if (_wn < 1) return YAAFC_ERR(yaafc_size, "git_repo_store_count_total: short RPC response");
-        if (_wbuf[0] != 0) return YAAFC_ERR(yaafc_size, "git_repo_store_count_total: remote impl returned error");
-        if (_wn != sizeof(_wbuf)) return YAAFC_ERR(yaafc_size, "git_repo_store_count_total: truncated RPC payload");
+        if (_wbuf[0] != 0) {
+            uint32_t _msg_len = 0;
+            if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
+            char _msg[260];
+            size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
+            if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
+            _msg[_copy] = 0;
+            return YAAFC_ERR(yaafc_size, _msg[0] ? strdup(_msg) : "git_repo_store_count_total: remote error (no msg)");
+        }
+        if (_wn != 1 + sizeof(size_t)) return YAAFC_ERR(yaafc_size, "git_repo_store_count_total: truncated RPC payload");
         size_t _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
         return YAAFC_OK(yaafc_size, _v);

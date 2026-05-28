@@ -112,6 +112,35 @@ void *rpc_handle_resolve(uint64_t h)
     return NULL;
 }
 
+/* Drop a handle from the table and free the underlying object. Used by
+ * RPC_OP_DESTROY so server-side proxy objects don't accumulate when
+ * the client releases its proxy. Returns 1 if a handle was removed. */
+static int rpc_handle_release(uint64_t h)
+{
+    if (!h) return 0;
+    struct rpc_server_state *s = server();
+    for (size_t i = 0; i < s->object_count; ++i) {
+        if (s->objects[i].handle == h) {
+            free(s->objects[i].ptr);
+            /* Compact: swap with the tail. The order isn't meaningful. */
+            s->objects[i] = s->objects[s->object_count - 1];
+            s->object_count--;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static size_t handle_destroy(const void *body, size_t body_len, void *resp, size_t resp_max)
+{
+    if (body_len < sizeof(uint64_t) || resp_max < 1) return 0;
+    uint64_t h;
+    memcpy(&h, body, sizeof(h));
+    int removed = rpc_handle_release(h);
+    ((uint8_t *)resp)[0] = removed ? 1 : 0;
+    return 1;
+}
+
 struct fd_io {
     int fd;
 };
@@ -240,15 +269,19 @@ static size_t handle_create(const void *body, size_t body_len, void *resp, size_
 
 void rpc_server_run_io(void *ud, rpc_io_read_fn rd, rpc_io_write_fn wr)
 {
-    static uint8_t body[BUF_MAX];
-    static uint8_t resp[BUF_MAX];
+    /* Per-peer buffers, not statics: multiple peer coroutines run
+     * concurrently inside the same process (cooperative libco) and
+     * would clobber a shared scratch buffer between yields. */
+    uint8_t *body = malloc(BUF_MAX);
+    uint8_t *resp = malloc(BUF_MAX);
+    if (!body || !resp) { free(body); free(resp); return; }
 
     for (;;) {
         uint32_t header = 0, body_len = 0;
-        if (rd(ud, &header, 4) != 4) return;
-        if (rd(ud, &body_len, 4) != 4) return;
-        if (body_len > BUF_MAX) return;
-        if (body_len && rd(ud, body, body_len) != body_len) return;
+        if (rd(ud, &header, 4) != 4) goto done;
+        if (rd(ud, &body_len, 4) != 4) goto done;
+        if (body_len > BUF_MAX) goto done;
+        if (body_len && rd(ud, body, body_len) != body_len) goto done;
 
         enum rpc_op op = RPC_HDR_OP(header);
         uint32_t id = RPC_HDR_ID(header);
@@ -274,14 +307,20 @@ void rpc_server_run_io(void *ud, rpc_io_read_fn rd, rpc_io_write_fn wr)
         case RPC_OP_CREATE:
             resp_len = (uint32_t)handle_create(body, body_len, resp, BUF_MAX);
             break;
+        case RPC_OP_DESTROY:
+            resp_len = (uint32_t)handle_destroy(body, body_len, resp, BUF_MAX);
+            break;
         default:
             ywarn("unknown op=%u", op);
             break;
         }
 
-        if (wr(ud, &resp_len, 4) != 4) return;
-        if (resp_len && wr(ud, resp, resp_len) != resp_len) return;
+        if (wr(ud, &resp_len, 4) != 4) goto done;
+        if (resp_len && wr(ud, resp, resp_len) != resp_len) goto done;
     }
+done:
+    free(body);
+    free(resp);
 }
 
 void rpc_server_run(int fd)

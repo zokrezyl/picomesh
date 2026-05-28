@@ -29,8 +29,15 @@ struct class;
 struct slot_table;
 struct rpc_session;
 
+/* Request-scoped context flowing through every method call. `session`
+ * is local-only — set non-NULL when this end of the call wants to
+ * RPC. `uid` and `sid` ARE serialised across the wire by the codegen-
+ * emitted pack/unpack helpers so that server skeletons see the
+ * caller's identity (gh#2: propagate request/auth context). */
 struct ctx {
     struct rpc_session *session; /* NULL → local; set → remote */
+    uint32_t uid;                /* caller's authenticated user id */
+    uint32_t sid;                /* caller's session id */
 };
 
 enum class_type {

@@ -26,6 +26,16 @@ struct yaafc_uint32_result token_issuer_store_login(struct ctx * ctx, struct obj
             return YAAFC_ERR(yaafc_uint32, "token_issuer_store_login: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* gh#2: propagate auth context (uid, sid) across RPC. The
+         * skeleton on the server side reads these back into its
+         * `struct ctx _local` before invoking the impl. */
+        {
+            uint32_t _u = _s->uid, _i = _s->sid;
+            if (_off + 8 > sizeof(_a))
+                return YAAFC_ERR(yaafc_uint32, "token_issuer_store_login: pack overflow");
+            memcpy(_a + _off, &_u, 4); _off += 4;
+            memcpy(_a + _off, &_i, 4); _off += 4;
+        }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -38,12 +48,20 @@ struct yaafc_uint32_result token_issuer_store_login(struct ctx * ctx, struct obj
         if (_off + sizeof(provider_id) > sizeof(_a))
             return YAAFC_ERR(yaafc_uint32, "token_issuer_store_login: pack overflow");
         memcpy(_a + _off, &provider_id, sizeof(provider_id)); _off += sizeof(provider_id);
-        uint8_t _wbuf[1 + sizeof(uint32_t)];
+        uint8_t _wbuf[1 + 4 + 256];
         size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         if (_wn < 1) return YAAFC_ERR(yaafc_uint32, "token_issuer_store_login: short RPC response");
-        if (_wbuf[0] != 0) return YAAFC_ERR(yaafc_uint32, "token_issuer_store_login: remote impl returned error");
-        if (_wn != sizeof(_wbuf)) return YAAFC_ERR(yaafc_uint32, "token_issuer_store_login: truncated RPC payload");
+        if (_wbuf[0] != 0) {
+            uint32_t _msg_len = 0;
+            if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
+            char _msg[260];
+            size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
+            if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
+            _msg[_copy] = 0;
+            return YAAFC_ERR(yaafc_uint32, _msg[0] ? strdup(_msg) : "token_issuer_store_login: remote error (no msg)");
+        }
+        if (_wn != 1 + sizeof(uint32_t)) return YAAFC_ERR(yaafc_uint32, "token_issuer_store_login: truncated RPC payload");
         uint32_t _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
         return YAAFC_OK(yaafc_uint32, _v);
@@ -74,6 +92,16 @@ struct yaafc_uint32_result token_issuer_store_validate(struct ctx * ctx, struct 
             return YAAFC_ERR(yaafc_uint32, "token_issuer_store_validate: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* gh#2: propagate auth context (uid, sid) across RPC. The
+         * skeleton on the server side reads these back into its
+         * `struct ctx _local` before invoking the impl. */
+        {
+            uint32_t _u = _s->uid, _i = _s->sid;
+            if (_off + 8 > sizeof(_a))
+                return YAAFC_ERR(yaafc_uint32, "token_issuer_store_validate: pack overflow");
+            memcpy(_a + _off, &_u, 4); _off += 4;
+            memcpy(_a + _off, &_i, 4); _off += 4;
+        }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -83,12 +111,20 @@ struct yaafc_uint32_result token_issuer_store_validate(struct ctx * ctx, struct 
         if (_off + sizeof(token_id) > sizeof(_a))
             return YAAFC_ERR(yaafc_uint32, "token_issuer_store_validate: pack overflow");
         memcpy(_a + _off, &token_id, sizeof(token_id)); _off += sizeof(token_id);
-        uint8_t _wbuf[1 + sizeof(uint32_t)];
+        uint8_t _wbuf[1 + 4 + 256];
         size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         if (_wn < 1) return YAAFC_ERR(yaafc_uint32, "token_issuer_store_validate: short RPC response");
-        if (_wbuf[0] != 0) return YAAFC_ERR(yaafc_uint32, "token_issuer_store_validate: remote impl returned error");
-        if (_wn != sizeof(_wbuf)) return YAAFC_ERR(yaafc_uint32, "token_issuer_store_validate: truncated RPC payload");
+        if (_wbuf[0] != 0) {
+            uint32_t _msg_len = 0;
+            if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
+            char _msg[260];
+            size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
+            if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
+            _msg[_copy] = 0;
+            return YAAFC_ERR(yaafc_uint32, _msg[0] ? strdup(_msg) : "token_issuer_store_validate: remote error (no msg)");
+        }
+        if (_wn != 1 + sizeof(uint32_t)) return YAAFC_ERR(yaafc_uint32, "token_issuer_store_validate: truncated RPC payload");
         uint32_t _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
         return YAAFC_OK(yaafc_uint32, _v);
@@ -119,6 +155,16 @@ struct yaafc_uint32_result token_issuer_store_refresh(struct ctx * ctx, struct o
             return YAAFC_ERR(yaafc_uint32, "token_issuer_store_refresh: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* gh#2: propagate auth context (uid, sid) across RPC. The
+         * skeleton on the server side reads these back into its
+         * `struct ctx _local` before invoking the impl. */
+        {
+            uint32_t _u = _s->uid, _i = _s->sid;
+            if (_off + 8 > sizeof(_a))
+                return YAAFC_ERR(yaafc_uint32, "token_issuer_store_refresh: pack overflow");
+            memcpy(_a + _off, &_u, 4); _off += 4;
+            memcpy(_a + _off, &_i, 4); _off += 4;
+        }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -128,12 +174,20 @@ struct yaafc_uint32_result token_issuer_store_refresh(struct ctx * ctx, struct o
         if (_off + sizeof(token_id) > sizeof(_a))
             return YAAFC_ERR(yaafc_uint32, "token_issuer_store_refresh: pack overflow");
         memcpy(_a + _off, &token_id, sizeof(token_id)); _off += sizeof(token_id);
-        uint8_t _wbuf[1 + sizeof(uint32_t)];
+        uint8_t _wbuf[1 + 4 + 256];
         size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         if (_wn < 1) return YAAFC_ERR(yaafc_uint32, "token_issuer_store_refresh: short RPC response");
-        if (_wbuf[0] != 0) return YAAFC_ERR(yaafc_uint32, "token_issuer_store_refresh: remote impl returned error");
-        if (_wn != sizeof(_wbuf)) return YAAFC_ERR(yaafc_uint32, "token_issuer_store_refresh: truncated RPC payload");
+        if (_wbuf[0] != 0) {
+            uint32_t _msg_len = 0;
+            if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
+            char _msg[260];
+            size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
+            if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
+            _msg[_copy] = 0;
+            return YAAFC_ERR(yaafc_uint32, _msg[0] ? strdup(_msg) : "token_issuer_store_refresh: remote error (no msg)");
+        }
+        if (_wn != 1 + sizeof(uint32_t)) return YAAFC_ERR(yaafc_uint32, "token_issuer_store_refresh: truncated RPC payload");
         uint32_t _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
         return YAAFC_OK(yaafc_uint32, _v);
@@ -164,6 +218,16 @@ struct yaafc_int_result token_issuer_store_revoke(struct ctx * ctx, struct objec
             return YAAFC_ERR(yaafc_int, "token_issuer_store_revoke: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* gh#2: propagate auth context (uid, sid) across RPC. The
+         * skeleton on the server side reads these back into its
+         * `struct ctx _local` before invoking the impl. */
+        {
+            uint32_t _u = _s->uid, _i = _s->sid;
+            if (_off + 8 > sizeof(_a))
+                return YAAFC_ERR(yaafc_int, "token_issuer_store_revoke: pack overflow");
+            memcpy(_a + _off, &_u, 4); _off += 4;
+            memcpy(_a + _off, &_i, 4); _off += 4;
+        }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -173,12 +237,20 @@ struct yaafc_int_result token_issuer_store_revoke(struct ctx * ctx, struct objec
         if (_off + sizeof(token_id) > sizeof(_a))
             return YAAFC_ERR(yaafc_int, "token_issuer_store_revoke: pack overflow");
         memcpy(_a + _off, &token_id, sizeof(token_id)); _off += sizeof(token_id);
-        uint8_t _wbuf[1 + sizeof(int)];
+        uint8_t _wbuf[1 + 4 + 256];
         size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         if (_wn < 1) return YAAFC_ERR(yaafc_int, "token_issuer_store_revoke: short RPC response");
-        if (_wbuf[0] != 0) return YAAFC_ERR(yaafc_int, "token_issuer_store_revoke: remote impl returned error");
-        if (_wn != sizeof(_wbuf)) return YAAFC_ERR(yaafc_int, "token_issuer_store_revoke: truncated RPC payload");
+        if (_wbuf[0] != 0) {
+            uint32_t _msg_len = 0;
+            if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
+            char _msg[260];
+            size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
+            if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
+            _msg[_copy] = 0;
+            return YAAFC_ERR(yaafc_int, _msg[0] ? strdup(_msg) : "token_issuer_store_revoke: remote error (no msg)");
+        }
+        if (_wn != 1 + sizeof(int)) return YAAFC_ERR(yaafc_int, "token_issuer_store_revoke: truncated RPC payload");
         int _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
         return YAAFC_OK(yaafc_int, _v);
@@ -209,18 +281,36 @@ struct yaafc_size_result token_issuer_store_count_active(struct ctx * ctx, struc
             return YAAFC_ERR(yaafc_size, "token_issuer_store_count_active: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* gh#2: propagate auth context (uid, sid) across RPC. The
+         * skeleton on the server side reads these back into its
+         * `struct ctx _local` before invoking the impl. */
+        {
+            uint32_t _u = _s->uid, _i = _s->sid;
+            if (_off + 8 > sizeof(_a))
+                return YAAFC_ERR(yaafc_size, "token_issuer_store_count_active: pack overflow");
+            memcpy(_a + _off, &_u, 4); _off += 4;
+            memcpy(_a + _off, &_i, 4); _off += 4;
+        }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
                 return YAAFC_ERR(yaafc_size, "token_issuer_store_count_active: pack overflow");
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        uint8_t _wbuf[1 + sizeof(size_t)];
+        uint8_t _wbuf[1 + 4 + 256];
         size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         if (_wn < 1) return YAAFC_ERR(yaafc_size, "token_issuer_store_count_active: short RPC response");
-        if (_wbuf[0] != 0) return YAAFC_ERR(yaafc_size, "token_issuer_store_count_active: remote impl returned error");
-        if (_wn != sizeof(_wbuf)) return YAAFC_ERR(yaafc_size, "token_issuer_store_count_active: truncated RPC payload");
+        if (_wbuf[0] != 0) {
+            uint32_t _msg_len = 0;
+            if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
+            char _msg[260];
+            size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
+            if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
+            _msg[_copy] = 0;
+            return YAAFC_ERR(yaafc_size, _msg[0] ? strdup(_msg) : "token_issuer_store_count_active: remote error (no msg)");
+        }
+        if (_wn != 1 + sizeof(size_t)) return YAAFC_ERR(yaafc_size, "token_issuer_store_count_active: truncated RPC payload");
         size_t _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
         return YAAFC_OK(yaafc_size, _v);

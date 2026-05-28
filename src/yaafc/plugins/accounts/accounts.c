@@ -1,89 +1,145 @@
-/* accounts plugin — in-memory user store.
+/* accounts plugin — user registry backed by the storage_sql service.
  *
- * Methods (all keyed by uint32_t user id — the wire format doesn't
- * yet carry variable-length strings):
+ * Methods (uid is uint32 on the wire today; usernames are mapped to
+ * uids client-side by the frontend, mirroring yaapp's accounts plugin
+ * but without the string-key round-trip):
  *
- *   accounts_register(uid)           create a user; returns 1 if new, 0 if existed
- *   accounts_exists(uid)             1 if user is registered, 0 otherwise
- *   accounts_set_balance(uid, n)     set balance to n
- *   accounts_balance(uid)            current balance (int64); error if uid unknown
- *   accounts_count()                 total registered users
+ *   accounts_register(uid)        1 if newly created, 0 if already there
+ *   accounts_exists(uid)          1 if present, 0 otherwise
+ *   accounts_set_balance(uid, n)  set balance (errors if uid unknown)
+ *   accounts_balance(uid)         current balance (errors if uid unknown)
+ *   accounts_count()              live row count
  *
- * Mirrors yaapp.plugins.accounts in role: a registry-of-things you
- * can interrogate and mutate over RPC. */
+ * Storage layout in the shared kv table:
+ *
+ *   accounts:user:<uid>      → 1 (registered marker)
+ *   accounts:balance:<uid>   → int64 balance
+ *   accounts:count           → number of registered users
+ *
+ * Like session.c, the plugin holds no in-memory state — every method
+ * delegates to storage_sql on the configured `storage` remote.
+ */
 
 #include <yaafc/ycore/result.h>
 #include <yaafc/ycore/ytrace.h>
 #include <yaafc/yclass/class.h>
+#include <yaafc/yengine/engine.h>
+#include <yaafc/storage/sql.h>
+#include <yaafc/storage/rpc.gen.h>
+#include <yaafc/yclass/rpc.h>
 
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
-#define ACC_MAX 128
-
-struct acc_entry {
-    uint32_t uid;
-    int64_t balance;
-    int used;
-};
-
 struct [[clang::annotate("class@accounts:store")]] accounts_store_data {
-    struct acc_entry entries[ACC_MAX];
-    size_t count;
+    char _unused;
 };
 
-static struct accounts_store_data *acc_data(struct object *obj)
+struct acc_storage_handle {
+    struct ctx c;
+    struct object *obj;
+};
+YAAFC_RESULT_DECLARE(acc_storage_handle, struct acc_storage_handle);
+
+static struct acc_storage_handle_result open_storage(void)
 {
-    return (struct accounts_store_data *)((char *)obj + sizeof(struct object));
+    struct yaafc_engine *e = yaafc_active_engine();
+    if (!e) return YAAFC_ERR(acc_storage_handle, "accounts: no active engine");
+    struct rpc_session *st = yaafc_engine_remote(e, "storage");
+    if (!st) return YAAFC_ERR(acc_storage_handle, "accounts: no 'storage' remote");
+    struct acc_storage_handle h = {.c = {.session = st}};
+    struct object_ptr_result o = storage_sql_create(&h.c);
+    if (YAAFC_IS_ERR(o)) return YAAFC_ERR(acc_storage_handle, "accounts: storage_sql_create failed", o);
+    h.obj = o.value;
+    return YAAFC_OK(acc_storage_handle, h);
 }
 
-static struct acc_entry *acc_find(struct accounts_store_data *d, uint32_t uid)
+static void close_storage(struct acc_storage_handle *h)
 {
-    for (size_t i = 0; i < ACC_MAX; ++i) {
-        if (d->entries[i].used && d->entries[i].uid == uid) return &d->entries[i];
+    if (!h || !h->obj) return;
+    if (h->c.session) {
+        uint64_t _h;
+        memcpy(&_h, (char *)h->obj + sizeof(struct object), sizeof(_h));
+        uint8_t _r;
+        rpc_call(h->c.session, RPC_OP_DESTROY, 0, &_h, sizeof(_h), &_r, 1);
     }
-    return NULL;
+    free(h->obj);
+    h->obj = NULL;
+}
+
+static int64_t kv_get_or(struct acc_storage_handle *h, const char *key, int64_t fallback)
+{
+    struct yaafc_int64_result r = storage_sql_get(&h->c, h->obj, key);
+    if (YAAFC_IS_ERR(r)) { yaafc_error_destroy(r.error); return fallback; }
+    return r.value;
+}
+
+static int kv_exists(struct acc_storage_handle *h, const char *key)
+{
+    struct yaafc_int_result r = storage_sql_exists(&h->c, h->obj, key);
+    int present = YAAFC_IS_OK(r) && r.value;
+    if (YAAFC_IS_ERR(r)) yaafc_error_destroy(r.error);
+    return present;
 }
 
 [[clang::annotate("override@accounts:store:store_register")]]
 struct yaafc_int_result accounts_store_register_impl(struct ctx *ctx, struct object *obj,
                                                     uint32_t uid)
 {
-    (void)ctx;
-    struct accounts_store_data *d = acc_data(obj);
-    if (acc_find(d, uid)) {
+    (void)ctx; (void)obj;
+    struct acc_storage_handle_result sr = open_storage();
+    if (YAAFC_IS_ERR(sr)) return YAAFC_ERR(yaafc_int, "accounts_register: open_storage failed", sr);
+    struct acc_storage_handle h = sr.value;
+
+    char k[64];
+    snprintf(k, sizeof(k), "accounts:user:%u", uid);
+    if (kv_exists(&h, k)) {
+        close_storage(&h);
         ydebug("accounts_register: uid=%u already exists", uid);
         return YAAFC_OK(yaafc_int, 0);
     }
-    for (size_t i = 0; i < ACC_MAX; ++i) {
-        if (!d->entries[i].used) {
-            d->entries[i].uid = uid;
-            d->entries[i].balance = 0;
-            d->entries[i].used = 1;
-            d->count++;
-            yinfo("accounts_register: uid=%u (total=%zu)", uid, d->count);
-            return YAAFC_OK(yaafc_int, 1);
-        }
-    }
-    return YAAFC_ERR(yaafc_int, "accounts_register: store full");
+    storage_sql_set(&h.c, h.obj, k, 1);
+    int64_t count = kv_get_or(&h, "accounts:count", 0) + 1;
+    storage_sql_set(&h.c, h.obj, "accounts:count", count);
+    close_storage(&h);
+    yinfo("accounts_register: uid=%u (total=%lld)", uid, (long long)count);
+    return YAAFC_OK(yaafc_int, 1);
 }
 
 [[clang::annotate("override@accounts:store:store_exists")]]
 struct yaafc_int_result accounts_store_exists_impl(struct ctx *ctx, struct object *obj,
                                                   uint32_t uid)
 {
-    (void)ctx;
-    return YAAFC_OK(yaafc_int, acc_find(acc_data(obj), uid) ? 1 : 0);
+    (void)ctx; (void)obj;
+    struct acc_storage_handle_result sr = open_storage();
+    if (YAAFC_IS_ERR(sr)) return YAAFC_ERR(yaafc_int, "accounts_exists: open_storage failed", sr);
+    struct acc_storage_handle h = sr.value;
+    char k[64];
+    snprintf(k, sizeof(k), "accounts:user:%u", uid);
+    int present = kv_exists(&h, k);
+    close_storage(&h);
+    return YAAFC_OK(yaafc_int, present);
 }
 
 [[clang::annotate("override@accounts:store:store_set_balance")]]
 struct yaafc_int_result accounts_store_set_balance_impl(struct ctx *ctx, struct object *obj,
                                                         uint32_t uid, int64_t n)
 {
-    (void)ctx;
-    struct acc_entry *e = acc_find(acc_data(obj), uid);
-    if (!e) return YAAFC_ERR(yaafc_int, "accounts_set_balance: unknown uid");
-    e->balance = n;
+    (void)ctx; (void)obj;
+    struct acc_storage_handle_result sr = open_storage();
+    if (YAAFC_IS_ERR(sr)) return YAAFC_ERR(yaafc_int, "accounts_set_balance: open_storage failed", sr);
+    struct acc_storage_handle h = sr.value;
+    char k[64];
+    snprintf(k, sizeof(k), "accounts:user:%u", uid);
+    if (!kv_exists(&h, k)) {
+        close_storage(&h);
+        return YAAFC_ERR(yaafc_int, "accounts_set_balance: unknown uid");
+    }
+    snprintf(k, sizeof(k), "accounts:balance:%u", uid);
+    storage_sql_set(&h.c, h.obj, k, n);
+    close_storage(&h);
     ydebug("accounts_set_balance: uid=%u balance=%lld", uid, (long long)n);
     return YAAFC_OK(yaafc_int, 1);
 }
@@ -92,17 +148,32 @@ struct yaafc_int_result accounts_store_set_balance_impl(struct ctx *ctx, struct 
 struct yaafc_int64_result accounts_store_balance_impl(struct ctx *ctx, struct object *obj,
                                                       uint32_t uid)
 {
-    (void)ctx;
-    struct acc_entry *e = acc_find(acc_data(obj), uid);
-    if (!e) return YAAFC_ERR(yaafc_int64, "accounts_balance: unknown uid");
-    return YAAFC_OK(yaafc_int64, e->balance);
+    (void)ctx; (void)obj;
+    struct acc_storage_handle_result sr = open_storage();
+    if (YAAFC_IS_ERR(sr)) return YAAFC_ERR(yaafc_int64, "accounts_balance: open_storage failed", sr);
+    struct acc_storage_handle h = sr.value;
+    char k[64];
+    snprintf(k, sizeof(k), "accounts:user:%u", uid);
+    if (!kv_exists(&h, k)) {
+        close_storage(&h);
+        return YAAFC_ERR(yaafc_int64, "accounts_balance: unknown uid");
+    }
+    snprintf(k, sizeof(k), "accounts:balance:%u", uid);
+    int64_t bal = kv_get_or(&h, k, 0);
+    close_storage(&h);
+    return YAAFC_OK(yaafc_int64, bal);
 }
 
 [[clang::annotate("override@accounts:store:store_count")]]
 struct yaafc_size_result accounts_store_count_impl(struct ctx *ctx, struct object *obj)
 {
-    (void)ctx;
-    return YAAFC_OK(yaafc_size, acc_data(obj)->count);
+    (void)ctx; (void)obj;
+    struct acc_storage_handle_result sr = open_storage();
+    if (YAAFC_IS_ERR(sr)) return YAAFC_ERR(yaafc_size, "accounts_count: open_storage failed", sr);
+    struct acc_storage_handle h = sr.value;
+    int64_t c = kv_get_or(&h, "accounts:count", 0);
+    close_storage(&h);
+    return YAAFC_OK(yaafc_size, (size_t)(c < 0 ? 0 : c));
 }
 
 #include "accounts.gen.c"

@@ -23,6 +23,7 @@
 #include <yaafc/yengine/engine.h>
 #include <yaafc/yloop/yloop.h>
 #include <yaafc/yconfig/yconfig.h>
+#include <yaafc/yargv/yargv.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -214,7 +215,7 @@ struct yaafc_int_result mesh_store_spawn_yaafc_impl(struct ctx *ctx, struct obje
 
     char *argv[] = {
         self_exe,
-        (char *)"--frontend", (char *)"yttp",
+        (char *)"--frontend", (char *)"yhttp",
         (char *)"--host", (char *)"127.0.0.1",
         (char *)"--port", port_str,
         (char *)"serve",
@@ -263,11 +264,19 @@ struct yaafc_size_result mesh_store_count_children_impl(struct ctx *ctx, struct 
     return YAAFC_OK(yaafc_size, ms(obj)->child_count);
 }
 
-/* spawn_yaafc(port) factored out so reconcile can call it directly
- * without going through the public slot stub. Returns child pid or
- * 0 on failure. */
-static int mesh_internal_spawn(struct object *obj, uint32_t port)
+/* Spawn one child yaafc process for service `name`. The child's
+ * argv is IDENTICAL to what a human would type by hand:
+ *
+ *   yaafc --config-file <yaml> --name <service> --frontend yttp serve
+ *
+ * The child's `--name` drives every config lookup the engine does on
+ * its own: bind port (mesh.services.<name>.port), bind host, AND
+ * mesh.services.<name>.config.remotes[] (opened automatically by
+ * `cmd_serve` before the frontend listens). Reconcile passes ONLY
+ * the name and inherits the parent's --config-file. */
+static int mesh_internal_spawn(struct object *obj, const char *name)
 {
+    if (!name || !*name) return 0;
     struct mesh_store_data *d = ms(obj);
     struct yaafc_engine *e = yaafc_active_engine();
     if (!e) return 0;
@@ -280,16 +289,40 @@ static int mesh_internal_spawn(struct object *obj, uint32_t port)
     ssize_t n = readlink("/proc/self/exe", self_exe, sizeof(self_exe) - 1);
     if (n <= 0) return 0;
     self_exe[n] = 0;
-    char port_str[16];
-    snprintf(port_str, sizeof(port_str), "%u", port);
+
+    const char *cfg = NULL;
+    if (yaafc_engine_cli(e)) {
+        cfg = yargv_get_string(yaafc_engine_cli(e), "config_file", NULL);
+    }
+    if (!cfg) {
+        ywarn("mesh.spawn: parent has no --config-file — child won't know its config");
+        return 0;
+    }
+
+    /* Per-service frontend choice, read from
+     * `mesh.services.<name>.frontend`. Default to "yrpc" so backends
+     * speak the binary protocol that engine_add_remote (rpc_session)
+     * expects. The public-facing service opts into "yhttp" via YAML. */
+    char fe_path[256];
+    snprintf(fe_path, sizeof(fe_path), "mesh.services.%s.frontend", name);
+    const char *frontend = "yrpc";
+    struct yconfig_node_ptr_result fr = yconfig_get(yaafc_engine_config(e), fe_path);
+    if (YAAFC_IS_OK(fr) && fr.value) {
+        const char *s = yconfig_node_as_string(fr.value, NULL);
+        if (s && *s) frontend = s;
+    }
+
+    /* `cfg`, `name`, and `frontend` come from the parent's CLI/config
+     * and outlive the spawn call, so dropping them into argv[] is safe. */
     char *argv[] = {
         self_exe,
-        (char *)"--frontend", (char *)"yttp",
-        (char *)"--host", (char *)"127.0.0.1",
-        (char *)"--port", port_str,
+        (char *)"--config-file", (char *)cfg,
+        (char *)"--name",        (char *)name,
+        (char *)"--frontend",    (char *)frontend,
         (char *)"serve",
         NULL,
     };
+
     struct mesh_child_cookie *c = calloc(1, sizeof(*c));
     if (!c) return 0;
     c->obj = obj;
@@ -298,64 +331,34 @@ static int mesh_internal_spawn(struct object *obj, uint32_t port)
     if (pid <= 0) { free(c); return 0; }
     c->pid = pid;
     d->children[slot].pid = pid;
-    d->children[slot].port = port;
+    d->children[slot].port = 0; /* port is in the YAML; child resolves */
     d->children[slot].exited = 0;
     d->child_count++;
-    yinfo("mesh: spawned pid=%d on port=%u", pid, port);
+    yinfo("mesh: spawned pid=%d service='%s'", pid, name);
     return pid;
 }
 
 /* Walk callback for the services map. Each iteration sees one
- * (service_name, service_node) pair; if `service_node.port` exists,
- * we spawn a yaafc child on that port. The captured `obj` lets us
- * reach the mesh store; `count` accumulates the spawns. */
+ * (service_name, service_node) pair — we always spawn a child for
+ * each service (the child looks up its own port/host/remotes by name
+ * via the inherited --config-file). */
 struct reconcile_ctx {
     struct object *obj;
     int spawned;
 };
 
-static int reconcile_walk_cb(const char *name, const struct yconfig_node *val,
-                             void *ud)
+static int reconcile_walk_cb(const char *service_name,
+                             const struct yconfig_node *val, void *ud)
 {
     struct reconcile_ctx *rc = ud;
     if (yconfig_node_kind(val) != YCONFIG_MAP) return 0;
 
-    /* Look up `port` inside this service map by re-walking once with
-     * a small capture. */
-    struct port_capture { int port; };
-    struct port_capture pc = {0};
-    int (*pcb)(const char *, const struct yconfig_node *, void *) = NULL;
-    (void)pcb;
-    /* Use a tiny inline scan: */
-    struct port_walk { int port; };
-    struct port_walk w = {0};
-
-    /* Inline trampoline via a per-call static fn. */
-    extern int mesh__port_walk(const char *k, const struct yconfig_node *v,
-                               void *ud);
-    yconfig_node_for_each(val, mesh__port_walk, &w);
-    (void)pc;
-
-    if (w.port <= 0) {
-        ydebug("mesh.reconcile: service '%s' has no port — skipping", name);
-        return 0;
-    }
-    int pid = mesh_internal_spawn(rc->obj, (uint32_t)w.port);
+    int pid = mesh_internal_spawn(rc->obj, service_name);
     if (pid > 0) {
         rc->spawned++;
-        yinfo("mesh.reconcile: '%s' → pid=%d port=%d", name, pid, w.port);
+        yinfo("mesh.reconcile: '%s' → pid=%d", service_name, pid);
     } else {
-        ywarn("mesh.reconcile: failed to spawn '%s' on port %d", name, w.port);
-    }
-    return 0;
-}
-
-int mesh__port_walk(const char *k, const struct yconfig_node *v, void *ud)
-{
-    struct port_walk { int port; };
-    struct port_walk *w = ud;
-    if (strcmp(k, "port") == 0) {
-        w->port = (int)yconfig_node_as_int(v, 0);
+        ywarn("mesh.reconcile: failed to spawn '%s'", service_name);
     }
     return 0;
 }

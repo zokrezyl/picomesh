@@ -46,6 +46,12 @@ struct yaafc_void_result yloop_listen_tcp(struct yloop *l, const char *host, int
  * Returns the number of bytes actually read — 0 on EOF, < n only at EOF. */
 size_t yloop_read(struct yloop_stream *s, void *buf, size_t n);
 
+/* Read up to `cap` bytes into buf — returns whatever is available
+ * once at least one byte arrives (or 0 on EOF). For stream parsers
+ * (HTTP, line protocols) where you don't know the exact frame length
+ * ahead of time. */
+size_t yloop_read_some(struct yloop_stream *s, void *buf, size_t cap);
+
 /* Write all n bytes. Yields the calling coro until the write completes.
  * Returns the number of bytes actually written (n on success, 0 on error). */
 size_t yloop_write(struct yloop_stream *s, const void *buf, size_t n);

@@ -45,6 +45,8 @@ mesh:
       plugins: [session]
       config:
         remotes:
+          - service: storage
+            port: 8202
           - service: token_issuer
             port: 8207
 
@@ -115,3 +117,36 @@ mesh:
         remotes:
           - service: storage
             port: 8202
+
+    # The HTML frontend. Same yaafc binary, --name frontend → yhttp
+    # picks up `yhttp.static_dir` (projected from this block) and
+    # serves the HTML/JS that lives in scenarios/git-yaafc/frontend/
+    # static/. Pages then talk to the other services via fetch().
+    frontend:
+      port: 8080
+      frontend: yhttp
+      plugins: []
+      config:
+        yhttp:
+          static_dir: scenarios/git-yaafc/frontend/static
+        remotes:
+          - service: storage
+            port: 8202
+          - service: session
+            port: 8203
+          - service: accounts
+            port: 8204
+          - service: password_authn
+            port: 8205
+          - service: github_authn
+            port: 8206
+          - service: token_issuer
+            port: 8207
+          - service: issues
+            port: 8208
+          - service: git_repo
+            port: 8209
+          - service: git_pipeline
+            port: 8210
+          - service: personal_access_tokens
+            port: 8211

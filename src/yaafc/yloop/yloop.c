@@ -103,6 +103,24 @@ static void on_read(uv_stream_t *st, ssize_t nread, const uv_buf_t *buf)
     }
 }
 
+size_t yloop_read_some(struct yloop_stream *s, void *buf, size_t cap)
+{
+    if (!s || !buf || cap == 0) return 0;
+    while (s->rlen == 0 && !s->eof) {
+        s->want = 1;
+        s->read_blocked = 1;
+        yaafc_coro_yield();
+    }
+    if (s->rlen == 0) return 0; /* EOF */
+    size_t take = s->rlen < cap ? s->rlen : cap;
+    memcpy(buf, s->rbuf, take);
+    if (take < s->rlen) {
+        memmove(s->rbuf, s->rbuf + take, s->rlen - take);
+    }
+    s->rlen -= take;
+    return take;
+}
+
 size_t yloop_read(struct yloop_stream *s, void *buf, size_t n)
 {
     if (!s || !buf || n == 0) return 0;
