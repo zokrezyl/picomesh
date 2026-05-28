@@ -21,8 +21,11 @@
 
 #include <uv.h>
 
+#include <netdb.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 
 #define RING_INIT_CAP 4096
 
@@ -398,6 +401,125 @@ int yloop_kill(struct yloop *l, int pid, int signum)
 {
     if (!l || pid <= 0) return -1;
     return uv_kill(pid, signum);
+}
+
+/* ---- outgoing TCP (yloop_connect_tcp) ------------------------------- */
+
+struct connect_state {
+    uv_connect_t req;
+    struct yaafc_coro *coro;
+    int status;
+};
+
+static void on_connect(uv_connect_t *req, int status)
+{
+    struct connect_state *cs = req->data;
+    cs->status = status;
+    yaafc_coro_resume(cs->coro);
+}
+
+struct resolve_state {
+    uv_getaddrinfo_t req;
+    struct yaafc_coro *coro;
+    int status;
+    struct sockaddr_in addr;
+    int got_addr;
+};
+
+static void on_resolve(uv_getaddrinfo_t *req, int status, struct addrinfo *res)
+{
+    struct resolve_state *rs = req->data;
+    rs->status = status;
+    if (status == 0 && res) {
+        /* Take the first IPv4 result; ignore everything else. */
+        for (struct addrinfo *p = res; p; p = p->ai_next) {
+            if (p->ai_family == AF_INET && p->ai_addrlen >= sizeof(rs->addr)) {
+                memcpy(&rs->addr, p->ai_addr, sizeof(rs->addr));
+                rs->got_addr = 1;
+                break;
+            }
+        }
+        uv_freeaddrinfo(res);
+    }
+    yaafc_coro_resume(rs->coro);
+}
+
+struct yloop_stream_ptr_result yloop_connect_tcp(struct yloop *l,
+                                                 const char *host, int port)
+{
+    if (!l || !host || port <= 0)
+        return YAAFC_ERR(yloop_stream_ptr, "yloop_connect_tcp: bad args");
+    struct yaafc_coro *self = yaafc_coro_current();
+    if (!self)
+        return YAAFC_ERR(yloop_stream_ptr,
+                         "yloop_connect_tcp: must be called from a coroutine");
+
+    struct yloop_stream *s = calloc(1, sizeof(*s));
+    if (!s) return YAAFC_ERR(yloop_stream_ptr, "yloop_connect_tcp: calloc failed");
+    s->owner = l;
+    s->coro  = self;
+
+    int rc = uv_tcp_init(&l->loop, &s->tcp);
+    if (rc < 0) {
+        free(s);
+        return YAAFC_ERR(yloop_stream_ptr, "yloop_connect_tcp: uv_tcp_init failed");
+    }
+    s->tcp.data = s;
+
+    struct sockaddr_in addr;
+    rc = uv_ip4_addr(host, port, &addr);
+    if (rc < 0) {
+        /* uv_ip4_addr fails on hostnames; resolve asynchronously via
+         * uv_getaddrinfo so the libuv loop keeps servicing other
+         * sockets while DNS is in flight. A synchronous getaddrinfo
+         * here would freeze every other connection on the loop while
+         * the resolver waits — even a misconfigured local DNS turns
+         * one slow lookup into a full event-loop stall. */
+        struct resolve_state rs = {0};
+        rs.coro = self;
+        rs.req.data = &rs;
+        struct addrinfo hints = {0};
+        hints.ai_family   = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        char portbuf[16];
+        snprintf(portbuf, sizeof(portbuf), "%d", port);
+        int dr = uv_getaddrinfo(&l->loop, &rs.req, on_resolve,
+                                host, portbuf, &hints);
+        if (dr < 0) {
+            uv_close((uv_handle_t *)&s->tcp, on_handle_close);
+            return YAAFC_ERR(yloop_stream_ptr,
+                             "yloop_connect_tcp: uv_getaddrinfo dispatch failed");
+        }
+        yaafc_coro_yield();
+        if (rs.status < 0 || !rs.got_addr) {
+            uv_close((uv_handle_t *)&s->tcp, on_handle_close);
+            return YAAFC_ERR(yloop_stream_ptr,
+                             "yloop_connect_tcp: getaddrinfo failed");
+        }
+        addr = rs.addr;
+    }
+
+    struct connect_state cs = {0};
+    cs.coro = self;
+    cs.req.data = &cs;
+    rc = uv_tcp_connect(&cs.req, &s->tcp, (const struct sockaddr *)&addr, on_connect);
+    if (rc < 0) {
+        uv_close((uv_handle_t *)&s->tcp, on_handle_close);
+        return YAAFC_ERR(yloop_stream_ptr, "yloop_connect_tcp: uv_tcp_connect dispatch failed");
+    }
+    yaafc_coro_yield();
+    if (cs.status < 0) {
+        uv_close((uv_handle_t *)&s->tcp, on_handle_close);
+        return YAAFC_ERR(yloop_stream_ptr, "yloop_connect_tcp: connect failed");
+    }
+    uv_tcp_nodelay(&s->tcp, 1);
+
+    rc = uv_read_start((uv_stream_t *)&s->tcp, on_alloc, on_read);
+    if (rc < 0) {
+        uv_close((uv_handle_t *)&s->tcp, on_handle_close);
+        return YAAFC_ERR(yloop_stream_ptr, "yloop_connect_tcp: uv_read_start failed");
+    }
+    return YAAFC_OK(yloop_stream_ptr, s);
 }
 
 struct yaafc_void_result yloop_listen_tcp(struct yloop *l, const char *host, int port,

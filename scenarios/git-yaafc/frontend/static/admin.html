@@ -35,18 +35,22 @@
     </section>
 
     <section class="card">
-      <header class="card-header"><h2>Storage (sqlite-backed)</h2></header>
+      <header class="card-header"><h2>Storage</h2></header>
       <form id="kv-form">
+        <label>Context <input id="kv-ctx" placeholder="demo" value="demo"></label>
         <label>Key <input id="kv-k" placeholder="hello"></label>
         <label>Value (int64) <input id="kv-v" type="number" value="42"></label>
-        <button type="submit" class="primary">storage_sql_set</button>
-        <button type="button" id="kv-get">storage_sql_get</button>
-        <button type="button" id="kv-del">storage_sql_del</button>
+        <button type="submit" class="primary">storage_set</button>
+        <button type="button" id="kv-get">storage_get</button>
+        <button type="button" id="kv-del">storage_del</button>
       </form>
       <pre id="kv-out"></pre>
-      <p class="muted small">DB path comes from
-        <code>mesh.services.storage.config.storage.db_path</code> in
-        the YAML (projected onto the child's config root).</p>
+      <p class="muted small">Backend picked by
+        <code>mesh.services.storage.config.storage.backend</code>
+        (sqlite|mdbx). Sqlite path:
+        <code>storage.db_path</code>; mdbx env directory:
+        <code>storage.mdbx_path</code>. Context maps to a sqlite
+        table or an mdbx sub-DBI.</p>
     </section>
 
     <section class="card">
@@ -137,19 +141,22 @@
 
       document.getElementById('kv-form').onsubmit = async (e) => {
         e.preventDefault();
+        const ctx = document.getElementById('kv-ctx').value || 'demo';
         const k = document.getElementById('kv-k').value || 'hello';
         const v = parseInt(document.getElementById('kv-v').value, 10);
-        const j = await invoke('storage', 'storage_sql_set', [k, v]);
+        const j = await invoke('storage', 'storage_set', [ctx, k, v]);
         document.getElementById('kv-out').textContent = 'set: ' + JSON.stringify(j);
       };
       document.getElementById('kv-get').onclick = async () => {
+        const ctx = document.getElementById('kv-ctx').value || 'demo';
         const k = document.getElementById('kv-k').value || 'hello';
-        const j = await invoke('storage', 'storage_sql_get', [k]);
+        const j = await invoke('storage', 'storage_get', [ctx, k]);
         document.getElementById('kv-out').textContent = 'get: ' + JSON.stringify(j);
       };
       document.getElementById('kv-del').onclick = async () => {
+        const ctx = document.getElementById('kv-ctx').value || 'demo';
         const k = document.getElementById('kv-k').value || 'hello';
-        const j = await invoke('storage', 'storage_sql_del', [k]);
+        const j = await invoke('storage', 'storage_del', [ctx, k]);
         document.getElementById('kv-out').textContent = 'del: ' + JSON.stringify(j);
       };
 

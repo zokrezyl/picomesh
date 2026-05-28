@@ -110,7 +110,7 @@ struct rpc_session *yaafc_engine_remote(struct yaafc_engine *e, const char *name
  * same code:
  *
  *     struct ctx c = yaafc_engine_service_ctx(e, "storage");
- *     struct object_ptr_result o = storage_sql_create(&c);
+ *     struct object_ptr_result o = storage_db_create(&c);
  *
  * which removes the manual `c.session = yaafc_engine_remote(...)`
  * boilerplate at every call site (gh#2). */

@@ -31,6 +31,8 @@ include(build-tools/yaafc/libs/uv.cmake)
 include(build-tools/yaafc/libs/yaml.cmake)
 include(build-tools/yaafc/libs/simdjson.cmake)
 include(build-tools/yaafc/libs/sqlite3.cmake)
+include(build-tools/yaafc/libs/libmdbx.cmake)
+include(build-tools/yaafc/libs/libgit2.cmake)
 
 # ---- yplatform backend selection -------------------------------------
 #
@@ -101,7 +103,7 @@ function(yaafc_add_plugin NAME)
     # time (codegen runs clang -fsyntax-only) AND at compile time.
     # Each path is joined with ':' for the YAAFC_CODEGEN_EXTRA_INCLUDES
     # env var that codegen.py splits. Plugins compose via each other's
-    # PUBLIC generated stubs (e.g. session.c -> storage_sql_set) and
+    # PUBLIC generated stubs (e.g. session.c -> storage_set) and
     # those all live under <repo>/include/yaafc/plugin/*, which is
     # part of YAAFC_ROOT/include — so we don't need to enumerate
     # sibling plugin include dirs here anymore.
@@ -241,7 +243,26 @@ add_executable(yaafc
     $<TARGET_OBJECTS:yaafc_ymain>
     ${YAAFC_PLUGIN_OBJECTS})
 add_dependencies(yaafc yaafc_ymain ${YAAFC_PLUGIN_TARGETS})
-target_link_libraries(yaafc PRIVATE yaafc_runtime sqlite3)
+target_link_libraries(yaafc PRIVATE yaafc_runtime sqlite3 libmdbx libgit2)
+
+# ---- yaafc-frontend (standalone HTML frontend) ------------------------
+#
+# Separate binary that mirrors yaapp's scenarios/git-yaapp/frontend/
+# frontend.py: own HTTP listener, talks to a gateway via POST /_rpc.
+# No plugins, no mesh, no yclass dispatch — pure HTTP-client +
+# template-renderer process. Designed to work against either the yaafc
+# C gateway or the yaapp Python gateway interchangeably (the `/_rpc`
+# wire shape is the contract).
+add_executable(yaafc-frontend
+    src/yaafc/frontend/main.c
+    src/yaafc/frontend/frontend.c
+    src/yaafc/frontend/http_client.c
+)
+target_link_libraries(yaafc-frontend PRIVATE yaafc_runtime)
+target_include_directories(yaafc-frontend PRIVATE
+    src/yaafc/frontend
+    third_party/picohttpparser
+)
 
 # ---- tests (smoke) ---------------------------------------------------
 add_subdirectory(tests)

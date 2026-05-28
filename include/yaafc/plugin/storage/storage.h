@@ -15,20 +15,20 @@ struct class_ptr_result;
 
 /* ---- class accessors ---- */
 struct class_ptr_result storage_kv_class_get(void);
-struct class_ptr_result storage_sql_class_get(void);
+struct class_ptr_result storage_db_class_get(void);
 
 /* ---- constructors ---- */
 struct object_ptr_result storage_kv_create(struct ctx *ctx);
-struct object_ptr_result storage_sql_create(struct ctx *ctx);
+struct object_ptr_result storage_db_create(struct ctx *ctx);
 
 /* ---- methods ---- */
 struct yaafc_int_result storage_kv_set(struct ctx * ctx, struct object * obj, uint32_t key_id, int32_t value);
 struct yaafc_int_result storage_kv_get(struct ctx * ctx, struct object * obj, uint32_t key_id);
 struct yaafc_size_result storage_kv_count(struct ctx * ctx, struct object * obj);
-struct yaafc_int_result storage_sql_set(struct ctx * ctx, struct object * obj, const char * key, int64_t value);
-struct yaafc_int64_result storage_sql_get(struct ctx * ctx, struct object * obj, const char * key);
-struct yaafc_int_result storage_sql_exists(struct ctx * ctx, struct object * obj, const char * key);
-struct yaafc_int_result storage_sql_del(struct ctx * ctx, struct object * obj, const char * key);
-struct yaafc_size_result storage_sql_count(struct ctx * ctx, struct object * obj);
+struct yaafc_int_result storage_set(struct ctx * ctx, struct object * obj, const char * context, const char * key, int64_t value);
+struct yaafc_int64_result storage_get(struct ctx * ctx, struct object * obj, const char * context, const char * key);
+struct yaafc_int_result storage_exists(struct ctx * ctx, struct object * obj, const char * context, const char * key);
+struct yaafc_int_result storage_del(struct ctx * ctx, struct object * obj, const char * context, const char * key);
+struct yaafc_size_result storage_count(struct ctx * ctx, struct object * obj, const char * context);
 
 #endif

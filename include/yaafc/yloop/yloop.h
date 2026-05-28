@@ -42,6 +42,14 @@ void yloop_stop(struct yloop *l);
 struct yaafc_void_result yloop_listen_tcp(struct yloop *l, const char *host, int port,
                                           yloop_serve_fn serve, void *ud);
 
+/* Outgoing TCP. Connects to host:port; the calling coroutine yields
+ * until the handshake completes. On success returns the stream (caller
+ * owns; must yloop_close); on failure returns an error result. Must be
+ * called from inside a coroutine running on `l`. */
+YAAFC_RESULT_DECLARE(yloop_stream_ptr, struct yloop_stream *);
+struct yloop_stream_ptr_result yloop_connect_tcp(struct yloop *l,
+                                                 const char *host, int port);
+
 /* Read exactly n bytes into buf. Yields the calling coro until satisfied.
  * Returns the number of bytes actually read — 0 on EOF, < n only at EOF. */
 size_t yloop_read(struct yloop_stream *s, void *buf, size_t n);

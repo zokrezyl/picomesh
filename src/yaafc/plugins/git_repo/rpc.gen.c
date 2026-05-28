@@ -32,7 +32,27 @@ static size_t git_repo_store_make_skel(const void *_body, size_t _body_len,
     if (_off + sizeof(_v1) > _body_len) goto _short_body;
     memcpy(&_v1, (const uint8_t *)_body + _off, sizeof(_v1));
     _off += sizeof(_v1);
-    struct yaafc_uint32_result _r = git_repo_store_make(&_local, _obj, _v1);
+    char _s2[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s2)) goto _short_body;
+        if (_slen) memcpy(_s2, (const uint8_t *)_body + _off, _slen);
+        _s2[_slen] = 0; _off += _slen;
+    }
+    char _s3[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s3)) goto _short_body;
+        if (_slen) memcpy(_s3, (const uint8_t *)_body + _off, _slen);
+        _s3[_slen] = 0; _off += _slen;
+    }
+    struct yaafc_uint32_result _r = git_repo_store_make(&_local, _obj, _v1, _s2, _s3);
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
         yaafc_error_print(stderr, "[skel] git_repo_store_make", _r.error);
@@ -251,8 +271,10 @@ static int git_repo_store_make_jinvoke(struct object *_obj, const struct yjson_v
                           struct yjson_writer *_result, char *_err, size_t _err_cap)
 {
     uint32_t _a0 = (uint32_t)yjson_as_int(yjson_array_at(_args, 0), 0);
+    const char *_a1 = yjson_as_string(yjson_array_at(_args, 1), "");
+    const char *_a2 = yjson_as_string(yjson_array_at(_args, 2), "");
     struct ctx _ctx = {0};
-    struct yaafc_uint32_result _r = git_repo_store_make(&_ctx, _obj, _a0);
+    struct yaafc_uint32_result _r = git_repo_store_make(&_ctx, _obj, _a0, _a1, _a2);
     if (YAAFC_IS_ERR(_r)) {
         snprintf(_err, _err_cap, "%s: %s", "git_repo_store_make",
                  _r.error.msg ? _r.error.msg : "<no message>");

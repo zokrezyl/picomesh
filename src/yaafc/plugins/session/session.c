@@ -6,13 +6,13 @@
  *   destroy(sid)                 → 1 if removed, 0 if unknown
  *   count_active                 → number of sessions live now
  *
- * All state lives in the storage_sql backend reached via the engine's
- * `storage` remote. Key layout in the shared kv table:
+ * All state lives in the storage backend reached via the engine's
+ * `storage` remote. Key layout in the `session` context:
  *
- *   session:next_sid     → monotonic counter for sid allocation.
- *   session:count        → number of live sessions.
- *   session:uid:<sid>    → user_id bound to that sid.
- *   session:prov:<sid>   → provider_id bound to that sid.
+ *   next_sid     → monotonic counter for sid allocation.
+ *   count        → number of live sessions.
+ *   uid:<sid>    → user_id bound to that sid.
+ *   prov:<sid>   → provider_id bound to that sid.
  *
  * The plugin process itself carries no in-memory bookkeeping, so a
  * crash + restart still serves the same sessions, and every remote
@@ -50,14 +50,16 @@ static struct session_storage_handle_result open_storage(void)
 {
     struct yaafc_engine *e = yaafc_active_engine();
     if (!e) return YAAFC_ERR(session_storage_handle, "session: no active engine");
-    struct rpc_session *st = yaafc_engine_remote(e, "storage");
-    if (!st) return YAAFC_ERR(session_storage_handle, "session: no 'storage' remote");
-    struct storage_handle h = {.c = {.session = st}};
-    struct object_ptr_result o = storage_sql_create(&h.c);
-    if (YAAFC_IS_ERR(o)) return YAAFC_ERR(session_storage_handle, "session: storage_sql_create failed", o);
+    struct storage_handle h = {.c = yaafc_engine_service_ctx(e, "storage")};
+    if (!h.c.session)
+        return YAAFC_ERR(session_storage_handle, "session: no 'storage' remote");
+    struct object_ptr_result o = storage_db_create(&h.c);
+    if (YAAFC_IS_ERR(o)) return YAAFC_ERR(session_storage_handle, "session: storage_db_create failed", o);
     h.obj = o.value;
     return YAAFC_OK(session_storage_handle, h);
 }
+
+#define SESSION_CTX "session"
 
 static void close_storage(struct storage_handle *h)
 {
@@ -75,7 +77,7 @@ static void close_storage(struct storage_handle *h)
 /* Read an int64 key from storage, treating any error as "missing → 0". */
 static int64_t kv_get_or_zero(struct storage_handle *h, const char *key)
 {
-    struct yaafc_int64_result r = storage_sql_get(&h->c, h->obj, key);
+    struct yaafc_int64_result r = storage_get(&h->c, h->obj, SESSION_CTX, key);
     if (YAAFC_IS_ERR(r)) { yaafc_error_destroy(r.error); return 0; }
     return r.value;
 }
@@ -89,17 +91,17 @@ struct yaafc_uint32_result session_store_start_impl(struct ctx *ctx, struct obje
     if (YAAFC_IS_ERR(sr)) return YAAFC_ERR(yaafc_uint32, "session_start: open_storage failed", sr);
     struct storage_handle h = sr.value;
 
-    uint32_t sid = (uint32_t)kv_get_or_zero(&h, "session:next_sid") + 1;
-    storage_sql_set(&h.c, h.obj, "session:next_sid", (int64_t)sid);
+    uint32_t sid = (uint32_t)kv_get_or_zero(&h, "next_sid") + 1;
+    storage_set(&h.c, h.obj, SESSION_CTX, "next_sid", (int64_t)sid);
 
     char k[64];
-    snprintf(k, sizeof(k), "session:uid:%u", sid);
-    storage_sql_set(&h.c, h.obj, k, (int64_t)user_id);
-    snprintf(k, sizeof(k), "session:prov:%u", sid);
-    storage_sql_set(&h.c, h.obj, k, (int64_t)provider_id);
+    snprintf(k, sizeof(k), "uid:%u", sid);
+    storage_set(&h.c, h.obj, SESSION_CTX, k, (int64_t)user_id);
+    snprintf(k, sizeof(k), "prov:%u", sid);
+    storage_set(&h.c, h.obj, SESSION_CTX, k, (int64_t)provider_id);
 
-    int64_t count = kv_get_or_zero(&h, "session:count") + 1;
-    storage_sql_set(&h.c, h.obj, "session:count", count);
+    int64_t count = kv_get_or_zero(&h, "count") + 1;
+    storage_set(&h.c, h.obj, SESSION_CTX, "count", count);
 
     close_storage(&h);
     yinfo("session: sid=%u user=%u provider=%u", sid, user_id, provider_id);
@@ -116,7 +118,7 @@ struct yaafc_uint32_result session_store_lookup_impl(struct ctx *ctx, struct obj
     struct storage_handle h = sr.value;
 
     char k[64];
-    snprintf(k, sizeof(k), "session:uid:%u", sid);
+    snprintf(k, sizeof(k), "uid:%u", sid);
     int64_t uid = kv_get_or_zero(&h, k);
     close_storage(&h);
     return YAAFC_OK(yaafc_uint32, (uint32_t)uid);
@@ -132,18 +134,18 @@ struct yaafc_int_result session_store_destroy_impl(struct ctx *ctx, struct objec
     struct storage_handle h = sr.value;
 
     char k[64];
-    snprintf(k, sizeof(k), "session:uid:%u", sid);
-    struct yaafc_int_result ex = storage_sql_exists(&h.c, h.obj, k);
+    snprintf(k, sizeof(k), "uid:%u", sid);
+    struct yaafc_int_result ex = storage_exists(&h.c, h.obj, SESSION_CTX, k);
     int present = YAAFC_IS_OK(ex) && ex.value;
     if (YAAFC_IS_ERR(ex)) yaafc_error_destroy(ex.error);
     if (!present) { close_storage(&h); return YAAFC_OK(yaafc_int, 0); }
 
-    storage_sql_del(&h.c, h.obj, k);
-    snprintf(k, sizeof(k), "session:prov:%u", sid);
-    storage_sql_del(&h.c, h.obj, k);
+    storage_del(&h.c, h.obj, SESSION_CTX, k);
+    snprintf(k, sizeof(k), "prov:%u", sid);
+    storage_del(&h.c, h.obj, SESSION_CTX, k);
 
-    int64_t count = kv_get_or_zero(&h, "session:count");
-    if (count > 0) storage_sql_set(&h.c, h.obj, "session:count", count - 1);
+    int64_t count = kv_get_or_zero(&h, "count");
+    if (count > 0) storage_set(&h.c, h.obj, SESSION_CTX, "count", count - 1);
 
     close_storage(&h);
     return YAAFC_OK(yaafc_int, 1);
@@ -156,7 +158,7 @@ struct yaafc_size_result session_store_count_active_impl(struct ctx *ctx, struct
     struct session_storage_handle_result sr = open_storage();
     if (YAAFC_IS_ERR(sr)) return YAAFC_ERR(yaafc_size, "session_count: open_storage failed", sr);
     struct storage_handle h = sr.value;
-    int64_t count = kv_get_or_zero(&h, "session:count");
+    int64_t count = kv_get_or_zero(&h, "count");
     close_storage(&h);
     return YAAFC_OK(yaafc_size, (size_t)(count < 0 ? 0 : count));
 }

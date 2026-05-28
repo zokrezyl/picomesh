@@ -7,7 +7,7 @@
 #     ↳ mesh_store_reconcile_from_config spawns one child per service
 #       in mesh.services.* on the service's own port. Each backend
 #       child uses --frontend yrpc (binary, for inter-service RPC).
-#       The 'frontend' service (port 8080) overrides this with
+#       The 'gateway' service (port 8080) overrides this with
 #       `frontend: yhttp` in its YAML block — it serves the HTML UI
 #       that browsers / curl can hit, and it opens yrpc client
 #       sessions to every backend via its `remotes:` block.
@@ -110,11 +110,12 @@ out=$(curl -sS --max-time 10 -XPOST http://127.0.0.1:$WEB/login \
            --data-urlencode 'username=alice' --data-urlencode 'password=hunter2')
 expect_contains 'POST /login on unregistered user fails' "$out" 'no such user'
 
-# Register → creates account, mints session, redirects to /repos.
+# Register → creates account, mints session, redirects to /alice
+# (GitHub-style namespace landing, mirroring yaapp's _landing_url).
 hdrs=$(curl -sS --max-time 10 -D - -o /dev/null -c tmp/cookies.txt \
             -XPOST http://127.0.0.1:$WEB/register \
             --data-urlencode 'username=alice' --data-urlencode 'password=hunter2')
-expect_contains 'POST /register → 303 /repos'   "$hdrs" '303 See Other'
+expect_contains 'POST /register → 303 /alice'   "$hdrs" '303 See Other.*[Ll]ocation: /alice|[Ll]ocation: /alice.*303'
 expect_contains 'POST /register sets sid cookie' "$hdrs" 'Set-Cookie: yaafc-sid='
 expect_contains 'POST /register sets uname cookie' "$hdrs" 'Set-Cookie: yaafc-uname=alice'
 
@@ -134,7 +135,7 @@ expect_contains 'POST /logout clears uname cookie' "$hdrs" 'yaafc-uname=;'
 hdrs=$(curl -sS --max-time 10 -D - -o /dev/null -c tmp/cookies.txt \
             -XPOST http://127.0.0.1:$WEB/login \
             --data-urlencode 'username=alice' --data-urlencode 'password=hunter2')
-expect_contains 'POST /login → 303 /repos'  "$hdrs" '303 See Other'
+expect_contains 'POST /login → 303 /alice'   "$hdrs" '303 See Other.*[Ll]ocation: /alice|[Ll]ocation: /alice.*303'
 expect_contains 'POST /login sets sid cookie' "$hdrs" 'Set-Cookie: yaafc-sid='
 
 # Create a repo under /alice/website via /repos/new (POST `name`).
@@ -177,7 +178,7 @@ curl -sS --max-time 10 -c tmp/bob-cookies.txt \
      -o /dev/null
 hdrs=$(curl -sS --max-time 10 -D - -o /dev/null -b tmp/bob-cookies.txt \
             http://127.0.0.1:$WEB/admin/users)
-expect_contains 'non-owner /admin/users → 303 /repos' "$hdrs" '303 See Other.*[Ll]ocation: /repos|[Ll]ocation: /repos.*303'
+expect_contains 'non-owner /admin/users → 303 /bob' "$hdrs" '303 See Other.*[Ll]ocation: /bob|[Ll]ocation: /bob.*303'
 # And the nav for bob must not advertise /admin/users at all.
 out=$(curl -sS --max-time 10 -b tmp/bob-cookies.txt http://127.0.0.1:$WEB/repos)
 if echo "$out" | grep -q '<a href="/admin/users">Users</a>'; then
@@ -202,32 +203,31 @@ if ! command -v sqlite3 >/dev/null 2>&1; then
 elif [ ! -s "$DB" ]; then
     note_fail "$DB does not exist or is empty (child still used :memory:?)"
 else
-    rows=$(sqlite3 "$DB" "SELECT k || '=' || v FROM kv;" 2>/dev/null) || rows=''
-    if [ -z "$rows" ]; then
-        if sqlite3 "$DB" 'SELECT name FROM sqlite_master;' 2>/dev/null | grep -q '^kv$'; then
-            note_fail "kv table present but no rows"
-        else
-            note_fail "kv table missing — child likely opened :memory: instead of $DB"
-        fi
+    # The storage plugin maps each logical context to a table named
+    # kv_<context>. The register/login flow exercises three contexts:
+    # accounts, session, password_authn.
+    accounts_rows=$(sqlite3 "$DB" "SELECT k || '=' || v FROM kv_accounts;" 2>/dev/null) || accounts_rows=''
+    session_rows=$(sqlite3 "$DB" "SELECT k || '=' || v FROM kv_session;" 2>/dev/null) || session_rows=''
+    pw_rows=$(sqlite3 "$DB" "SELECT k || '=' || v FROM kv_password_authn;" 2>/dev/null) || pw_rows=''
+
+    if [ -z "$accounts_rows" ] && [ -z "$session_rows" ] && [ -z "$pw_rows" ]; then
+        tables=$(sqlite3 "$DB" 'SELECT name FROM sqlite_master;' 2>/dev/null)
+        note_fail "kv_<context> tables missing or empty — child likely opened :memory: instead of $DB (tables present: $tables)"
     else
-        # Register/login flow writes accounts:* + password_authn:* +
-        # session:* into the storage child. They're the natural
-        # persistence proof now that /admin/storage is gone.
-        if echo "$rows" | grep -q '^accounts:count=' && \
-           echo "$rows" | grep -q '^password_authn:count=' && \
-           echo "$rows" | grep -q '^session:next_sid='; then
+        if echo "$accounts_rows" | grep -q '^count=' && \
+           echo "$pw_rows" | grep -q '^count=' && \
+           echo "$session_rows" | grep -q '^next_sid='; then
             note_pass "sqlite db on disk has account/session state"
         else
-            note_fail "expected account/session keys missing from kv: $rows"
+            note_fail "expected per-context keys missing — accounts: $accounts_rows ; session: $session_rows ; password_authn: $pw_rows"
         fi
-        # And the role bootstrap must have promoted the first user.
-        alice_uid=$(echo "$rows" | grep -oE '^accounts:user:[0-9]+=1$' | head -1 |
-                    sed -E 's/^accounts:user:([0-9]+)=1$/\1/')
+        alice_uid=$(echo "$accounts_rows" | grep -oE '^user:[0-9]+=1$' | head -1 |
+                    sed -E 's/^user:([0-9]+)=1$/\1/')
         if [ -n "$alice_uid" ] && \
-           echo "$rows" | grep -q "^accounts:role:${alice_uid}=1$"; then
+           echo "$accounts_rows" | grep -q "^role:${alice_uid}=1$"; then
             note_pass "first user promoted to site-owner on disk"
         else
-            note_fail "site-owner role not persisted for first user: $rows"
+            note_fail "site-owner role not persisted for first user: $accounts_rows"
         fi
     fi
 fi

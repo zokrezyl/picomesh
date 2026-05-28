@@ -37,8 +37,11 @@ mesh:
       plugins: [storage]
       config:
         storage:
+          # backend: sqlite (default) | mdbx
+          # sqlite uses `db_path`; mdbx uses `mdbx_path` (a directory).
           backend: sqlite
           db_path: /tmp/git-yaafc/central.db
+          mdbx_path: /tmp/git-yaafc/mdbx
 
     session:
       port: 8203
@@ -98,6 +101,11 @@ mesh:
       port: 8209
       plugins: [git_repo]
       config:
+        git_repo:
+          # Per-user parent dir layout: each repo lives at
+          # <repos_dir>/<owner_name>/<repo_name>.git (bare).
+          # Defaults to /tmp/git-yaafc/repos if omitted.
+          repos_dir: /tmp/git-yaafc/repos
         remotes:
           - service: storage
             port: 8202
@@ -118,15 +126,22 @@ mesh:
           - service: storage
             port: 8202
 
-    # The HTML frontend. Same yaafc binary, --name frontend → yhttp
-    # picks up `yhttp.static_dir` (projected from this block) and
-    # serves the HTML/JS that lives in scenarios/git-yaafc/frontend/
-    # static/. Pages then talk to the other services via fetch().
     # The gateway. Per CLAUDE.md: this is the ONE service that
-    # listens yhttp — it's the auth boundary. Browsers hit it for
-    # HTML pages; tests hit `/_rpc` for programmatic access. The
-    # gateway then talks to every backend over yrpc (binary).
-    frontend:
+    # listens yhttp — it's the auth boundary. External clients
+    # (browser, MCP, CLI, tests) hit it; the gateway translates
+    # opaque tokens to internal JWTs and forwards over yrpc.
+    #
+    # Naming: this service is named `gateway` to mirror yaapp's
+    # scenarios/git-yaapp/yaapp.yaml. The word "frontend" used to
+    # name this service AND the transport AND a directory — three
+    # incompatible meanings; we now reserve "frontend" for the
+    # standalone HTML-rendering sidecar (still a separate piece of
+    # work — today, the gateway also serves the legacy HTML routes
+    # in src/yaafc/frontends/yhttp/frontend.c).
+    #
+    # The `frontend:` key below is the TRANSPORT selector (yhttp |
+    # yrpc | yttp), NOT a service name.
+    gateway:
       port: 8080
       frontend: yhttp
       plugins: []

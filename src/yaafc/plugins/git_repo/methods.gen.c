@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <string.h>
 
-struct yaafc_uint32_result git_repo_store_make(struct ctx * ctx, struct object * obj, uint32_t owner_id)
+struct yaafc_uint32_result git_repo_store_make(struct ctx * ctx, struct object * obj, uint32_t owner_id, const char * owner_name, const char * repo_name)
 {
     static method_slot _slot = METHOD_SLOT_UNDEFINED;
     if (_slot == METHOD_SLOT_UNDEFINED) {
@@ -51,6 +51,20 @@ struct yaafc_uint32_result git_repo_store_make(struct ctx * ctx, struct object *
         if (_off + sizeof(owner_id) > sizeof(_a))
             return YAAFC_ERR(yaafc_uint32, "git_repo_store_make: pack overflow");
         memcpy(_a + _off, &owner_id, sizeof(owner_id)); _off += sizeof(owner_id);
+        {
+            uint32_t _slen = (uint32_t)(owner_name ? strlen(owner_name) : 0);
+            if (_off + 4 + _slen > sizeof(_a))
+                return YAAFC_ERR(yaafc_uint32, "git_repo_store_make: pack overflow");
+            memcpy(_a + _off, &_slen, 4); _off += 4;
+            if (_slen) { memcpy(_a + _off, owner_name, _slen); _off += _slen; }
+        }
+        {
+            uint32_t _slen = (uint32_t)(repo_name ? strlen(repo_name) : 0);
+            if (_off + 4 + _slen > sizeof(_a))
+                return YAAFC_ERR(yaafc_uint32, "git_repo_store_make: pack overflow");
+            memcpy(_a + _off, &_slen, 4); _off += 4;
+            if (_slen) { memcpy(_a + _off, repo_name, _slen); _off += _slen; }
+        }
         uint8_t _wbuf[1 + 4 + 256];
         size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
@@ -71,7 +85,7 @@ struct yaafc_uint32_result git_repo_store_make(struct ctx * ctx, struct object *
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return YAAFC_ERR(yaafc_uint32, "git_repo_store_make: no impl on this class");
-        return ((git_repo_store_make_fn)fn)(ctx, obj, owner_id);
+        return ((git_repo_store_make_fn)fn)(ctx, obj, owner_id, owner_name, repo_name);
     }
 }
 

@@ -135,7 +135,9 @@ static int cmd_serve(struct yaafc_engine *e)
     /* If --name picks a service in mesh.services.*, auto-open its
      * declared remotes BEFORE the frontend starts accepting traffic.
      * The engine stashes the sessions; plugin code reaches them via
-     * `yaafc_engine_remote(e, "<upstream>")`. */
+     * `yaafc_engine_service_ctx(e, "<upstream>")` — the local/remote
+     * auto-dispatch helper. No call site builds a `struct ctx`
+     * manually anymore. */
     const char *name = yargv_get_string(yaafc_engine_cli(e), "name", NULL);
     if (name && *name) {
         size_t n = yaafc_engine_open_remotes(e, name);

@@ -155,7 +155,7 @@ _short_body:
     return _resp_max >= 1 ? 1 : 0;
 }
 
-static size_t storage_sql_set_skel(const void *_body, size_t _body_len,
+static size_t storage_set_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
@@ -182,14 +182,24 @@ static size_t storage_sql_set_skel(const void *_body, size_t _body_len,
         if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
         _s1[_slen] = 0; _off += _slen;
     }
-    int64_t _v2 = 0;
-    if (_off + sizeof(_v2) > _body_len) goto _short_body;
-    memcpy(&_v2, (const uint8_t *)_body + _off, sizeof(_v2));
-    _off += sizeof(_v2);
-    struct yaafc_int_result _r = storage_sql_set(&_local, _obj, _s1, _v2);
+    char _s2[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s2)) goto _short_body;
+        if (_slen) memcpy(_s2, (const uint8_t *)_body + _off, _slen);
+        _s2[_slen] = 0; _off += _slen;
+    }
+    int64_t _v3 = 0;
+    if (_off + sizeof(_v3) > _body_len) goto _short_body;
+    memcpy(&_v3, (const uint8_t *)_body + _off, sizeof(_v3));
+    _off += sizeof(_v3);
+    struct yaafc_int_result _r = storage_set(&_local, _obj, _s1, _s2, _v3);
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
-        yaafc_error_print(stderr, "[skel] storage_sql_set", _r.error);
+        yaafc_error_print(stderr, "[skel] storage_set", _r.error);
         const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
         uint32_t _ml = (uint32_t)strlen(_msg);
         if (_ml > 256) _ml = 256;
@@ -213,7 +223,7 @@ _short_body:
     return _resp_max >= 1 ? 1 : 0;
 }
 
-static size_t storage_sql_get_skel(const void *_body, size_t _body_len,
+static size_t storage_get_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
@@ -240,10 +250,20 @@ static size_t storage_sql_get_skel(const void *_body, size_t _body_len,
         if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
         _s1[_slen] = 0; _off += _slen;
     }
-    struct yaafc_int64_result _r = storage_sql_get(&_local, _obj, _s1);
+    char _s2[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s2)) goto _short_body;
+        if (_slen) memcpy(_s2, (const uint8_t *)_body + _off, _slen);
+        _s2[_slen] = 0; _off += _slen;
+    }
+    struct yaafc_int64_result _r = storage_get(&_local, _obj, _s1, _s2);
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
-        yaafc_error_print(stderr, "[skel] storage_sql_get", _r.error);
+        yaafc_error_print(stderr, "[skel] storage_get", _r.error);
         const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
         uint32_t _ml = (uint32_t)strlen(_msg);
         if (_ml > 256) _ml = 256;
@@ -267,7 +287,7 @@ _short_body:
     return _resp_max >= 1 ? 1 : 0;
 }
 
-static size_t storage_sql_exists_skel(const void *_body, size_t _body_len,
+static size_t storage_exists_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
@@ -294,10 +314,20 @@ static size_t storage_sql_exists_skel(const void *_body, size_t _body_len,
         if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
         _s1[_slen] = 0; _off += _slen;
     }
-    struct yaafc_int_result _r = storage_sql_exists(&_local, _obj, _s1);
+    char _s2[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s2)) goto _short_body;
+        if (_slen) memcpy(_s2, (const uint8_t *)_body + _off, _slen);
+        _s2[_slen] = 0; _off += _slen;
+    }
+    struct yaafc_int_result _r = storage_exists(&_local, _obj, _s1, _s2);
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
-        yaafc_error_print(stderr, "[skel] storage_sql_exists", _r.error);
+        yaafc_error_print(stderr, "[skel] storage_exists", _r.error);
         const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
         uint32_t _ml = (uint32_t)strlen(_msg);
         if (_ml > 256) _ml = 256;
@@ -321,7 +351,7 @@ _short_body:
     return _resp_max >= 1 ? 1 : 0;
 }
 
-static size_t storage_sql_del_skel(const void *_body, size_t _body_len,
+static size_t storage_del_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
@@ -348,10 +378,20 @@ static size_t storage_sql_del_skel(const void *_body, size_t _body_len,
         if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
         _s1[_slen] = 0; _off += _slen;
     }
-    struct yaafc_int_result _r = storage_sql_del(&_local, _obj, _s1);
+    char _s2[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s2)) goto _short_body;
+        if (_slen) memcpy(_s2, (const uint8_t *)_body + _off, _slen);
+        _s2[_slen] = 0; _off += _slen;
+    }
+    struct yaafc_int_result _r = storage_del(&_local, _obj, _s1, _s2);
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
-        yaafc_error_print(stderr, "[skel] storage_sql_del", _r.error);
+        yaafc_error_print(stderr, "[skel] storage_del", _r.error);
         const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
         uint32_t _ml = (uint32_t)strlen(_msg);
         if (_ml > 256) _ml = 256;
@@ -375,7 +415,7 @@ _short_body:
     return _resp_max >= 1 ? 1 : 0;
 }
 
-static size_t storage_sql_count_skel(const void *_body, size_t _body_len,
+static size_t storage_count_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
@@ -392,10 +432,20 @@ static size_t storage_sql_count_skel(const void *_body, size_t _body_len,
         memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
         _obj = (struct object *)rpc_handle_resolve(_h);
     }
-    struct yaafc_size_result _r = storage_sql_count(&_local, _obj);
+    char _s1[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s1)) goto _short_body;
+        if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
+        _s1[_slen] = 0; _off += _slen;
+    }
+    struct yaafc_size_result _r = storage_count(&_local, _obj, _s1);
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
-        yaafc_error_print(stderr, "[skel] storage_sql_count", _r.error);
+        yaafc_error_print(stderr, "[skel] storage_count", _r.error);
         const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
         uint32_t _ml = (uint32_t)strlen(_msg);
         if (_ml > 256) _ml = 256;
@@ -467,15 +517,16 @@ static int storage_kv_count_jinvoke(struct object *_obj, const struct yjson_valu
     return 0;
 }
 
-static int storage_sql_set_jinvoke(struct object *_obj, const struct yjson_value *_args,
+static int storage_set_jinvoke(struct object *_obj, const struct yjson_value *_args,
                           struct yjson_writer *_result, char *_err, size_t _err_cap)
 {
     const char *_a0 = yjson_as_string(yjson_array_at(_args, 0), "");
-    int64_t _a1 = (int64_t)yjson_as_int(yjson_array_at(_args, 1), 0);
+    const char *_a1 = yjson_as_string(yjson_array_at(_args, 1), "");
+    int64_t _a2 = (int64_t)yjson_as_int(yjson_array_at(_args, 2), 0);
     struct ctx _ctx = {0};
-    struct yaafc_int_result _r = storage_sql_set(&_ctx, _obj, _a0, _a1);
+    struct yaafc_int_result _r = storage_set(&_ctx, _obj, _a0, _a1, _a2);
     if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "storage_sql_set",
+        snprintf(_err, _err_cap, "%s: %s", "storage_set",
                  _r.error.msg ? _r.error.msg : "<no message>");
         yaafc_error_destroy(_r.error);
         return -1;
@@ -484,14 +535,15 @@ static int storage_sql_set_jinvoke(struct object *_obj, const struct yjson_value
     return 0;
 }
 
-static int storage_sql_get_jinvoke(struct object *_obj, const struct yjson_value *_args,
+static int storage_get_jinvoke(struct object *_obj, const struct yjson_value *_args,
                           struct yjson_writer *_result, char *_err, size_t _err_cap)
 {
     const char *_a0 = yjson_as_string(yjson_array_at(_args, 0), "");
+    const char *_a1 = yjson_as_string(yjson_array_at(_args, 1), "");
     struct ctx _ctx = {0};
-    struct yaafc_int64_result _r = storage_sql_get(&_ctx, _obj, _a0);
+    struct yaafc_int64_result _r = storage_get(&_ctx, _obj, _a0, _a1);
     if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "storage_sql_get",
+        snprintf(_err, _err_cap, "%s: %s", "storage_get",
                  _r.error.msg ? _r.error.msg : "<no message>");
         yaafc_error_destroy(_r.error);
         return -1;
@@ -500,14 +552,15 @@ static int storage_sql_get_jinvoke(struct object *_obj, const struct yjson_value
     return 0;
 }
 
-static int storage_sql_exists_jinvoke(struct object *_obj, const struct yjson_value *_args,
+static int storage_exists_jinvoke(struct object *_obj, const struct yjson_value *_args,
                           struct yjson_writer *_result, char *_err, size_t _err_cap)
 {
     const char *_a0 = yjson_as_string(yjson_array_at(_args, 0), "");
+    const char *_a1 = yjson_as_string(yjson_array_at(_args, 1), "");
     struct ctx _ctx = {0};
-    struct yaafc_int_result _r = storage_sql_exists(&_ctx, _obj, _a0);
+    struct yaafc_int_result _r = storage_exists(&_ctx, _obj, _a0, _a1);
     if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "storage_sql_exists",
+        snprintf(_err, _err_cap, "%s: %s", "storage_exists",
                  _r.error.msg ? _r.error.msg : "<no message>");
         yaafc_error_destroy(_r.error);
         return -1;
@@ -516,14 +569,15 @@ static int storage_sql_exists_jinvoke(struct object *_obj, const struct yjson_va
     return 0;
 }
 
-static int storage_sql_del_jinvoke(struct object *_obj, const struct yjson_value *_args,
+static int storage_del_jinvoke(struct object *_obj, const struct yjson_value *_args,
                           struct yjson_writer *_result, char *_err, size_t _err_cap)
 {
     const char *_a0 = yjson_as_string(yjson_array_at(_args, 0), "");
+    const char *_a1 = yjson_as_string(yjson_array_at(_args, 1), "");
     struct ctx _ctx = {0};
-    struct yaafc_int_result _r = storage_sql_del(&_ctx, _obj, _a0);
+    struct yaafc_int_result _r = storage_del(&_ctx, _obj, _a0, _a1);
     if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "storage_sql_del",
+        snprintf(_err, _err_cap, "%s: %s", "storage_del",
                  _r.error.msg ? _r.error.msg : "<no message>");
         yaafc_error_destroy(_r.error);
         return -1;
@@ -532,13 +586,14 @@ static int storage_sql_del_jinvoke(struct object *_obj, const struct yjson_value
     return 0;
 }
 
-static int storage_sql_count_jinvoke(struct object *_obj, const struct yjson_value *_args,
+static int storage_count_jinvoke(struct object *_obj, const struct yjson_value *_args,
                           struct yjson_writer *_result, char *_err, size_t _err_cap)
 {
+    const char *_a0 = yjson_as_string(yjson_array_at(_args, 0), "");
     struct ctx _ctx = {0};
-    struct yaafc_size_result _r = storage_sql_count(&_ctx, _obj);
+    struct yaafc_size_result _r = storage_count(&_ctx, _obj, _a0);
     if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "storage_sql_count",
+        snprintf(_err, _err_cap, "%s: %s", "storage_count",
                  _r.error.msg ? _r.error.msg : "<no message>");
         yaafc_error_destroy(_r.error);
         return -1;
@@ -575,28 +630,28 @@ struct object_ptr_result storage_kv_create(struct ctx *ctx)
     return YAAFC_OK(object_ptr, _obj);
 }
 
-struct object_ptr_result storage_sql_create(struct ctx *ctx)
+struct object_ptr_result storage_db_create(struct ctx *ctx)
 {
-    ydebug("class=storage_sql");
-    struct class_ptr_result _kr = storage_sql_class_get();
+    ydebug("class=storage_db");
+    struct class_ptr_result _kr = storage_db_class_get();
     if (YAAFC_IS_ERR(_kr))
-        return YAAFC_ERR(object_ptr, "storage_sql_create: class accessor failed", _kr);
+        return YAAFC_ERR(object_ptr, "storage_db_create: class accessor failed", _kr);
     const struct class *_klass = _kr.value;
 
     if (!ctx || !ctx->session)
         return object_alloc(_klass);
 
-    rpc_session_translate_class(ctx->session, "storage_sql");
+    rpc_session_translate_class(ctx->session, "storage_db");
 
     uint64_t _h = 0;
-    const char *_name = "storage_sql";
+    const char *_name = "storage_db";
     if (rpc_call(ctx->session, RPC_OP_CREATE, 0, _name, strlen(_name),
                  &_h, sizeof(_h)) != sizeof(_h) || !_h)
-        return YAAFC_ERR(object_ptr, "storage_sql_create: remote create failed");
+        return YAAFC_ERR(object_ptr, "storage_db_create: remote create failed");
 
     void *_mem = calloc(1, sizeof(struct object) + sizeof(uint64_t));
     if (!_mem)
-        return YAAFC_ERR(object_ptr, "storage_sql_create: calloc(proxy) failed");
+        return YAAFC_ERR(object_ptr, "storage_db_create: calloc(proxy) failed");
     struct object *_obj = _mem;
     *(const struct class **)_obj = _klass;
     *(uint64_t *)((char *)_obj + sizeof(*_obj)) = _h;
@@ -612,11 +667,11 @@ static const struct storage_jinvoke_row storage_jinvoke_rows[] = {
     {"storage_kv_set", storage_kv_set_jinvoke},
     {"storage_kv_get", storage_kv_get_jinvoke},
     {"storage_kv_count", storage_kv_count_jinvoke},
-    {"storage_sql_set", storage_sql_set_jinvoke},
-    {"storage_sql_get", storage_sql_get_jinvoke},
-    {"storage_sql_exists", storage_sql_exists_jinvoke},
-    {"storage_sql_del", storage_sql_del_jinvoke},
-    {"storage_sql_count", storage_sql_count_jinvoke}
+    {"storage_set", storage_set_jinvoke},
+    {"storage_get", storage_get_jinvoke},
+    {"storage_exists", storage_exists_jinvoke},
+    {"storage_del", storage_del_jinvoke},
+    {"storage_count", storage_count_jinvoke}
 };
 
 static jinvoke_fn storage_jinvoke_lookup(const char *qname)
@@ -632,7 +687,7 @@ static jinvoke_fn storage_jinvoke_lookup(const char *qname)
 static struct class_ptr_result storage_accessor_lookup(const char *name)
 {
     if (strcmp(name, "storage_kv") == 0) return storage_kv_class_get();
-    if (strcmp(name, "storage_sql") == 0) return storage_sql_class_get();
+    if (strcmp(name, "storage_db") == 0) return storage_db_class_get();
     return YAAFC_OK(class_ptr, NULL);
 }
 
@@ -644,11 +699,11 @@ static const struct storage_skel_row storage_skel_rows[] = {
     {"storage_kv_set", storage_kv_set_skel},
     {"storage_kv_get", storage_kv_get_skel},
     {"storage_kv_count", storage_kv_count_skel},
-    {"storage_sql_set", storage_sql_set_skel},
-    {"storage_sql_get", storage_sql_get_skel},
-    {"storage_sql_exists", storage_sql_exists_skel},
-    {"storage_sql_del", storage_sql_del_skel},
-    {"storage_sql_count", storage_sql_count_skel}
+    {"storage_set", storage_set_skel},
+    {"storage_get", storage_get_skel},
+    {"storage_exists", storage_exists_skel},
+    {"storage_del", storage_del_skel},
+    {"storage_count", storage_count_skel}
 };
 
 static rpc_skel_fn storage_skel_lookup(method_slot slot)

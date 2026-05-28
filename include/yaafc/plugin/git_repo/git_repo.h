@@ -20,7 +20,7 @@ struct class_ptr_result git_repo_store_class_get(void);
 struct object_ptr_result git_repo_store_create(struct ctx *ctx);
 
 /* ---- methods ---- */
-struct yaafc_uint32_result git_repo_store_make(struct ctx * ctx, struct object * obj, uint32_t owner_id);
+struct yaafc_uint32_result git_repo_store_make(struct ctx * ctx, struct object * obj, uint32_t owner_id, const char * owner_name, const char * repo_name);
 struct yaafc_int_result git_repo_store_delete(struct ctx * ctx, struct object * obj, uint32_t repo_id);
 struct yaafc_uint32_result git_repo_store_owner_of(struct ctx * ctx, struct object * obj, uint32_t repo_id);
 struct yaafc_size_result git_repo_store_count_for_owner(struct ctx * ctx, struct object * obj, uint32_t owner_id);

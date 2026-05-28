@@ -1,4 +1,4 @@
-/* accounts plugin — user registry backed by the storage_sql service.
+/* accounts plugin — user registry backed by the storage service.
  *
  * Methods (uid is uint32 on the wire today; usernames are mapped to
  * uids client-side by the frontend, mirroring yaapp's accounts plugin
@@ -10,14 +10,16 @@
  *   accounts_balance(uid)         current balance (errors if uid unknown)
  *   accounts_count()              live row count
  *
- * Storage layout in the shared kv table:
+ * Storage layout in the `accounts` context:
  *
- *   accounts:user:<uid>      → 1 (registered marker)
- *   accounts:balance:<uid>   → int64 balance
- *   accounts:count           → number of registered users
+ *   user:<uid>      → 1 (registered marker)
+ *   balance:<uid>   → int64 balance
+ *   count           → number of registered users
  *
- * Like session.c, the plugin holds no in-memory state — every method
- * delegates to storage_sql on the configured `storage` remote.
+ * The plugin holds no in-memory state — every method delegates to the
+ * storage service on the configured remote, using a single context
+ * `accounts`. The storage service maps the context to either a sqlite
+ * table or an mdbx DBI (transparent to this plugin).
  */
 
 #include <yaafc/ycore/result.h>
@@ -46,14 +48,16 @@ static struct acc_storage_handle_result open_storage(void)
 {
     struct yaafc_engine *e = yaafc_active_engine();
     if (!e) return YAAFC_ERR(acc_storage_handle, "accounts: no active engine");
-    struct rpc_session *st = yaafc_engine_remote(e, "storage");
-    if (!st) return YAAFC_ERR(acc_storage_handle, "accounts: no 'storage' remote");
-    struct acc_storage_handle h = {.c = {.session = st}};
-    struct object_ptr_result o = storage_sql_create(&h.c);
-    if (YAAFC_IS_ERR(o)) return YAAFC_ERR(acc_storage_handle, "accounts: storage_sql_create failed", o);
+    struct acc_storage_handle h = {.c = yaafc_engine_service_ctx(e, "storage")};
+    if (!h.c.session)
+        return YAAFC_ERR(acc_storage_handle, "accounts: no 'storage' remote");
+    struct object_ptr_result o = storage_db_create(&h.c);
+    if (YAAFC_IS_ERR(o)) return YAAFC_ERR(acc_storage_handle, "accounts: storage_db_create failed", o);
     h.obj = o.value;
     return YAAFC_OK(acc_storage_handle, h);
 }
+
+#define ACCOUNTS_CTX "accounts"
 
 static void close_storage(struct acc_storage_handle *h)
 {
@@ -70,14 +74,14 @@ static void close_storage(struct acc_storage_handle *h)
 
 static int64_t kv_get_or(struct acc_storage_handle *h, const char *key, int64_t fallback)
 {
-    struct yaafc_int64_result r = storage_sql_get(&h->c, h->obj, key);
+    struct yaafc_int64_result r = storage_get(&h->c, h->obj, ACCOUNTS_CTX, key);
     if (YAAFC_IS_ERR(r)) { yaafc_error_destroy(r.error); return fallback; }
     return r.value;
 }
 
 static int kv_exists(struct acc_storage_handle *h, const char *key)
 {
-    struct yaafc_int_result r = storage_sql_exists(&h->c, h->obj, key);
+    struct yaafc_int_result r = storage_exists(&h->c, h->obj, ACCOUNTS_CTX, key);
     int present = YAAFC_IS_OK(r) && r.value;
     if (YAAFC_IS_ERR(r)) yaafc_error_destroy(r.error);
     return present;
@@ -93,15 +97,15 @@ struct yaafc_int_result accounts_store_register_impl(struct ctx *ctx, struct obj
     struct acc_storage_handle h = sr.value;
 
     char k[64];
-    snprintf(k, sizeof(k), "accounts:user:%u", uid);
+    snprintf(k, sizeof(k), "user:%u", uid);
     if (kv_exists(&h, k)) {
         close_storage(&h);
         ydebug("accounts_register: uid=%u already exists", uid);
         return YAAFC_OK(yaafc_int, 0);
     }
-    storage_sql_set(&h.c, h.obj, k, 1);
-    int64_t count = kv_get_or(&h, "accounts:count", 0) + 1;
-    storage_sql_set(&h.c, h.obj, "accounts:count", count);
+    storage_set(&h.c, h.obj, ACCOUNTS_CTX, k, 1);
+    int64_t count = kv_get_or(&h, "count", 0) + 1;
+    storage_set(&h.c, h.obj, ACCOUNTS_CTX, "count", count);
     close_storage(&h);
     yinfo("accounts_register: uid=%u (total=%lld)", uid, (long long)count);
     return YAAFC_OK(yaafc_int, 1);
@@ -116,7 +120,7 @@ struct yaafc_int_result accounts_store_exists_impl(struct ctx *ctx, struct objec
     if (YAAFC_IS_ERR(sr)) return YAAFC_ERR(yaafc_int, "accounts_exists: open_storage failed", sr);
     struct acc_storage_handle h = sr.value;
     char k[64];
-    snprintf(k, sizeof(k), "accounts:user:%u", uid);
+    snprintf(k, sizeof(k), "user:%u", uid);
     int present = kv_exists(&h, k);
     close_storage(&h);
     return YAAFC_OK(yaafc_int, present);
@@ -131,13 +135,13 @@ struct yaafc_int_result accounts_store_set_balance_impl(struct ctx *ctx, struct 
     if (YAAFC_IS_ERR(sr)) return YAAFC_ERR(yaafc_int, "accounts_set_balance: open_storage failed", sr);
     struct acc_storage_handle h = sr.value;
     char k[64];
-    snprintf(k, sizeof(k), "accounts:user:%u", uid);
+    snprintf(k, sizeof(k), "user:%u", uid);
     if (!kv_exists(&h, k)) {
         close_storage(&h);
         return YAAFC_ERR(yaafc_int, "accounts_set_balance: unknown uid");
     }
-    snprintf(k, sizeof(k), "accounts:balance:%u", uid);
-    storage_sql_set(&h.c, h.obj, k, n);
+    snprintf(k, sizeof(k), "balance:%u", uid);
+    storage_set(&h.c, h.obj, ACCOUNTS_CTX, k, n);
     close_storage(&h);
     ydebug("accounts_set_balance: uid=%u balance=%lld", uid, (long long)n);
     return YAAFC_OK(yaafc_int, 1);
@@ -152,12 +156,12 @@ struct yaafc_int64_result accounts_store_balance_impl(struct ctx *ctx, struct ob
     if (YAAFC_IS_ERR(sr)) return YAAFC_ERR(yaafc_int64, "accounts_balance: open_storage failed", sr);
     struct acc_storage_handle h = sr.value;
     char k[64];
-    snprintf(k, sizeof(k), "accounts:user:%u", uid);
+    snprintf(k, sizeof(k), "user:%u", uid);
     if (!kv_exists(&h, k)) {
         close_storage(&h);
         return YAAFC_ERR(yaafc_int64, "accounts_balance: unknown uid");
     }
-    snprintf(k, sizeof(k), "accounts:balance:%u", uid);
+    snprintf(k, sizeof(k), "balance:%u", uid);
     int64_t bal = kv_get_or(&h, k, 0);
     close_storage(&h);
     return YAAFC_OK(yaafc_int64, bal);
@@ -170,7 +174,7 @@ struct yaafc_size_result accounts_store_count_impl(struct ctx *ctx, struct objec
     struct acc_storage_handle_result sr = open_storage();
     if (YAAFC_IS_ERR(sr)) return YAAFC_ERR(yaafc_size, "accounts_count: open_storage failed", sr);
     struct acc_storage_handle h = sr.value;
-    int64_t c = kv_get_or(&h, "accounts:count", 0);
+    int64_t c = kv_get_or(&h, "count", 0);
     close_storage(&h);
     return YAAFC_OK(yaafc_size, (size_t)(c < 0 ? 0 : c));
 }

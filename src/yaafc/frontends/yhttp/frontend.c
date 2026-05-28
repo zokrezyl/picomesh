@@ -27,7 +27,13 @@
  *   GET  /admin/users           accounts roster (site-owner only)
  *
  * All backend calls go through the engine's `remote()` sessions —
- * loaded from `mesh.services.frontend.config.remotes[]` at startup. */
+ * loaded from `mesh.services.gateway.config.remotes[]` at startup.
+ *
+ * NOTE: this file is the LEGACY gateway-side HTML renderer; the
+ * planned split moves these routes into a separate `yaafc-frontend`
+ * binary that talks to the gateway via `POST /_rpc`, the same way
+ * yaapp's `frontend.py` does. Until that work lands, this file lives
+ * inside the gateway process. */
 
 #define _POSIX_C_SOURCE 200809L
 
@@ -164,6 +170,8 @@ static int64_t hash_password(const char *s)
  * route_register_post (bootstrap). */
 static int is_site_admin(uint32_t uid);
 static void promote_to_site_admin(uint32_t uid);
+static const char *landing_url(uint32_t uid, const char *uname,
+                               char *out, size_t cap);
 
 static void render_head(struct buf *b, const char *title,
                         uint32_t uid, const char *uname)
@@ -372,15 +380,14 @@ static uint32_t resolve_uid(const char *headers_raw, size_t headers_raw_len)
 {
     struct yaafc_engine *e = yaafc_active_engine();
     if (!e) return 0;
-    struct rpc_session *ses = yaafc_engine_remote(e, "session");
-    if (!ses) return 0;
     char cookie[64];
     if (!cookie_get(headers_raw, headers_raw_len, "yaafc-sid", cookie, sizeof(cookie)))
         return 0;
     uint32_t sid = (uint32_t)strtoul(cookie, NULL, 10);
     if (!sid) return 0;
 
-    struct ctx c = {.session = ses};
+    struct ctx c = yaafc_engine_service_ctx(e, "session");
+    if (!c.session) return 0;
     struct object_ptr_result o = session_store_create(&c);
     if (YAAFC_IS_ERR(o)) { yaafc_error_destroy(o.error); return 0; }
     struct yaafc_uint32_result lr = session_store_lookup(&c, o.value, sid);
@@ -404,7 +411,7 @@ struct svc_ctx {
     do {                                                                           \
         struct yaafc_engine *_e = yaafc_active_engine();                           \
         if (!_e) break;                                                            \
-        VAR.c.session = yaafc_engine_remote(_e, SVC);                              \
+        VAR.c = yaafc_engine_service_ctx(_e, SVC);                                 \
         if (!VAR.c.session) break;                                                 \
         struct object_ptr_result _o = CREATE_FN(&VAR.c);                           \
         if (YAAFC_IS_ERR(_o)) { yaafc_error_destroy(_o.error); break; }            \
@@ -431,13 +438,12 @@ static inline void svc_close_impl(struct svc_ctx *v)
 
 /* ---------- route: GET / ---------- */
 
-static void route_root(struct yloop_stream *s, uint32_t uid, int keep_alive)
+static void route_root(struct yloop_stream *s, uint32_t uid,
+                       const char *uname, int keep_alive)
 {
-    if (uid) {
-        send_redirect(s, "/repos", keep_alive, NULL);
-        return;
-    }
-    send_redirect(s, "/login", keep_alive, NULL);
+    char to[128];
+    send_redirect(s, landing_url(uid, uname, to, sizeof(to)),
+                  keep_alive, NULL);
 }
 
 /* ---------- route: GET /login ---------- */
@@ -612,12 +618,14 @@ static void route_login_post(struct yloop_stream *s, const char *body,
         render_login(s, "cookie build failed", keep_alive);
         return;
     }
-    send_redirect(s, "/repos", keep_alive, cookie_hdr);
+    char to[128];
+    send_redirect(s, landing_url(uid, uname, to, sizeof(to)),
+                  keep_alive, cookie_hdr);
 }
 
 /* POST /register — create the account + credential, then start a
- * session and redirect to /repos. Fails if the username is already
- * taken (so the flow forks cleanly from /login). */
+ * session and redirect to the user's namespace page. Fails if the
+ * username is already taken (so the flow forks cleanly from /login). */
 static void route_register_post(struct yloop_stream *s, const char *body,
                                 size_t body_len, int keep_alive)
 {
@@ -670,7 +678,9 @@ static void route_register_post(struct yloop_stream *s, const char *body,
         render_register(s, "cookie build failed", keep_alive);
         return;
     }
-    send_redirect(s, "/repos", keep_alive, cookie_hdr);
+    char to[128];
+    send_redirect(s, landing_url(uid, uname, to, sizeof(to)),
+                  keep_alive, cookie_hdr);
 }
 
 /* POST /logout — destroy the server-side session record AND wipe the
@@ -734,6 +744,35 @@ static int is_reserved_top(const char *seg, size_t seg_len)
     return 0;
 }
 
+/* Pick where to send a freshly-authenticated user (mirrors yaapp's
+ * `_landing_url` in frontend.py).
+ *
+ *   1. `/<username>` is the canonical GitHub-style landing.
+ *   2. If the username happens to collide with a reserved top-level
+ *      path (e.g. a bootstrap account named `admin`), no namespace
+ *      page can be rendered for them — site-owners fall back to
+ *      `/admin/users`, regular users fall back to `/login` (the only
+ *      page guaranteed to render for them).
+ *
+ * `uname` may be NULL/empty (e.g. when called from route_root and the
+ * cookie wasn't sent). `uid` of 0 is the anonymous signal — used by
+ * route_root for the never-signed-in case. Writes a NUL-terminated
+ * path into `out` and returns a pointer to it. */
+static const char *landing_url(uint32_t uid, const char *uname,
+                               char *out, size_t cap)
+{
+    if (uname && *uname && !is_reserved_top(uname, strlen(uname))) {
+        snprintf(out, cap, "/%s", uname);
+        return out;
+    }
+    if (uid && is_site_admin(uid)) {
+        snprintf(out, cap, "/admin/users");
+        return out;
+    }
+    snprintf(out, cap, "/login");
+    return out;
+}
+
 /* Repo-name charset: same as username so the URL stays well-formed. */
 static int reponame_ok(const char *s, size_t n)
 {
@@ -753,9 +792,9 @@ static int repo_storage_open(struct svc_ctx *out)
 {
     struct yaafc_engine *e = yaafc_active_engine();
     if (!e) return 0;
-    out->c.session = yaafc_engine_remote(e, "storage");
+    out->c = yaafc_engine_service_ctx(e, "storage");
     if (!out->c.session) return 0;
-    struct object_ptr_result o = storage_sql_create(&out->c);
+    struct object_ptr_result o = storage_db_create(&out->c);
     if (YAAFC_IS_ERR(o)) { yaafc_error_destroy(o.error); return 0; }
     out->obj = o.value;
     out->ok = 1;
@@ -765,9 +804,10 @@ static int repo_storage_open(struct svc_ctx *out)
 /* ---------- authz: site-owner / regular-user role check ----------
  *
  * Mirrors yaapp's `'site:owner' in user.groups` check. We store the
- * role as an int64 at `accounts:role:<uid>` in the shared kv table
- * (0 = regular user, 1 = site-owner). The first user to /register
- * gets role=1 automatically (bootstrap); subsequent users get 0.
+ * role as an int64 at key `role:<uid>` in the `accounts` storage
+ * context (0 = regular user, 1 = site-owner). The first user to
+ * /register gets role=1 automatically (bootstrap); subsequent users
+ * get 0.
  *
  * Without this gate any signed-in user could hit /admin/users — the
  * frontend has to enforce policy explicitly because the underlying
@@ -780,8 +820,8 @@ static int is_site_admin(uint32_t uid)
     struct svc_ctx st = {0};
     if (!repo_storage_open(&st)) return 0;
     char k[64];
-    snprintf(k, sizeof(k), "accounts:role:%u", uid);
-    struct yaafc_int64_result r = storage_sql_get(&st.c, st.obj, k);
+    snprintf(k, sizeof(k), "role:%u", uid);
+    struct yaafc_int64_result r = storage_get(&st.c, st.obj, "accounts", k);
     int admin = YAAFC_IS_OK(r) && r.value >= 1;
     if (YAAFC_IS_ERR(r)) yaafc_error_destroy(r.error);
     SVC_CLOSE(st);
@@ -797,16 +837,16 @@ static void promote_to_site_admin(uint32_t uid)
     struct svc_ctx st = {0};
     if (!repo_storage_open(&st)) return;
     char k[64];
-    snprintf(k, sizeof(k), "accounts:role:%u", uid);
-    storage_sql_set(&st.c, st.obj, k, 1);
+    snprintf(k, sizeof(k), "role:%u", uid);
+    storage_set(&st.c, st.obj, "accounts", k, 1);
     SVC_CLOSE(st);
     yinfo("authz: uid=%u bootstrapped as site-owner", uid);
 }
 
 /* Mark <account>/<name> as a registered repo and return its repo_id.
- * Storage layout:
- *   repos:by_id:<repo_id> = 1
- *   repos:owner:<account_uid>:count = <N>
+ * Storage layout in the `repos` context:
+ *   by_id:<repo_id>            = 1
+ *   owner:<account_uid>:count  = <N>
  */
 static uint32_t repo_register(const char *account, const char *name, uint32_t owner_uid)
 {
@@ -814,13 +854,13 @@ static uint32_t repo_register(const char *account, const char *name, uint32_t ow
     struct svc_ctx st = {0};
     if (!repo_storage_open(&st)) return 0;
     char k[96];
-    snprintf(k, sizeof(k), "repos:by_id:%u", rid);
-    storage_sql_set(&st.c, st.obj, k, 1);
-    snprintf(k, sizeof(k), "repos:owner:%u:count", owner_uid);
-    struct yaafc_int64_result cur = storage_sql_get(&st.c, st.obj, k);
+    snprintf(k, sizeof(k), "by_id:%u", rid);
+    storage_set(&st.c, st.obj, "repos", k, 1);
+    snprintf(k, sizeof(k), "owner:%u:count", owner_uid);
+    struct yaafc_int64_result cur = storage_get(&st.c, st.obj, "repos", k);
     int64_t count = (YAAFC_IS_OK(cur) ? cur.value : 0) + 1;
     if (YAAFC_IS_ERR(cur)) yaafc_error_destroy(cur.error);
-    storage_sql_set(&st.c, st.obj, k, count);
+    storage_set(&st.c, st.obj, "repos", k, count);
     SVC_CLOSE(st);
     return rid;
 }
@@ -830,8 +870,8 @@ static int repo_exists(uint32_t repo_id)
     struct svc_ctx st = {0};
     if (!repo_storage_open(&st)) return 0;
     char k[64];
-    snprintf(k, sizeof(k), "repos:by_id:%u", repo_id);
-    struct yaafc_int_result r = storage_sql_exists(&st.c, st.obj, k);
+    snprintf(k, sizeof(k), "by_id:%u", repo_id);
+    struct yaafc_int_result r = storage_exists(&st.c, st.obj, "repos", k);
     int present = YAAFC_IS_OK(r) && r.value;
     if (YAAFC_IS_ERR(r)) yaafc_error_destroy(r.error);
     SVC_CLOSE(st);
@@ -843,8 +883,8 @@ static int64_t repo_count_for_owner(uint32_t owner_uid)
     struct svc_ctx st = {0};
     if (!repo_storage_open(&st)) return -1;
     char k[64];
-    snprintf(k, sizeof(k), "repos:owner:%u:count", owner_uid);
-    struct yaafc_int64_result r = storage_sql_get(&st.c, st.obj, k);
+    snprintf(k, sizeof(k), "owner:%u:count", owner_uid);
+    struct yaafc_int64_result r = storage_get(&st.c, st.obj, "repos", k);
     int64_t v = YAAFC_IS_OK(r) ? r.value : 0;
     if (YAAFC_IS_ERR(r)) yaafc_error_destroy(r.error);
     SVC_CLOSE(st);
@@ -935,10 +975,11 @@ static void route_repos_new_post(struct yloop_stream *s, uint32_t uid,
     if (!rid) { send_redirect(s, "/repos", keep_alive, NULL); return; }
 
     /* Mirror the binding into git_repo so its count_total reflects
-     * reality — repo_register only writes to storage_sql. */
+     * reality AND a bare repo lands on disk under the per-user
+     * parent dir (<repos_dir>/<uname>/<name>.git). */
     SVC_OPEN(repo, "git_repo", git_repo_store_create);
     if (repo.ok) {
-        git_repo_store_make(&repo.c, repo.obj, uid);
+        git_repo_store_make(&repo.c, repo.obj, uid, uname, name);
         SVC_CLOSE(repo);
     }
 
@@ -1466,14 +1507,19 @@ int yhttp_frontend_try(struct yloop_stream *s,
      * yhttp child — leave it alone and let it serve JSON only. */
     struct yaafc_engine *e = yaafc_active_engine();
     if (!e) return 0;
-    if (!yaafc_engine_remote(e, "session")) return 0;
+    if (!yaafc_engine_service_ctx(e, "session").session) return 0;
 
     uint32_t uid = resolve_uid(headers_raw, headers_raw_len);
+    /* Cookie username is decided up front so route_root can route
+     * straight to /<username> when the user is already signed in. */
+    char dispatch_uname[64] = {0};
+    resolve_uname(headers_raw, headers_raw_len,
+                  dispatch_uname, sizeof(dispatch_uname));
     int is_get = strcmp(method, "GET") == 0;
     int is_post = strcmp(method, "POST") == 0;
 
     /* Public routes — always handled regardless of auth state. */
-    if (is_get && path_eq(path, "/"))                      { route_root(s, uid, keep_alive); return 1; }
+    if (is_get && path_eq(path, "/"))                      { route_root(s, uid, dispatch_uname, keep_alive); return 1; }
     if (is_get && path_eq(path, "/login"))                 { route_login_get(s, keep_alive); return 1; }
     if (is_post && path_eq(path, "/login"))                { route_login_post(s, body, body_len, keep_alive); return 1; }
     if (is_get && path_eq(path, "/register"))              { route_register_get(s, keep_alive); return 1; }
@@ -1506,20 +1552,21 @@ int yhttp_frontend_try(struct yloop_stream *s,
         return 1;
     }
 
-    /* Cookie-driven username (for nav display + ownership of new repos). */
-    char uname[64] = {0};
-    resolve_uname(headers_raw, headers_raw_len, uname, sizeof(uname));
+    /* Cookie-driven username (for nav display + ownership of new repos).
+     * Already resolved up front for route_root; alias to keep the
+     * existing per-handler callsites unchanged. */
+    const char *uname = dispatch_uname;
 
     if (is_get  && path_eq(path, "/repos"))                 { render_repos(s, uid, uname, keep_alive); return 1; }
     if (is_post && path_eq(path, "/repos/new"))             { route_repos_new_post(s, uid, uname, body, body_len, keep_alive); return 1; }
 
-    /* /admin/* requires the site-owner role. Anyone else hitting
-     * these paths gets bounced to /repos (the kv-internals page
-     * `/admin/storage` is removed entirely — backend state isn't a
-     * UI surface). */
+    /* /admin/* requires the site-owner role. Non-admins get sent back
+     * to their own namespace page (or /login if the cookie's gone). */
     if (strncmp(path, "/admin/", 7) == 0) {
         if (!is_site_admin(uid)) {
-            send_redirect(s, "/repos", keep_alive, NULL);
+            char to[128];
+            send_redirect(s, landing_url(uid, uname, to, sizeof(to)),
+                          keep_alive, NULL);
             return 1;
         }
         if (is_get  && path_eq(path, "/admin/users"))           { render_admin_users(s, uid, uname, keep_alive); return 1; }

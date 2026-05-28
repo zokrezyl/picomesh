@@ -32,61 +32,71 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
-  - slot: sql_set
+  - slot: set
     domain: storage
-    owning_class: sql
+    owning_class: db
     return_type: struct yaafc_int_result
     args:
       - name: ctx
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: context
+        type: "const char *"
       - name: key
         type: "const char *"
       - name: value
         type: int64_t
-  - slot: sql_get
+  - slot: get
     domain: storage
-    owning_class: sql
+    owning_class: db
     return_type: struct yaafc_int64_result
     args:
       - name: ctx
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: context
+        type: "const char *"
       - name: key
         type: "const char *"
-  - slot: sql_exists
+  - slot: exists
     domain: storage
-    owning_class: sql
+    owning_class: db
     return_type: struct yaafc_int_result
     args:
       - name: ctx
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: context
+        type: "const char *"
       - name: key
         type: "const char *"
-  - slot: sql_del
+  - slot: del
     domain: storage
-    owning_class: sql
+    owning_class: db
     return_type: struct yaafc_int_result
     args:
       - name: ctx
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: context
+        type: "const char *"
       - name: key
         type: "const char *"
-  - slot: sql_count
+  - slot: count
     domain: storage
-    owning_class: sql
+    owning_class: db
     return_type: struct yaafc_size_result
     args:
       - name: ctx
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: context
+        type: "const char *"
 classes:
   - name: kv
     domain: storage
@@ -106,27 +116,27 @@ classes:
       - slot: kv_count
         slot_domain: storage
         impl: storage_kv_count_impl
-  - name: sql
+  - name: db
     domain: storage
-    accessor: storage_sql_class_get
+    accessor: storage_db_class_get
     type: regular
-    source_file: /home/misi/work/my/yaafc/src/yaafc/plugins/storage/sql.c
+    source_file: /home/misi/work/my/yaafc/src/yaafc/plugins/storage/storage.c
     parent: null
     mixins: []
-    data: struct storage_sql_data
+    data: struct storage_data
     ops:
-      - slot: sql_set
+      - slot: set
         slot_domain: storage
-        impl: storage_sql_set_impl
-      - slot: sql_get
+        impl: storage_set_impl
+      - slot: get
         slot_domain: storage
-        impl: storage_sql_get_impl
-      - slot: sql_exists
+        impl: storage_get_impl
+      - slot: exists
         slot_domain: storage
-        impl: storage_sql_exists_impl
-      - slot: sql_del
+        impl: storage_exists_impl
+      - slot: del
         slot_domain: storage
-        impl: storage_sql_del_impl
-      - slot: sql_count
+        impl: storage_del_impl
+      - slot: count
         slot_domain: storage
-        impl: storage_sql_count_impl
+        impl: storage_count_impl

@@ -10,6 +10,10 @@ methods:
         type: "struct object *"
       - name: owner_id
         type: uint32_t
+      - name: owner_name
+        type: "const char *"
+      - name: repo_name
+        type: "const char *"
   - slot: store_delete
     domain: git_repo
     owning_class: store
