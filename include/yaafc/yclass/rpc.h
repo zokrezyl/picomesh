@@ -83,10 +83,44 @@ typedef rpc_skel_fn (*skel_lookup_fn)(method_slot slot);
 void rpc_add_skel_lookup(skel_lookup_fn fn);
 rpc_skel_fn rpc_skel_for(method_slot slot);
 
+/* Auth-context plumbing for the HTTP /_rpc boundary. The yhttp
+ * handler reads X-Yaafc-Uid / -Sid headers and calls
+ * rpc_set_current_caller before invoking the skel; the skel's
+ * generated prologue picks the values up via rpc_current_caller.
+ * Thread-local storage; safe across one coroutine's run. */
+void rpc_set_current_caller(uint32_t uid, uint32_t sid);
+void rpc_current_caller(uint32_t *out_uid, uint32_t *out_sid);
+
+/* Unified admin-op dispatch — used by the HTTP /_rpc handler to
+ * route RPC_OP_RESOLVE_SLOT / GET_CLASS / CREATE / DESTROY without
+ * duplicating the case statement. */
+size_t rpc_handle_admin_op(enum rpc_op op,
+                           const void *body, size_t body_len,
+                           void *resp, size_t resp_max);
+
 /* ---- Client side -------------------------------------------------- */
 
+/* Raw-binary transport (legacy yrpc): each rpc_call writes header,
+ * body_len, body to the fd; reads u32 resp_len + bytes. */
 struct rpc_session *rpc_session_create(int fd);
+
+/* HTTP transport: each rpc_call is wrapped in a POST /_rpc?op=N&id=N
+ * HTTP/1.1 request. Auth context flows via HTTP headers
+ *   X-Yaafc-Uid: <n>
+ *   X-Yaafc-Sid: <n>
+ * (yaapp's model — the gateway is the auth boundary, and "headers"
+ * are the natural carrier for request-scoped context like uid/sid
+ * and, later, tracing ids).
+ *
+ * The fd must be a connected TCP socket to a yhttp server. `host` is
+ * stashed as the HTTP Host header. */
+struct rpc_session *rpc_session_create_http(int fd, const char *host);
+
 void rpc_session_destroy(struct rpc_session *s);
+
+/* Set auth headers attached to subsequent calls. Only meaningful for
+ * HTTP-mode sessions; ignored otherwise. */
+void rpc_session_set_auth(struct rpc_session *s, uint32_t uid, uint32_t sid);
 
 size_t rpc_call(struct rpc_session *s, enum rpc_op op, uint32_t id, const void *body,
                 size_t body_len, void *resp, size_t resp_max);

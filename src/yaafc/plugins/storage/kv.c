@@ -89,7 +89,7 @@ struct yaafc_size_result storage_kv_count_impl(struct ctx *ctx, struct object *o
     return YAAFC_OK(yaafc_size, d->count);
 }
 
-/* Pull in the generated accessor — emitted by gen/codegen.py and
+/* Pull in the generated accessor — emitted by src/yaafc/yclass/gen/codegen.py and
  * compiled in-line so the static class descriptor table lives in this
  * translation unit. */
 #include "kv.gen.c"

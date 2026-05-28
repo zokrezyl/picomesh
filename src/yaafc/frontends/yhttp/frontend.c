@@ -24,10 +24,7 @@
  *   GET  /repo/<id>/runs        pipeline list
  *   POST /repo/<id>/runs/new    git_pipeline_store_enqueue
  *
- *   GET  /admin/users           accounts roster
- *   GET  /admin/storage         storage_sql kv browser
- *   POST /admin/storage/set     storage_sql_set
- *   POST /admin/storage/del     storage_sql_del
+ *   GET  /admin/users           accounts roster (site-owner only)
  *
  * All backend calls go through the engine's `remote()` sessions —
  * loaded from `mesh.services.frontend.config.remotes[]` at startup. */
@@ -44,24 +41,24 @@
 #include <yaafc/ycore/ytrace.h>
 
 /* Each service header brings in its create() + method stubs. */
-#include <yaafc/storage/sql.h>
-#include <yaafc/storage/rpc.gen.h>
-#include <yaafc/accounts/store.h>
-#include <yaafc/accounts/rpc.gen.h>
-#include <yaafc/password_authn/store.h>
-#include <yaafc/password_authn/rpc.gen.h>
-#include <yaafc/token_issuer/store.h>
-#include <yaafc/token_issuer/rpc.gen.h>
-#include <yaafc/session/store.h>
-#include <yaafc/session/rpc.gen.h>
-#include <yaafc/issues/store.h>
-#include <yaafc/issues/rpc.gen.h>
-#include <yaafc/git_repo/store.h>
-#include <yaafc/git_repo/rpc.gen.h>
-#include <yaafc/git_pipeline/store.h>
-#include <yaafc/git_pipeline/rpc.gen.h>
-#include <yaafc/personal_access_tokens/store.h>
-#include <yaafc/personal_access_tokens/rpc.gen.h>
+#include <yaafc/plugin/storage/sql.h>
+#include <yaafc/plugin/storage/rpc.gen.h>
+#include <yaafc/plugin/accounts/store.h>
+#include <yaafc/plugin/accounts/rpc.gen.h>
+#include <yaafc/plugin/password_authn/store.h>
+#include <yaafc/plugin/password_authn/rpc.gen.h>
+#include <yaafc/plugin/token_issuer/store.h>
+#include <yaafc/plugin/token_issuer/rpc.gen.h>
+#include <yaafc/plugin/session/store.h>
+#include <yaafc/plugin/session/rpc.gen.h>
+#include <yaafc/plugin/issues/store.h>
+#include <yaafc/plugin/issues/rpc.gen.h>
+#include <yaafc/plugin/git_repo/store.h>
+#include <yaafc/plugin/git_repo/rpc.gen.h>
+#include <yaafc/plugin/git_pipeline/store.h>
+#include <yaafc/plugin/git_pipeline/rpc.gen.h>
+#include <yaafc/plugin/personal_access_tokens/store.h>
+#include <yaafc/plugin/personal_access_tokens/rpc.gen.h>
 
 #include <ctype.h>
 #include <stdarg.h>
@@ -170,6 +167,13 @@ static int64_t hash_password(const char *s)
     return (int64_t)h;
 }
 
+/* Forward decls for helpers defined later in the file but referenced
+ * from render_head (which renders the global nav and needs to know
+ * whether the signed-in user is a site admin) and from
+ * route_register_post (bootstrap). */
+static int is_site_admin(uint32_t uid);
+static void promote_to_site_admin(uint32_t uid);
+
 static void render_head(struct buf *b, const char *title,
                         uint32_t uid, const char *uname)
 {
@@ -188,7 +192,12 @@ static void render_head(struct buf *b, const char *title,
      * base.html: anonymous visitors only see the brand + sign-in).
      * Per-repo links (Issues, Pipelines) live on the repo pages
      * themselves now that URLs follow /<account>/<repo>/... — there's
-     * no single "repo #1" to point at from the global header. */
+     * no single "repo #1" to point at from the global header.
+     *
+     * /admin/users is the only admin surface in the UI now, and it's
+     * gated on the site-owner role. Storage internals are NOT a UI
+     * concern: there's no /admin/storage page in the nav (or anywhere
+     * else) — backend kv inspection happens via sqlite3(1) directly. */
     if (uid) {
         buf_puts(b, "<ul class=\"nav-links\">"
                     "<li><a href=\"/repos\">Repos</a></li>");
@@ -197,9 +206,10 @@ static void render_head(struct buf *b, const char *title,
             buf_esc(b, uname);
             buf_puts(b, "\">My account</a></li>");
         }
-        buf_puts(b, "<li><a href=\"/admin/users\">Users</a></li>"
-                    "<li><a href=\"/admin/storage\">Storage</a></li>"
-                    "</ul>");
+        if (is_site_admin(uid)) {
+            buf_puts(b, "<li><a href=\"/admin/users\">Users</a></li>");
+        }
+        buf_puts(b, "</ul>");
     }
 
     buf_puts(b, "<div class=\"nav-right\">");
@@ -646,6 +656,20 @@ static void route_register_post(struct yloop_stream *s, const char *body,
     password_authn_store_register(&pw_sv.c, pw_sv.obj, uid, pw);
     SVC_CLOSE(pw_sv);
 
+    /* Bootstrap: the very first user becomes site-owner. After
+     * `accounts.register` succeeds and the running total is 1, this
+     * uid is the only registered account → promote it. */
+    SVC_OPEN(acc2, "accounts", accounts_store_create);
+    if (acc2.ok) {
+        struct yaafc_size_result cr = accounts_store_count(&acc2.c, acc2.obj);
+        if (YAAFC_IS_OK(cr) && cr.value == 1) {
+            promote_to_site_admin(uid);
+        } else if (YAAFC_IS_ERR(cr)) {
+            yaafc_error_destroy(cr.error);
+        }
+        SVC_CLOSE(acc2);
+    }
+
     const char *err = NULL;
     uint32_t sid = auth_and_start_session(uid, pw, &err);
     if (!sid) { render_register(s, err ? err : "register failed", keep_alive); return; }
@@ -745,6 +769,47 @@ static int repo_storage_open(struct svc_ctx *out)
     out->obj = o.value;
     out->ok = 1;
     return 1;
+}
+
+/* ---------- authz: site-owner / regular-user role check ----------
+ *
+ * Mirrors yaapp's `'site:owner' in user.groups` check. We store the
+ * role as an int64 at `accounts:role:<uid>` in the shared kv table
+ * (0 = regular user, 1 = site-owner). The first user to /register
+ * gets role=1 automatically (bootstrap); subsequent users get 0.
+ *
+ * Without this gate any signed-in user could hit /admin/users — the
+ * frontend has to enforce policy explicitly because the underlying
+ * accounts plugin doesn't carry authz state itself. */
+
+/* Read the role bit. Returns 0 (regular) on any error / absent key. */
+static int is_site_admin(uint32_t uid)
+{
+    if (!uid) return 0;
+    struct svc_ctx st = {0};
+    if (!repo_storage_open(&st)) return 0;
+    char k[64];
+    snprintf(k, sizeof(k), "accounts:role:%u", uid);
+    struct yaafc_int64_result r = storage_sql_get(&st.c, st.obj, k);
+    int admin = YAAFC_IS_OK(r) && r.value >= 1;
+    if (YAAFC_IS_ERR(r)) yaafc_error_destroy(r.error);
+    SVC_CLOSE(st);
+    return admin;
+}
+
+/* Promote `uid` to site-owner. Called from /register when accounts
+ * count is exactly 1 right after a successful register — i.e. this
+ * was the first user to ever join. */
+static void promote_to_site_admin(uint32_t uid)
+{
+    if (!uid) return;
+    struct svc_ctx st = {0};
+    if (!repo_storage_open(&st)) return;
+    char k[64];
+    snprintf(k, sizeof(k), "accounts:role:%u", uid);
+    storage_sql_set(&st.c, st.obj, k, 1);
+    SVC_CLOSE(st);
+    yinfo("authz: uid=%u bootstrapped as site-owner", uid);
 }
 
 /* Mark <account>/<name> as a registered repo and return its repo_id.
@@ -1358,91 +1423,9 @@ static void route_admin_users_mint_pat(struct yloop_stream *s,
     send_redirect(s, "/admin/users", keep_alive, NULL);
 }
 
-static void render_admin_storage(struct yloop_stream *s, uint32_t uid,
-                                 const char *uname,
-                                 const char *recent_key, const char *recent_val,
-                                 int keep_alive)
-{
-    struct buf b; buf_init(&b);
-    render_head(&b, "Storage", uid, uname);
-
-    int64_t count = -1;
-    SVC_OPEN(st, "storage", storage_sql_create);
-    if (st.ok) {
-        struct yaafc_size_result r = storage_sql_count(&st.c, st.obj);
-        if (YAAFC_IS_OK(r)) count = (int64_t)r.value;
-        else yaafc_error_destroy(r.error);
-        SVC_CLOSE(st);
-    }
-
-    buf_printf(&b,
-        "<header class=\"page-header\"><h1>Storage (SQLite)</h1></header>"
-        "<section class=\"card\"><header class=\"card-header\">"
-        "<h2>kv table</h2>"
-        "<span class=\"muted small\">%s row%s</span></header>"
-        "<p class=\"muted small\">DB path comes from "
-        "<code>mesh.services.storage.config.storage.db_path</code> in the YAML "
-        "(projected onto the storage child's config root).</p>",
-        count < 0 ? "?" : ({static char x[32]; snprintf(x, sizeof(x), "%lld", (long long)count); x;}),
-        count == 1 ? "" : "s");
-
-    if (recent_key) {
-        buf_puts(&b, "<p>last set: <code>");
-        buf_esc(&b, recent_key);
-        buf_puts(&b, "</code> = <code>");
-        buf_esc(&b, recent_val ? recent_val : "");
-        buf_puts(&b, "</code></p>");
-    }
-
-    buf_puts(&b,
-        "<form method=\"post\" action=\"/admin/storage/set\">"
-        "<label>key <input name=\"key\" placeholder=\"hello\" required></label>"
-        "<label>value (int64) <input type=\"number\" name=\"value\" value=\"42\" required></label>"
-        "<button type=\"submit\" class=\"primary\">set</button>"
-        "</form>"
-        "<form method=\"post\" action=\"/admin/storage/del\">"
-        "<label>key <input name=\"key\" placeholder=\"hello\" required></label>"
-        "<button type=\"submit\">delete</button>"
-        "</form>"
-        "</section>");
-    render_foot(&b);
-    send_html(s, 200, b.data, b.len, keep_alive, NULL);
-    buf_free(&b);
-}
-
-static void route_admin_storage_set(struct yloop_stream *s, uint32_t uid,
-                                    const char *uname,
-                                    const char *body, size_t body_len, int keep_alive)
-{
-    char key[128] = {0}, val_s[32] = {0};
-    form_get(body, body_len, "key",   key, sizeof(key));
-    form_get(body, body_len, "value", val_s, sizeof(val_s));
-    if (!*key) { send_redirect(s, "/admin/storage", keep_alive, NULL); return; }
-    int64_t v = strtoll(val_s, NULL, 10);
-    SVC_OPEN(st, "storage", storage_sql_create);
-    if (st.ok) {
-        storage_sql_set(&st.c, st.obj, key, v);
-        SVC_CLOSE(st);
-    }
-    /* Render with the last-set blurb. */
-    render_admin_storage(s, uid, uname, key, val_s, keep_alive);
-}
-
-static void route_admin_storage_del(struct yloop_stream *s, uint32_t uid,
-                                    const char *body, size_t body_len, int keep_alive)
-{
-    (void)uid;
-    char key[128] = {0};
-    form_get(body, body_len, "key", key, sizeof(key));
-    if (*key) {
-        SVC_OPEN(st, "storage", storage_sql_create);
-        if (st.ok) {
-            storage_sql_del(&st.c, st.obj, key);
-            SVC_CLOSE(st);
-        }
-    }
-    send_redirect(s, "/admin/storage", keep_alive, NULL);
-}
+/* `/admin/storage` was removed: backend kv state isn't a UI concern,
+ * even for the site owner. Operators inspect /tmp/git-yaafc/central.db
+ * with sqlite3(1) directly. */
 
 /* ---------- top-level dispatcher ---------- */
 
@@ -1506,6 +1489,23 @@ int yhttp_frontend_try(struct yloop_stream *s,
     if (is_post && path_eq(path, "/register"))             { route_register_post(s, body, body_len, keep_alive); return 1; }
     if (is_post && path_eq(path, "/logout"))               { route_logout(s, headers_raw, headers_raw_len, keep_alive); return 1; }
 
+    /* Static assets MUST be reachable to anonymous visitors —
+     * /style.css is loaded by /login itself. Let these fall through
+     * to yhttp.c's static_dir handler by returning 0 here. */
+    {
+        const char *q = strchr(path, '?');
+        size_t plen = q ? (size_t)(q - path) : strlen(path);
+        static const char *const STATIC_SUFFIX[] = {
+            ".css", ".js", ".png", ".jpg", ".jpeg", ".gif",
+            ".svg", ".ico", ".woff", ".woff2", ".map", NULL,
+        };
+        for (size_t i = 0; STATIC_SUFFIX[i]; ++i) {
+            size_t sl = strlen(STATIC_SUFFIX[i]);
+            if (plen >= sl && memcmp(path + plen - sl, STATIC_SUFFIX[i], sl) == 0)
+                return 0;
+        }
+    }
+
     /* Everything below is authenticated. Anonymous visitors get
      * bounced to /login — the service nav is hidden for them and the
      * underlying API isn't reachable through the frontend until they
@@ -1521,12 +1521,24 @@ int yhttp_frontend_try(struct yloop_stream *s,
 
     if (is_get  && path_eq(path, "/repos"))                 { render_repos(s, uid, uname, keep_alive); return 1; }
     if (is_post && path_eq(path, "/repos/new"))             { route_repos_new_post(s, uid, uname, body, body_len, keep_alive); return 1; }
-    if (is_get  && path_eq(path, "/admin/users"))           { render_admin_users(s, uid, uname, keep_alive); return 1; }
-    if (is_post && path_eq(path, "/admin/users/register"))  { route_admin_users_register(s, body, body_len, keep_alive); return 1; }
-    if (is_post && path_eq(path, "/admin/users/mint_pat"))  { route_admin_users_mint_pat(s, body, body_len, keep_alive); return 1; }
-    if (is_get  && path_eq(path, "/admin/storage"))         { render_admin_storage(s, uid, uname, NULL, NULL, keep_alive); return 1; }
-    if (is_post && path_eq(path, "/admin/storage/set"))     { route_admin_storage_set(s, uid, uname, body, body_len, keep_alive); return 1; }
-    if (is_post && path_eq(path, "/admin/storage/del"))     { route_admin_storage_del(s, uid, body, body_len, keep_alive); return 1; }
+
+    /* /admin/* requires the site-owner role. Anyone else hitting
+     * these paths gets bounced to /repos (the kv-internals page
+     * `/admin/storage` is removed entirely — backend state isn't a
+     * UI surface). */
+    if (strncmp(path, "/admin/", 7) == 0) {
+        if (!is_site_admin(uid)) {
+            send_redirect(s, "/repos", keep_alive, NULL);
+            return 1;
+        }
+        if (is_get  && path_eq(path, "/admin/users"))           { render_admin_users(s, uid, uname, keep_alive); return 1; }
+        if (is_post && path_eq(path, "/admin/users/register"))  { route_admin_users_register(s, body, body_len, keep_alive); return 1; }
+        if (is_post && path_eq(path, "/admin/users/mint_pat"))  { route_admin_users_mint_pat(s, body, body_len, keep_alive); return 1; }
+        /* All other /admin/* paths 404 — including any leftover
+         * /admin/storage requests from old bookmarks. */
+        send_html(s, 404, "<p>not found</p>", 16, keep_alive, NULL);
+        return 1;
+    }
 
     /* /<account>[/<repo>[/<sub>]] — yaapp's URL shape. The account
      * is a username; the repo is a name owned by that account. */

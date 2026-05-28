@@ -1,5 +1,5 @@
 /* GENERATED — do not edit. */
-#include <yaafc/mesh/store.h>
+#include <yaafc/plugin/mesh/store.h>
 
 __attribute__((unused))
 static mesh_store_register_service_fn _mesh_store_mesh_store_register_service_check = mesh_store_register_service_impl;

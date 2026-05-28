@@ -1,5 +1,5 @@
 /* GENERATED — do not edit. */
-#include <yaafc/portalloc/store.h>
+#include <yaafc/plugin/portalloc/store.h>
 
 __attribute__((unused))
 static portalloc_store_allocate_fn _portalloc_store_portalloc_store_allocate_check = portalloc_store_allocate_impl;

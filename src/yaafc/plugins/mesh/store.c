@@ -299,10 +299,11 @@ static int mesh_internal_spawn(struct object *obj, const char *name)
         return 0;
     }
 
-    /* Per-service frontend choice, read from
-     * `mesh.services.<name>.frontend`. Default to "yrpc" so backends
-     * speak the binary protocol that engine_add_remote (rpc_session)
-     * expects. The public-facing service opts into "yhttp" via YAML. */
+    /* Per CLAUDE.md: backends listen yrpc by default (binary, fast,
+     * the perf-critical inter-service path). Only the gateway opts
+     * into yhttp via an explicit `frontend: yhttp` in its yaml block.
+     * yrpc on every backend is the throughput invariant — do not
+     * change the default without updating CLAUDE.md. */
     char fe_path[256];
     snprintf(fe_path, sizeof(fe_path), "mesh.services.%s.frontend", name);
     const char *frontend = "yrpc";

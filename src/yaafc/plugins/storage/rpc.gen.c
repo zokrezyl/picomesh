@@ -4,11 +4,11 @@
 #include <yaafc/yjson/yjson.h>
 #include <yaafc/ycore/result.h>
 #include <yaafc/ycore/ytrace.h>
-#include <yaafc/storage/rpc.gen.h>
-#include <yaafc/storage/methods.gen.h>
+#include <yaafc/plugin/storage/rpc.gen.h>
+#include <yaafc/plugin/storage/methods.gen.h>
 #include <yaafc/yclass/class.h>
-#include <yaafc/storage/kv.h>
-#include <yaafc/storage/sql.h>
+#include <yaafc/plugin/storage/kv.h>
+#include <yaafc/plugin/storage/sql.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,8 +18,8 @@ static size_t storage_kv_set_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
-    /* gh#2: every CALL is prefixed by the caller's auth context
-     * (uid, sid) — see the matching pack in the public stub. */
+    /* Caller-auth prefix (uid, sid) is the first 8 bytes of every
+     * yrpc CALL body — set by the public stub on the way out. */
     struct ctx _local = {0};
     if (_off + 8 > _body_len) goto _short_body;
     memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
@@ -70,8 +70,8 @@ static size_t storage_kv_get_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
-    /* gh#2: every CALL is prefixed by the caller's auth context
-     * (uid, sid) — see the matching pack in the public stub. */
+    /* Caller-auth prefix (uid, sid) is the first 8 bytes of every
+     * yrpc CALL body — set by the public stub on the way out. */
     struct ctx _local = {0};
     if (_off + 8 > _body_len) goto _short_body;
     memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
@@ -118,8 +118,8 @@ static size_t storage_kv_count_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
-    /* gh#2: every CALL is prefixed by the caller's auth context
-     * (uid, sid) — see the matching pack in the public stub. */
+    /* Caller-auth prefix (uid, sid) is the first 8 bytes of every
+     * yrpc CALL body — set by the public stub on the way out. */
     struct ctx _local = {0};
     if (_off + 8 > _body_len) goto _short_body;
     memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
@@ -162,8 +162,8 @@ static size_t storage_sql_set_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
-    /* gh#2: every CALL is prefixed by the caller's auth context
-     * (uid, sid) — see the matching pack in the public stub. */
+    /* Caller-auth prefix (uid, sid) is the first 8 bytes of every
+     * yrpc CALL body — set by the public stub on the way out. */
     struct ctx _local = {0};
     if (_off + 8 > _body_len) goto _short_body;
     memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
@@ -220,8 +220,8 @@ static size_t storage_sql_get_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
-    /* gh#2: every CALL is prefixed by the caller's auth context
-     * (uid, sid) — see the matching pack in the public stub. */
+    /* Caller-auth prefix (uid, sid) is the first 8 bytes of every
+     * yrpc CALL body — set by the public stub on the way out. */
     struct ctx _local = {0};
     if (_off + 8 > _body_len) goto _short_body;
     memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
@@ -274,8 +274,8 @@ static size_t storage_sql_exists_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
-    /* gh#2: every CALL is prefixed by the caller's auth context
-     * (uid, sid) — see the matching pack in the public stub. */
+    /* Caller-auth prefix (uid, sid) is the first 8 bytes of every
+     * yrpc CALL body — set by the public stub on the way out. */
     struct ctx _local = {0};
     if (_off + 8 > _body_len) goto _short_body;
     memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
@@ -328,8 +328,8 @@ static size_t storage_sql_del_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
-    /* gh#2: every CALL is prefixed by the caller's auth context
-     * (uid, sid) — see the matching pack in the public stub. */
+    /* Caller-auth prefix (uid, sid) is the first 8 bytes of every
+     * yrpc CALL body — set by the public stub on the way out. */
     struct ctx _local = {0};
     if (_off + 8 > _body_len) goto _short_body;
     memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
@@ -382,8 +382,8 @@ static size_t storage_sql_count_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
-    /* gh#2: every CALL is prefixed by the caller's auth context
-     * (uid, sid) — see the matching pack in the public stub. */
+    /* Caller-auth prefix (uid, sid) is the first 8 bytes of every
+     * yrpc CALL body — set by the public stub on the way out. */
     struct ctx _local = {0};
     if (_off + 8 > _body_len) goto _short_body;
     memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;

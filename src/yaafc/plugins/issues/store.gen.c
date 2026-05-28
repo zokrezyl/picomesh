@@ -1,5 +1,5 @@
 /* GENERATED — do not edit. */
-#include <yaafc/issues/store.h>
+#include <yaafc/plugin/issues/store.h>
 
 __attribute__((unused))
 static issues_store_open_fn _issues_store_issues_store_open_check = issues_store_open_impl;

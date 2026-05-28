@@ -23,8 +23,8 @@
 #include <yaafc/ycore/ytrace.h>
 #include <yaafc/yclass/class.h>
 #include <yaafc/yengine/engine.h>
-#include <yaafc/storage/sql.h>
-#include <yaafc/storage/rpc.gen.h>
+#include <yaafc/plugin/storage/sql.h>
+#include <yaafc/plugin/storage/rpc.gen.h>
 #include <yaafc/yclass/rpc.h>
 #include <string.h>
 

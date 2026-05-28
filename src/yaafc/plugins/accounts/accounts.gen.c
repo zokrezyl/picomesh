@@ -1,5 +1,5 @@
 /* GENERATED — do not edit. */
-#include <yaafc/accounts/store.h>
+#include <yaafc/plugin/accounts/store.h>
 
 __attribute__((unused))
 static accounts_store_register_fn _accounts_store_accounts_store_register_check = accounts_store_register_impl;

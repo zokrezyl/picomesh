@@ -1,5 +1,5 @@
 /* GENERATED — do not edit. */
-#include <yaafc/calculator/calc.h>
+#include <yaafc/plugin/calculator/calc.h>
 
 __attribute__((unused))
 static calculator_calc_add_fn _calculator_calc_calculator_calc_add_check = calculator_calc_add_impl;

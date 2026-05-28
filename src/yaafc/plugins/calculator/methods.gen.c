@@ -1,5 +1,5 @@
 /* GENERATED — do not edit. */
-#include <yaafc/calculator/methods.gen.h>
+#include <yaafc/plugin/calculator/methods.gen.h>
 #include <yaafc/ycore/result.h>
 #include <yaafc/ycore/ytrace.h>
 #include <yaafc/yclass/rpc.h>
@@ -26,9 +26,11 @@ struct yaafc_int64_result calculator_calc_add(struct ctx * ctx, struct object * 
             return YAAFC_ERR(yaafc_int64, "calculator_calc_add: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
-        /* gh#2: propagate auth context (uid, sid) across RPC. The
-         * skeleton on the server side reads these back into its
-         * `struct ctx _local` before invoking the impl. */
+        /* Caller-auth prefix: every backend yrpc body starts with the
+         * (uid, sid) of the gateway-resolved caller. The skel pops
+         * these into its local ctx before unpacking args. (For the
+         * HTTP /_rpc shim, the gateway translates Cookie/Bearer to
+         * (uid, sid) and emits the exact same yrpc body downstream.) */
         {
             uint32_t _u = _s->uid, _i = _s->sid;
             if (_off + 8 > sizeof(_a))
@@ -36,6 +38,10 @@ struct yaafc_int64_result calculator_calc_add(struct ctx * ctx, struct object * 
             memcpy(_a + _off, &_u, 4); _off += 4;
             memcpy(_a + _off, &_i, 4); _off += 4;
         }
+        /* Also stamp the session in case it's HTTP-mode (the gateway's
+         * outbound, if it ever needs to talk HTTP). Cheap no-op for
+         * TCP-mode sessions. */
+        rpc_session_set_auth(_s->session, _s->uid, _s->sid);
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -92,9 +98,11 @@ struct yaafc_int64_result calculator_calc_sub(struct ctx * ctx, struct object * 
             return YAAFC_ERR(yaafc_int64, "calculator_calc_sub: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
-        /* gh#2: propagate auth context (uid, sid) across RPC. The
-         * skeleton on the server side reads these back into its
-         * `struct ctx _local` before invoking the impl. */
+        /* Caller-auth prefix: every backend yrpc body starts with the
+         * (uid, sid) of the gateway-resolved caller. The skel pops
+         * these into its local ctx before unpacking args. (For the
+         * HTTP /_rpc shim, the gateway translates Cookie/Bearer to
+         * (uid, sid) and emits the exact same yrpc body downstream.) */
         {
             uint32_t _u = _s->uid, _i = _s->sid;
             if (_off + 8 > sizeof(_a))
@@ -102,6 +110,10 @@ struct yaafc_int64_result calculator_calc_sub(struct ctx * ctx, struct object * 
             memcpy(_a + _off, &_u, 4); _off += 4;
             memcpy(_a + _off, &_i, 4); _off += 4;
         }
+        /* Also stamp the session in case it's HTTP-mode (the gateway's
+         * outbound, if it ever needs to talk HTTP). Cheap no-op for
+         * TCP-mode sessions. */
+        rpc_session_set_auth(_s->session, _s->uid, _s->sid);
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -158,9 +170,11 @@ struct yaafc_int64_result calculator_calc_mul(struct ctx * ctx, struct object * 
             return YAAFC_ERR(yaafc_int64, "calculator_calc_mul: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
-        /* gh#2: propagate auth context (uid, sid) across RPC. The
-         * skeleton on the server side reads these back into its
-         * `struct ctx _local` before invoking the impl. */
+        /* Caller-auth prefix: every backend yrpc body starts with the
+         * (uid, sid) of the gateway-resolved caller. The skel pops
+         * these into its local ctx before unpacking args. (For the
+         * HTTP /_rpc shim, the gateway translates Cookie/Bearer to
+         * (uid, sid) and emits the exact same yrpc body downstream.) */
         {
             uint32_t _u = _s->uid, _i = _s->sid;
             if (_off + 8 > sizeof(_a))
@@ -168,6 +182,10 @@ struct yaafc_int64_result calculator_calc_mul(struct ctx * ctx, struct object * 
             memcpy(_a + _off, &_u, 4); _off += 4;
             memcpy(_a + _off, &_i, 4); _off += 4;
         }
+        /* Also stamp the session in case it's HTTP-mode (the gateway's
+         * outbound, if it ever needs to talk HTTP). Cheap no-op for
+         * TCP-mode sessions. */
+        rpc_session_set_auth(_s->session, _s->uid, _s->sid);
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -224,9 +242,11 @@ struct yaafc_int64_result calculator_calc_div(struct ctx * ctx, struct object * 
             return YAAFC_ERR(yaafc_int64, "calculator_calc_div: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
-        /* gh#2: propagate auth context (uid, sid) across RPC. The
-         * skeleton on the server side reads these back into its
-         * `struct ctx _local` before invoking the impl. */
+        /* Caller-auth prefix: every backend yrpc body starts with the
+         * (uid, sid) of the gateway-resolved caller. The skel pops
+         * these into its local ctx before unpacking args. (For the
+         * HTTP /_rpc shim, the gateway translates Cookie/Bearer to
+         * (uid, sid) and emits the exact same yrpc body downstream.) */
         {
             uint32_t _u = _s->uid, _i = _s->sid;
             if (_off + 8 > sizeof(_a))
@@ -234,6 +254,10 @@ struct yaafc_int64_result calculator_calc_div(struct ctx * ctx, struct object * 
             memcpy(_a + _off, &_u, 4); _off += 4;
             memcpy(_a + _off, &_i, 4); _off += 4;
         }
+        /* Also stamp the session in case it's HTTP-mode (the gateway's
+         * outbound, if it ever needs to talk HTTP). Cheap no-op for
+         * TCP-mode sessions. */
+        rpc_session_set_auth(_s->session, _s->uid, _s->sid);
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))

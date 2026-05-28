@@ -4,10 +4,10 @@
 #include <yaafc/yjson/yjson.h>
 #include <yaafc/ycore/result.h>
 #include <yaafc/ycore/ytrace.h>
-#include <yaafc/accounts/rpc.gen.h>
-#include <yaafc/accounts/methods.gen.h>
+#include <yaafc/plugin/accounts/rpc.gen.h>
+#include <yaafc/plugin/accounts/methods.gen.h>
 #include <yaafc/yclass/class.h>
-#include <yaafc/accounts/store.h>
+#include <yaafc/plugin/accounts/store.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,8 +17,8 @@ static size_t accounts_store_register_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
-    /* gh#2: every CALL is prefixed by the caller's auth context
-     * (uid, sid) — see the matching pack in the public stub. */
+    /* Caller-auth prefix (uid, sid) is the first 8 bytes of every
+     * yrpc CALL body — set by the public stub on the way out. */
     struct ctx _local = {0};
     if (_off + 8 > _body_len) goto _short_body;
     memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
@@ -65,8 +65,8 @@ static size_t accounts_store_exists_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
-    /* gh#2: every CALL is prefixed by the caller's auth context
-     * (uid, sid) — see the matching pack in the public stub. */
+    /* Caller-auth prefix (uid, sid) is the first 8 bytes of every
+     * yrpc CALL body — set by the public stub on the way out. */
     struct ctx _local = {0};
     if (_off + 8 > _body_len) goto _short_body;
     memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
@@ -113,8 +113,8 @@ static size_t accounts_store_set_balance_skel(const void *_body, size_t _body_le
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
-    /* gh#2: every CALL is prefixed by the caller's auth context
-     * (uid, sid) — see the matching pack in the public stub. */
+    /* Caller-auth prefix (uid, sid) is the first 8 bytes of every
+     * yrpc CALL body — set by the public stub on the way out. */
     struct ctx _local = {0};
     if (_off + 8 > _body_len) goto _short_body;
     memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
@@ -165,8 +165,8 @@ static size_t accounts_store_balance_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
-    /* gh#2: every CALL is prefixed by the caller's auth context
-     * (uid, sid) — see the matching pack in the public stub. */
+    /* Caller-auth prefix (uid, sid) is the first 8 bytes of every
+     * yrpc CALL body — set by the public stub on the way out. */
     struct ctx _local = {0};
     if (_off + 8 > _body_len) goto _short_body;
     memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
@@ -213,8 +213,8 @@ static size_t accounts_store_count_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
-    /* gh#2: every CALL is prefixed by the caller's auth context
-     * (uid, sid) — see the matching pack in the public stub. */
+    /* Caller-auth prefix (uid, sid) is the first 8 bytes of every
+     * yrpc CALL body — set by the public stub on the way out. */
     struct ctx _local = {0};
     if (_off + 8 > _body_len) goto _short_body;
     memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;

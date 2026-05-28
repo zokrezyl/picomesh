@@ -154,18 +154,37 @@ out=$(http_get "$WEB" /alice/website/issues)
 expect_contains 'GET /alice/website/issues renders' "$out" '<h1>Issues</h1>'
 out=$(http_get "$WEB" /alice/website/runs)
 expect_contains 'GET /alice/website/runs renders'   "$out" 'Pipeline'
+# /admin/users is gated on the site-owner role. alice is the very
+# first user to /register, so she's auto-promoted at register time.
 out=$(http_get "$WEB" /admin/users)
-expect_contains 'GET /admin/users renders'          "$out" 'Users'
-out=$(http_get "$WEB" /admin/storage)
-expect_contains 'GET /admin/storage renders'        "$out" 'Storage'
+expect_contains 'GET /admin/users renders for site owner' "$out" '<h1>Users</h1>'
 
-# Storage round-trip through the admin form.
-out=$(curl -sS --max-time 10 -b tmp/cookies.txt \
-           -XPOST http://127.0.0.1:$WEB/admin/storage/set \
-           --data-urlencode 'key=hello' --data-urlencode 'value=42')
-expect_contains 'POST /admin/storage/set echoes recent set' "$out" 'last set: <code>hello</code> = <code>42</code>'
+# /admin/storage is removed entirely — backend kv state isn't a UI
+# surface anymore. Even the site owner should not get an HTML page
+# there. A direct hit should not render the old form.
 out=$(http_get "$WEB" /admin/storage)
-expect_contains 'GET /admin/storage reports row count' "$out" '>[1-9][0-9]* rows<'
+if echo "$out" | grep -q 'storage_sql\|kv table'; then
+    note_fail "/admin/storage still exposes backend kv internals"
+else
+    note_pass "/admin/storage no longer exposes storage internals"
+fi
+
+# A non-owner account must NOT reach /admin/users. Register a second
+# user (gets role=0), and verify they get bounced to /repos.
+curl -sS --max-time 10 -c tmp/bob-cookies.txt \
+     -XPOST http://127.0.0.1:$WEB/register \
+     --data-urlencode 'username=bob' --data-urlencode 'password=bobsecret' \
+     -o /dev/null
+hdrs=$(curl -sS --max-time 10 -D - -o /dev/null -b tmp/bob-cookies.txt \
+            http://127.0.0.1:$WEB/admin/users)
+expect_contains 'non-owner /admin/users → 303 /repos' "$hdrs" '303 See Other.*[Ll]ocation: /repos|[Ll]ocation: /repos.*303'
+# And the nav for bob must not advertise /admin/users at all.
+out=$(curl -sS --max-time 10 -b tmp/bob-cookies.txt http://127.0.0.1:$WEB/repos)
+if echo "$out" | grep -q '<a href="/admin/users">Users</a>'; then
+    note_fail "non-owner sees /admin/users link in nav"
+else
+    note_pass "non-owner does NOT see admin links in nav"
+fi
 
 # Open an issue through the HTML form.
 hdrs=$(curl -sS --max-time 10 -D - -o /dev/null -b tmp/cookies.txt \
@@ -190,10 +209,26 @@ else
         else
             note_fail "kv table missing — child likely opened :memory: instead of $DB"
         fi
-    elif echo "$rows" | grep -q '^hello=42$'; then
-        note_pass "sqlite db on disk contains hello=42"
     else
-        note_fail "sqlite db contents unexpected: $rows"
+        # Register/login flow writes accounts:* + password_authn:* +
+        # session:* into the storage child. They're the natural
+        # persistence proof now that /admin/storage is gone.
+        if echo "$rows" | grep -q '^accounts:count=' && \
+           echo "$rows" | grep -q '^password_authn:count=' && \
+           echo "$rows" | grep -q '^session:next_sid='; then
+            note_pass "sqlite db on disk has account/session state"
+        else
+            note_fail "expected account/session keys missing from kv: $rows"
+        fi
+        # And the role bootstrap must have promoted the first user.
+        alice_uid=$(echo "$rows" | grep -oE '^accounts:user:[0-9]+=1$' | head -1 |
+                    sed -E 's/^accounts:user:([0-9]+)=1$/\1/')
+        if [ -n "$alice_uid" ] && \
+           echo "$rows" | grep -q "^accounts:role:${alice_uid}=1$"; then
+            note_pass "first user promoted to site-owner on disk"
+        else
+            note_fail "site-owner role not persisted for first user: $rows"
+        fi
     fi
 fi
 ls -la "$DB" 2>/dev/null | head -1

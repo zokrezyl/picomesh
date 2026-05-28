@@ -122,6 +122,10 @@ mesh:
     # picks up `yhttp.static_dir` (projected from this block) and
     # serves the HTML/JS that lives in scenarios/git-yaafc/frontend/
     # static/. Pages then talk to the other services via fetch().
+    # The gateway. Per CLAUDE.md: this is the ONE service that
+    # listens yhttp — it's the auth boundary. Browsers hit it for
+    # HTML pages; tests hit `/_rpc` for programmatic access. The
+    # gateway then talks to every backend over yrpc (binary).
     frontend:
       port: 8080
       frontend: yhttp

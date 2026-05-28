@@ -279,6 +279,98 @@ static void route_invoke(struct yloop_stream *s, const char *body, size_t blen,
     yjson_doc_free(doc);
 }
 
+/* Forward-decl for the URL ?key=val extractor; the real definition
+ * sits a few hundred lines below alongside other URL helpers. */
+static const char *query_get(const char *path, const char *key,
+                             char *out, size_t out_cap);
+
+/* Parse one HTTP header value out of the raw header block into `out`.
+ * Returns 1 on hit. Used by the /_rpc handler to read auth context
+ * out of `X-Yaafc-Uid` / `X-Yaafc-Sid`. */
+static int header_get(const char *raw, size_t raw_len, const char *name,
+                      char *out, size_t out_cap)
+{
+    size_t nlen = strlen(name);
+    const char *p = raw;
+    const char *end = raw + raw_len;
+    while (p < end) {
+        const char *eol = memchr(p, '\n', (size_t)(end - p));
+        if (!eol) break;
+        size_t llen = (size_t)(eol - p);
+        if (llen && p[llen - 1] == '\r') llen--;
+        if (llen > nlen + 1 && p[nlen] == ':' &&
+            strncasecmp(p, name, nlen) == 0) {
+            const char *v = p + nlen + 1;
+            while (v < p + llen && (*v == ' ' || *v == '\t')) ++v;
+            size_t vl = (size_t)(p + llen - v);
+            if (vl >= out_cap) vl = out_cap - 1;
+            memcpy(out, v, vl);
+            out[vl] = 0;
+            return 1;
+        }
+        p = eol + 1;
+    }
+    return 0;
+}
+
+/* POST /_rpc?op=<op>&id=<id> — binary RPC over HTTP. The body is the
+ * same packed-args payload the legacy yrpc protocol carried; we just
+ * wrap it in HTTP so auth and (later) tracing context can travel as
+ * headers. Mirrors yaapp's `POST /_rpc` boundary at the gateway. */
+static void route_rpc_binary(struct yloop_stream *s,
+                             const char *path,
+                             const char *headers_raw, size_t headers_raw_len,
+                             const char *body, size_t body_len,
+                             int keep_alive)
+{
+    char op_s[16] = {0}, id_s[16] = {0};
+    query_get(path, "op",  op_s, sizeof(op_s));
+    query_get(path, "id",  id_s, sizeof(id_s));
+    if (!*op_s) { send_json_error(s, 400, -32602, "_rpc: missing op", keep_alive); return; }
+    enum rpc_op op = (enum rpc_op)atoi(op_s);
+    uint32_t id  = (uint32_t)strtoul(id_s, NULL, 10);
+
+    /* Auth context flows in HTTP headers. Backend trusts the caller
+     * (frontend) — same trust model as yaapp's gateway. */
+    char uid_s[16] = {0}, sid_s[16] = {0};
+    header_get(headers_raw, headers_raw_len, "X-Yaafc-Uid", uid_s, sizeof(uid_s));
+    header_get(headers_raw, headers_raw_len, "X-Yaafc-Sid", sid_s, sizeof(sid_s));
+    uint32_t caller_uid = (uint32_t)strtoul(uid_s, NULL, 10);
+    uint32_t caller_sid = (uint32_t)strtoul(sid_s, NULL, 10);
+
+    /* Stash the caller's ctx where the skel can pick it up.
+     * Coroutines are cooperative and skel runs to completion (yields
+     * to libuv only on its own outbound rpc_calls); ctx is read AT
+     * the top of the skel before any yield can clobber it. */
+    extern void rpc_set_current_caller(uint32_t uid, uint32_t sid);
+    rpc_set_current_caller(caller_uid, caller_sid);
+
+    uint8_t resp[8192];
+    size_t resp_len = 0;
+    switch (op) {
+    case RPC_OP_CALL: {
+        rpc_skel_fn fn = rpc_skel_for((method_slot)id);
+        if (fn) resp_len = fn(body, body_len, resp, sizeof(resp));
+        break;
+    }
+    case RPC_OP_RESOLVE_SLOT:
+    case RPC_OP_GET_CLASS:
+    case RPC_OP_CREATE:
+    case RPC_OP_DESTROY:
+        /* Dispatch the admin ops via the existing inline handlers.
+         * They take (body, body_len, resp, resp_max) → bytes_written. */
+        {
+            extern size_t rpc_handle_admin_op(enum rpc_op op,
+                const void *body, size_t body_len, void *resp, size_t resp_max);
+            resp_len = rpc_handle_admin_op(op, body, body_len, resp, sizeof(resp));
+        }
+        break;
+    }
+    rpc_set_current_caller(0, 0);
+
+    send_response(s, 200, "application/octet-stream", (const char *)resp, resp_len, keep_alive);
+}
+
 struct describe_ctx {
     struct yjson_writer *w;
 };
@@ -462,6 +554,10 @@ static void serve_one(struct yloop *l, struct yloop_stream *s, void *ud)
                 route_create(s, body, (size_t)content_length, keep_alive);
             } else if (strcmp(phr_path, "/invoke") == 0) {
                 route_invoke(s, body, (size_t)content_length, keep_alive);
+            } else if (strncmp(phr_path, "/_rpc", 5) == 0 &&
+                       (phr_path[5] == 0 || phr_path[5] == '?')) {
+                route_rpc_binary(s, phr_path, buf, header_end,
+                                 body, (size_t)content_length, keep_alive);
             } else {
                 send_json_error(s, 404, -32601, "no such POST route", keep_alive);
             }

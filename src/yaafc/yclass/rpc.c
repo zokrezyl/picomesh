@@ -112,6 +112,25 @@ void *rpc_handle_resolve(uint64_t h)
     return NULL;
 }
 
+/* Per-request caller context — populated by the yhttp /_rpc handler
+ * from HTTP headers before invoking a skel. Cooperative-coroutine
+ * safe so long as skels don't yield between reading these and
+ * starting their work (they read at the top, then run). */
+static __thread uint32_t g_caller_uid = 0;
+static __thread uint32_t g_caller_sid = 0;
+
+void rpc_set_current_caller(uint32_t uid, uint32_t sid)
+{
+    g_caller_uid = uid;
+    g_caller_sid = sid;
+}
+
+void rpc_current_caller(uint32_t *out_uid, uint32_t *out_sid)
+{
+    if (out_uid) *out_uid = g_caller_uid;
+    if (out_sid) *out_sid = g_caller_sid;
+}
+
 /* Drop a handle from the table and free the underlying object. Used by
  * RPC_OP_DESTROY so server-side proxy objects don't accumulate when
  * the client releases its proxy. Returns 1 if a handle was removed. */
@@ -139,6 +158,25 @@ static size_t handle_destroy(const void *body, size_t body_len, void *resp, size
     int removed = rpc_handle_release(h);
     ((uint8_t *)resp)[0] = removed ? 1 : 0;
     return 1;
+}
+
+/* Forward declarations for the admin op handlers, plus a unified
+ * dispatcher used by the HTTP /_rpc endpoint. */
+static size_t handle_resolve_slot(const void *body, size_t body_len, void *resp, size_t resp_max);
+static size_t handle_get_class(const void *body, size_t body_len, void *resp, size_t resp_max);
+static size_t handle_create(const void *body, size_t body_len, void *resp, size_t resp_max);
+
+size_t rpc_handle_admin_op(enum rpc_op op,
+                           const void *body, size_t body_len,
+                           void *resp, size_t resp_max)
+{
+    switch (op) {
+    case RPC_OP_RESOLVE_SLOT: return handle_resolve_slot(body, body_len, resp, resp_max);
+    case RPC_OP_GET_CLASS:    return handle_get_class(body, body_len, resp, resp_max);
+    case RPC_OP_CREATE:       return handle_create(body, body_len, resp, resp_max);
+    case RPC_OP_DESTROY:      return handle_destroy(body, body_len, resp, resp_max);
+    default:                  return 0;
+    }
 }
 
 struct fd_io {
@@ -342,8 +380,17 @@ struct remote_id_entry {
     UT_hash_handle hh;
 };
 
+enum rpc_session_mode {
+    RPC_MODE_TCP = 0,   /* legacy yrpc binary on the bare fd */
+    RPC_MODE_HTTP = 1,  /* HTTP envelope, auth via headers */
+};
+
 struct rpc_session {
     int fd;
+    enum rpc_session_mode mode;
+    char *http_host;     /* Host header, RPC_MODE_HTTP only */
+    uint32_t auth_uid;   /* X-Yaafc-Uid for HTTP requests */
+    uint32_t auth_sid;   /* X-Yaafc-Sid for HTTP requests */
     struct remote_id_entry *remote_ids;
     struct translated_class *translated;
 };
@@ -351,8 +398,25 @@ struct rpc_session {
 struct rpc_session *rpc_session_create(int fd)
 {
     struct rpc_session *s = calloc(1, sizeof(*s));
-    if (s) s->fd = fd;
+    if (s) { s->fd = fd; s->mode = RPC_MODE_TCP; }
     return s;
+}
+
+struct rpc_session *rpc_session_create_http(int fd, const char *host)
+{
+    struct rpc_session *s = calloc(1, sizeof(*s));
+    if (!s) return NULL;
+    s->fd = fd;
+    s->mode = RPC_MODE_HTTP;
+    s->http_host = strdup(host ? host : "127.0.0.1");
+    return s;
+}
+
+void rpc_session_set_auth(struct rpc_session *s, uint32_t uid, uint32_t sid)
+{
+    if (!s) return;
+    s->auth_uid = uid;
+    s->auth_sid = sid;
 }
 
 void rpc_session_destroy(struct rpc_session *s)
@@ -369,6 +433,7 @@ void rpc_session_destroy(struct rpc_session *s)
         HASH_DEL(s->remote_ids, rcur);
         free(rcur);
     }
+    free(s->http_host);
     if (s->fd >= 0) close(s->fd);
     free(s);
 }
@@ -395,13 +460,121 @@ void rpc_session_set_remote_id(struct rpc_session *s, method_slot slot, uint32_t
     e->remote_id = remote_id;
 }
 
+/* Send an HTTP-wrapped RPC and parse the response body. The HTTP
+ * request shape is:
+ *
+ *   POST /_rpc?op=<op>&id=<id> HTTP/1.1\r\n
+ *   Host: <host>\r\n
+ *   Content-Length: <body_len>\r\n
+ *   Content-Type: application/octet-stream\r\n
+ *   X-Yaafc-Uid: <uid>\r\n
+ *   X-Yaafc-Sid: <sid>\r\n
+ *   Connection: keep-alive\r\n
+ *   \r\n
+ *   <body_bytes>
+ *
+ * Response is HTTP/1.1 with a Content-Length-framed binary body —
+ * exactly the same shape as the legacy yrpc payload would be. */
+static size_t rpc_call_http(struct rpc_session *s, enum rpc_op op, uint32_t id,
+                            const void *body, size_t body_len,
+                            void *resp, size_t resp_max)
+{
+    char hdr[512];
+    int hn = snprintf(hdr, sizeof(hdr),
+        "POST /_rpc?op=%u&id=%u HTTP/1.1\r\n"
+        "Host: %s\r\n"
+        "Content-Length: %zu\r\n"
+        "Content-Type: application/octet-stream\r\n"
+        "X-Yaafc-Uid: %u\r\n"
+        "X-Yaafc-Sid: %u\r\n"
+        "Connection: keep-alive\r\n"
+        "\r\n",
+        (unsigned)op, id,
+        s->http_host ? s->http_host : "127.0.0.1",
+        body_len, s->auth_uid, s->auth_sid);
+    if (hn <= 0 || (size_t)hn >= sizeof(hdr)) return 0;
+    if (write_full(s->fd, hdr, (size_t)hn) < 0) return 0;
+    if (body_len && write_full(s->fd, body, body_len) < 0) return 0;
+
+    /* Parse the response. We only need the status line + Content-Length;
+     * skip everything else. Read byte-by-byte until \r\n\r\n. */
+    char line[1024];
+    size_t li = 0;
+    int got_blank = 0;
+    int saw_cr = 0;
+    int blank_state = 0; /* 0=line, 1=after \r, 2=after \r\n, 3=after \r\n\r */
+    size_t content_length = 0;
+    int status = 0;
+    int parsed_status = 0;
+    for (;;) {
+        char c;
+        if (read_full(s->fd, &c, 1) < 0) return 0;
+        if (c != '\n') {
+            if (li + 1 < sizeof(line)) line[li++] = c;
+        }
+        if (saw_cr && c == '\n') {
+            line[li - 1] = 0; /* drop the \r */
+            if (li == 1) {
+                got_blank = 1;
+                break;
+            }
+            if (!parsed_status) {
+                /* "HTTP/1.1 200 OK" — pull the int */
+                const char *p = strchr(line, ' ');
+                if (p) status = atoi(p + 1);
+                parsed_status = 1;
+            } else {
+                /* Looking for Content-Length: */
+                if (strncasecmp(line, "Content-Length:", 15) == 0) {
+                    content_length = (size_t)strtoull(line + 15, NULL, 10);
+                }
+            }
+            li = 0;
+            saw_cr = 0;
+            blank_state = 2;
+            continue;
+        }
+        saw_cr = (c == '\r');
+        (void)blank_state;
+    }
+    if (!got_blank) return 0;
+    if (status < 200 || status >= 300) {
+        /* Drain the body so the connection stays usable. */
+        size_t remain = content_length;
+        uint8_t drain[256];
+        while (remain) {
+            size_t chunk = remain > sizeof(drain) ? sizeof(drain) : remain;
+            if (read_full(s->fd, drain, chunk) < 0) return 0;
+            remain -= chunk;
+        }
+        return 0;
+    }
+    if (content_length > resp_max) {
+        /* Drain & give up — caller's buffer is too small. */
+        size_t remain = content_length;
+        uint8_t drain[256];
+        while (remain) {
+            size_t chunk = remain > sizeof(drain) ? sizeof(drain) : remain;
+            if (read_full(s->fd, drain, chunk) < 0) return 0;
+            remain -= chunk;
+        }
+        return 0;
+    }
+    if (content_length && read_full(s->fd, resp, content_length) < 0) return 0;
+    return content_length;
+}
+
 size_t rpc_call(struct rpc_session *s, enum rpc_op op, uint32_t id, const void *body,
                 size_t body_len, void *resp, size_t resp_max)
 {
     if (!s) return 0;
-    uint32_t header = RPC_HDR_MAKE(op, id);
-    ydebug("op=%u id=%u body_len=%zu", op, id, body_len);
+    ydebug("mode=%d op=%u id=%u body_len=%zu", s->mode, op, id, body_len);
 
+    if (s->mode == RPC_MODE_HTTP) {
+        return rpc_call_http(s, op, id, body, body_len, resp, resp_max);
+    }
+
+    uint32_t header = RPC_HDR_MAKE(op, id);
     uint32_t bl = (uint32_t)body_len;
     if (write_full(s->fd, &header, 4) < 0) return 0;
     if (write_full(s->fd, &bl, 4) < 0) return 0;

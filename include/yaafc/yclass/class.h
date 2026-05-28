@@ -33,7 +33,13 @@ struct rpc_session;
  * is local-only — set non-NULL when this end of the call wants to
  * RPC. `uid` and `sid` ARE serialised across the wire by the codegen-
  * emitted pack/unpack helpers so that server skeletons see the
- * caller's identity (gh#2: propagate request/auth context). */
+ * caller's identity (gh#2: propagate request/auth context).
+ *
+ * TODO: replace the hard-coded uid/sid fields with a generic
+ * `struct ctx_headers` bag — see follow-up. The codegen should pack
+ * an arbitrary key/value header list, not know about specific
+ * fields. The current shape is the path of least resistance until
+ * the codegen + every call site migrate. */
 struct ctx {
     struct rpc_session *session; /* NULL → local; set → remote */
     uint32_t uid;                /* caller's authenticated user id */
