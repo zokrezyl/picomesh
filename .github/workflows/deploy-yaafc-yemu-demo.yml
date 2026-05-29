@@ -13,17 +13,14 @@ name: Deploy yaafc-yemu browser demo to GitHub Pages
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      # Skip Pages deploy when only docs change.
-      - 'CMakeLists.txt'
-      - 'Makefile'
-      - 'include/**'
-      - 'src/**'
-      - 'build-tools/**'
-      - 'scenarios/git-yaafc/**'
-      - '.github/workflows/deploy-yaafc-yemu-demo.yml'
+    tags:
+      # Release tags only: yaafc-<major>.<minor>.<patch>[-<pre>], e.g.
+      # yaafc-0.1.0, yaafc-1.2.3, yaafc-0.4.0-rc1. Pushes to main do
+      # not auto-deploy — the Pages site only updates when the
+      # maintainer cuts a tag. Manual dispatch from the Actions UI
+      # is still available for ad-hoc previews.
+      - 'yaafc-[0-9]+.[0-9]+.[0-9]+'
+      - 'yaafc-[0-9]+.[0-9]+.[0-9]+-*'
   workflow_dispatch: {}
 
 # Concurrency: skip in-flight runs when a newer push arrives. Pages
