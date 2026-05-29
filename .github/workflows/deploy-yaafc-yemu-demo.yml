@@ -7,9 +7,9 @@ name: Deploy yaafc-yemu browser demo to GitHub Pages
 # dependency — kernel + opensbi are built from this repo's 3rdparty
 # recipes, alpine minirootfs comes straight from dl-cdn.alpinelinux.org.
 #
-# Trigger: every push to main, plus manual dispatch. First run takes
-# ~15 minutes (linux kernel build); subsequent runs reuse the cached
-# 3rdparty tarballs.
+# Trigger: tag push `yaafc-<x.y.z>[-<pre>]`, plus manual dispatch.
+# First run takes ~15 minutes (linux kernel build); subsequent runs
+# reuse the cached 3rdparty tarballs (~3 minutes).
 
 on:
   push:
@@ -61,6 +61,22 @@ jobs:
             e2fsprogs util-linux curl tar python3 \
             bc bison flex libssl-dev libelf-dev cpio rsync
 
+      - name: diagnose toolchain
+        run: |
+          # ubuntu-latest ships /snap/bin/cmake early in PATH as a snapd
+          # stub that's non-executable for the runner user; the
+          # setup-emsdk action that runs next prepends emsdk paths too,
+          # so apt's /usr/bin/cmake ends up shadowed twice. Make us
+          # immune to PATH games by pinning CMAKE to the absolute path
+          # we just installed and exporting it for every subsequent
+          # step via GITHUB_ENV.
+          set -x
+          which -a cmake || true
+          ls -l /usr/bin/cmake /usr/local/bin/cmake /snap/bin/cmake 2>&1 || true
+          /usr/bin/cmake --version
+          echo "CMAKE=/usr/bin/cmake" >> "$GITHUB_ENV"
+          echo "MAKE_OVERRIDES=CMAKE=/usr/bin/cmake" >> "$GITHUB_ENV"
+
       - name: install emsdk
         uses: mymindstorm/setup-emsdk@v14
         with:
@@ -93,14 +109,17 @@ jobs:
           key: yaafc-yemu-3rdparty-build-v1-${{ hashFiles('build-tools/3rdparty/*/version', 'build-tools/3rdparty/*/_build.sh', 'build-tools/3rdparty/linux/linux-kernel-*.config') }}
 
       # ----- yaafc host + cross builds -----
+      # $MAKE_OVERRIDES carries CMAKE=/usr/bin/cmake set by the
+      # `diagnose toolchain` step above. Without it, `make` would call
+      # the snap-shimmed `cmake` and fall over with permission denied.
       - name: build yaafc host (build-desktop-release)
-        run: make build-desktop-release
+        run: make $MAKE_OVERRIDES build-desktop-release
 
       - name: build yaafc riscv64 (build-linux-riscv64-release)
-        run: make build-linux-riscv64-release
+        run: make $MAKE_OVERRIDES build-linux-riscv64-release
 
       - name: stage build-deploy/
-        run: make build-deploy
+        run: make $MAKE_OVERRIDES build-deploy
 
       # ----- yemu rootfs (this triggers the local linux+opensbi recipes
       #       AND fetches alpine minirootfs from alpinelinux.org) -----
@@ -108,7 +127,7 @@ jobs:
         run: |
           # sudo on GitHub-hosted runners is passwordless for the
           # runner user — losetup + mount work without prompting.
-          make build-yemu-release
+          make $MAKE_OVERRIDES build-yemu-release
 
       - name: shrink alpine-rootfs.img
         run: |
@@ -131,7 +150,7 @@ jobs:
 
       # ----- webasm bundle -----
       - name: build wasm bundle
-        run: make build-webasm-yemu-release
+        run: make $MAKE_OVERRIDES build-webasm-yemu-release
 
       - name: list deploy contents
         run: |
