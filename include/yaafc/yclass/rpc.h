@@ -133,4 +133,15 @@ void rpc_session_set_remote_id(struct rpc_session *s, method_slot local_slot, ui
 int rpc_session_translate_class(struct rpc_session *s, const char *class_name);
 uint32_t rpc_session_ensure_remote_id(struct rpc_session *s, method_slot local_slot);
 
+/* Generic, class-name-keyed object construction/teardown — the runtime
+ * twin of the codegen-emitted typed `<class>_create(struct ctx *)`.
+ * Lets a caller that links no typed `*_create` for the target class
+ * (the gateway, forwarding to a backend) build a local instance or a
+ * remote proxy purely from the qualified class name. A ctx with no
+ * session yields a local object; a ctx with a session does a remote
+ * RPC_OP_CREATE and wraps the handle in a proxy. Release with
+ * object_release_in_ctx, which sends RPC_OP_DESTROY for proxies. */
+struct object_ptr_result object_create_in_ctx(struct ctx *ctx, const char *class_qname);
+void object_release_in_ctx(struct ctx *ctx, struct object *obj);
+
 #endif /* YAAFC_YCLASS_RPC_H */

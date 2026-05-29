@@ -207,68 +207,76 @@ _short_body:
     return _resp_max >= 1 ? 1 : 0;
 }
 
-static int github_authn_store_set_credentials_jinvoke(struct object *_obj, const struct yjson_value *_args,
-                          struct yjson_writer *_result, char *_err, size_t _err_cap)
+static int github_authn_store_set_credentials_jinvoke(struct ctx *ctx, struct object *obj,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
 {
-    uint32_t _a0 = (uint32_t)yjson_as_int(yjson_array_at(_args, 0), 0);
-    uint32_t _a1 = (uint32_t)yjson_as_int(yjson_array_at(_args, 1), 0);
-    struct ctx _ctx = {0};
-    struct yaafc_int_result _r = github_authn_store_set_credentials(&_ctx, _obj, _a0, _a1);
-    if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "github_authn_store_set_credentials",
-                 _r.error.msg ? _r.error.msg : "<no message>");
-        yaafc_error_destroy(_r.error);
+    uint32_t arg0 = (uint32_t)yjson_as_int(yjson_array_at(args, 0), 0);
+    uint32_t arg1 = (uint32_t)yjson_as_int(yjson_array_at(args, 1), 0);
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct yaafc_int_result call_result = github_authn_store_set_credentials(call_ctx, obj, arg0, arg1);
+    if (YAAFC_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "github_authn_store_set_credentials",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        yaafc_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(_result, (int64_t)_r.value);
+    yjson_w_int(result, (int64_t)call_result.value);
     return 0;
 }
 
-static int github_authn_store_register_code_jinvoke(struct object *_obj, const struct yjson_value *_args,
-                          struct yjson_writer *_result, char *_err, size_t _err_cap)
+static int github_authn_store_register_code_jinvoke(struct ctx *ctx, struct object *obj,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
 {
-    uint32_t _a0 = (uint32_t)yjson_as_int(yjson_array_at(_args, 0), 0);
-    uint32_t _a1 = (uint32_t)yjson_as_int(yjson_array_at(_args, 1), 0);
-    struct ctx _ctx = {0};
-    struct yaafc_int_result _r = github_authn_store_register_code(&_ctx, _obj, _a0, _a1);
-    if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "github_authn_store_register_code",
-                 _r.error.msg ? _r.error.msg : "<no message>");
-        yaafc_error_destroy(_r.error);
+    uint32_t arg0 = (uint32_t)yjson_as_int(yjson_array_at(args, 0), 0);
+    uint32_t arg1 = (uint32_t)yjson_as_int(yjson_array_at(args, 1), 0);
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct yaafc_int_result call_result = github_authn_store_register_code(call_ctx, obj, arg0, arg1);
+    if (YAAFC_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "github_authn_store_register_code",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        yaafc_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(_result, (int64_t)_r.value);
+    yjson_w_int(result, (int64_t)call_result.value);
     return 0;
 }
 
-static int github_authn_store_resolve_jinvoke(struct object *_obj, const struct yjson_value *_args,
-                          struct yjson_writer *_result, char *_err, size_t _err_cap)
+static int github_authn_store_resolve_jinvoke(struct ctx *ctx, struct object *obj,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
 {
-    uint32_t _a0 = (uint32_t)yjson_as_int(yjson_array_at(_args, 0), 0);
-    struct ctx _ctx = {0};
-    struct yaafc_uint32_result _r = github_authn_store_resolve(&_ctx, _obj, _a0);
-    if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "github_authn_store_resolve",
-                 _r.error.msg ? _r.error.msg : "<no message>");
-        yaafc_error_destroy(_r.error);
+    uint32_t arg0 = (uint32_t)yjson_as_int(yjson_array_at(args, 0), 0);
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct yaafc_uint32_result call_result = github_authn_store_resolve(call_ctx, obj, arg0);
+    if (YAAFC_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "github_authn_store_resolve",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        yaafc_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(_result, (int64_t)_r.value);
+    yjson_w_int(result, (int64_t)call_result.value);
     return 0;
 }
 
-static int github_authn_store_count_codes_jinvoke(struct object *_obj, const struct yjson_value *_args,
-                          struct yjson_writer *_result, char *_err, size_t _err_cap)
+static int github_authn_store_count_codes_jinvoke(struct ctx *ctx, struct object *obj,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
 {
-    struct ctx _ctx = {0};
-    struct yaafc_size_result _r = github_authn_store_count_codes(&_ctx, _obj);
-    if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "github_authn_store_count_codes",
-                 _r.error.msg ? _r.error.msg : "<no message>");
-        yaafc_error_destroy(_r.error);
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct yaafc_size_result call_result = github_authn_store_count_codes(call_ctx, obj);
+    if (YAAFC_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "github_authn_store_count_codes",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        yaafc_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(_result, (int64_t)_r.value);
+    yjson_w_int(result, (int64_t)call_result.value);
     return 0;
 }
 

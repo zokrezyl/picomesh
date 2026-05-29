@@ -393,78 +393,52 @@ static char *cookie_get(const struct phr_header *hdrs, size_t n,
     return NULL;
 }
 
-/* POST /login — call gateway, relay Set-Cookie, redirect or render error.
+/* POST /login — forward the credentials to the gateway's composite
+ * login endpoint and relay its session cookie.
  *
- * Wire shape sent to gateway:
- *   POST /_rpc
- *   { "path": "session.session.start",
- *     "kwargs": {"method":"password","username":"...","password":"..."} }
- *
- * This is the yaapp path. The yaafc gateway will need to expose the
- * same path before it works there. */
+ * The gateway owns the auth flow end to end (accounts.exists →
+ * password_authn.authenticate → token_issuer.login → session.start),
+ * keeping every secret server-side; the sidecar is a pure relay. On
+ * success the gateway answers 303 + `Set-Cookie: yaafc-sid=…`, which we
+ * pass straight back to the browser, then bounce to /repos. On bad
+ * credentials the gateway re-renders its form (200), which we surface
+ * as an inline error here. The opaque sid cookie is the only token that
+ * ever reaches the browser — no JWT crosses this boundary. */
 static void route_login_post(struct yloop *loop, struct yloop_stream *s,
                              const struct serve_ud *sud,
                              const char *body, size_t body_len, int keep_alive)
 {
     char *username = form_get(body, body_len, "username");
     char *password = form_get(body, body_len, "password");
-    if (!username || !password) {
-        free(username); free(password);
+    int have_both = username && *username && password && *password;
+    free(username);
+    free(password);
+    if (!have_both) {
         route_login_get_with_error(s, "missing username or password", keep_alive);
         return;
     }
 
-    struct yjson_writer *w = yjson_writer_new();
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "path");  yjson_w_string(w, "session.session.start");
-    yjson_w_key(w, "kwargs");
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "method");   yjson_w_string(w, "password");
-    yjson_w_key(w, "username"); yjson_w_string(w, username);
-    yjson_w_key(w, "password"); yjson_w_string(w, password);
-    yjson_w_end_object(w);
-    yjson_w_end_object(w);
-
-    size_t rpc_len;
-    const char *rpc_body = yjson_w_data(w, &rpc_len);
-
+    /* Forward the browser's form payload verbatim to the gateway. */
     struct http_response resp;
-    int rc = http_post_json(loop, &sud->gw, "/_rpc",
-                            NULL, NULL, rpc_body, rpc_len, &resp);
-    yjson_writer_free(w);
-    free(username); free(password);
-
-    if (rc != 0 || resp.status >= 500) {
+    int rc = http_post(loop, &sud->gw, "/login",
+                       "application/x-www-form-urlencoded",
+                       NULL, NULL, body, body_len, &resp);
+    if (rc != 0) {
         http_response_free(&resp);
         route_login_get_with_error(s, "gateway unreachable", keep_alive);
         return;
     }
 
-    if (resp.status >= 400 || resp.status == 0) {
-        /* Parse {"error": …} for the message. */
-        char err_msg[256] = "sign-in failed";
-        if (resp.body) {
-            struct yjson_doc *doc = yjson_parse(resp.body, resp.body_len);
-            if (doc) {
-                const struct yjson_value *root = yjson_doc_root(doc);
-                const struct yjson_value *e = yjson_object_get(root, "error");
-                const char *em = yjson_as_string(e, NULL);
-                if (em) snprintf(err_msg, sizeof(err_msg), "%s", em);
-                yjson_doc_free(doc);
-            }
-        }
+    if (resp.status == 303 && resp.set_cookie[0]) {
+        char hdrs[1024];
+        snprintf(hdrs, sizeof(hdrs), "Set-Cookie: %s\r\n", resp.set_cookie);
         http_response_free(&resp);
-        route_login_get_with_error(s, err_msg, keep_alive);
+        send_redirect(s, "/repos", hdrs, keep_alive);
         return;
     }
 
-    /* Success — relay the gateway's Set-Cookie (if any), redirect. */
-    char hdrs[1024] = {0};
-    if (resp.set_cookie[0]) {
-        snprintf(hdrs, sizeof(hdrs), "Set-Cookie: %s\r\n", resp.set_cookie);
-    }
-    send_redirect(s, "/", hdrs, keep_alive);
     http_response_free(&resp);
+    route_login_get_with_error(s, "invalid username or password", keep_alive);
 }
 
 static int starts_with(const char *p, size_t pl, const char *pref)
@@ -477,6 +451,62 @@ static int path_equals(const char *p, size_t pl, const char *want)
 {
     size_t n = strlen(want);
     return pl == n && memcmp(p, want, n) == 0;
+}
+
+/* GET /repos — a real data page rendered from a gateway call. Proves
+ * the browser → sidecar → gateway `/_rpc` path: the sidecar holds no
+ * plugins and no backend ports, it just relays the opaque `yaafc-sid`
+ * to the gateway and renders whatever comes back. `sid` is the cookie
+ * value (NULL/empty → not signed in → bounce to /login). */
+static void route_repos_get(struct yloop *loop, struct yloop_stream *s,
+                            const struct serve_ud *sud, const char *sid,
+                            int keep_alive)
+{
+    if (!sid || !*sid) {
+        send_redirect(s, "/login", NULL, keep_alive);
+        return;
+    }
+
+    struct yjson_writer *w = yjson_writer_new();
+    yjson_w_begin_object(w);
+    yjson_w_key(w, "path"); yjson_w_string(w, "git_repo.store.count_total");
+    yjson_w_key(w, "args"); yjson_w_begin_array(w); yjson_w_end_array(w);
+    yjson_w_end_object(w);
+    size_t rpc_len;
+    const char *rpc_body = yjson_w_data(w, &rpc_len);
+
+    struct http_response resp;
+    int rc = http_post_json(loop, &sud->gw, "/_rpc", NULL, sid, rpc_body, rpc_len, &resp);
+    yjson_writer_free(w);
+    if (rc != 0) {
+        http_response_free(&resp);
+        send_text(s, 502, "gateway unreachable\n", keep_alive);
+        return;
+    }
+
+    long count = -1;
+    if (resp.body) {
+        struct yjson_doc *doc = yjson_parse(resp.body, resp.body_len);
+        if (doc) {
+            const struct yjson_value *root = yjson_doc_root(doc);
+            const struct yjson_value *r = yjson_object_get(root, "result");
+            if (r) count = (long)yjson_as_int(r, -1);
+            yjson_doc_free(doc);
+        }
+    }
+    http_response_free(&resp);
+
+    char page[1024];
+    int n = snprintf(page, sizeof(page),
+        "<!doctype html><html><head><meta charset=\"utf-8\">"
+        "<title>Repositories \xc2\xb7 yaafc-frontend</title>"
+        "<link rel=\"stylesheet\" href=\"/static/style.css\"></head><body>"
+        "<main class=\"container\"><h1>Repositories</h1>"
+        "<p>%ld repositories (served via the gateway <code>/_rpc</code>).</p>"
+        "<p><a href=\"/login\">switch account</a></p>"
+        "</main></body></html>", count);
+    if (n < 0) { send_text(s, 500, "render failed\n", keep_alive); return; }
+    send_response(s, 200, "text/html; charset=utf-8", page, (size_t)n, NULL, keep_alive);
 }
 
 /* ---- per-peer serve coro -------------------------------------------- */
@@ -521,9 +551,13 @@ static void serve_one(struct yloop *l, struct yloop_stream *s, void *ud)
      * /login GET, static, /, everything else 404. */
     if (method_len == 3 && memcmp(method, "GET", 3) == 0) {
         if (path_equals(path, path_len, "/")) {
-            send_redirect(s, "/login", NULL, keep_alive);
+            send_redirect(s, "/repos", NULL, keep_alive);
         } else if (path_equals(path, path_len, "/login")) {
             route_login_get(s, keep_alive);
+        } else if (path_equals(path, path_len, "/repos")) {
+            char *sid = cookie_get(headers, num_headers, "yaafc-sid");
+            route_repos_get(l, s, sud, sid, keep_alive);
+            free(sid);
         } else if (starts_with(path, path_len, "/static/")) {
             char tmp[1024];
             size_t copy = path_len < sizeof(tmp) - 1 ? path_len : sizeof(tmp) - 1;

@@ -469,136 +469,152 @@ _short_body:
     return _resp_max >= 1 ? 1 : 0;
 }
 
-static int storage_kv_set_jinvoke(struct object *_obj, const struct yjson_value *_args,
-                          struct yjson_writer *_result, char *_err, size_t _err_cap)
+static int storage_kv_set_jinvoke(struct ctx *ctx, struct object *obj,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
 {
-    uint32_t _a0 = (uint32_t)yjson_as_int(yjson_array_at(_args, 0), 0);
-    int32_t _a1 = (int32_t)yjson_as_int(yjson_array_at(_args, 1), 0);
-    struct ctx _ctx = {0};
-    struct yaafc_int_result _r = storage_kv_set(&_ctx, _obj, _a0, _a1);
-    if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "storage_kv_set",
-                 _r.error.msg ? _r.error.msg : "<no message>");
-        yaafc_error_destroy(_r.error);
+    uint32_t arg0 = (uint32_t)yjson_as_int(yjson_array_at(args, 0), 0);
+    int32_t arg1 = (int32_t)yjson_as_int(yjson_array_at(args, 1), 0);
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct yaafc_int_result call_result = storage_kv_set(call_ctx, obj, arg0, arg1);
+    if (YAAFC_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "storage_kv_set",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        yaafc_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(_result, (int64_t)_r.value);
+    yjson_w_int(result, (int64_t)call_result.value);
     return 0;
 }
 
-static int storage_kv_get_jinvoke(struct object *_obj, const struct yjson_value *_args,
-                          struct yjson_writer *_result, char *_err, size_t _err_cap)
+static int storage_kv_get_jinvoke(struct ctx *ctx, struct object *obj,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
 {
-    uint32_t _a0 = (uint32_t)yjson_as_int(yjson_array_at(_args, 0), 0);
-    struct ctx _ctx = {0};
-    struct yaafc_int_result _r = storage_kv_get(&_ctx, _obj, _a0);
-    if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "storage_kv_get",
-                 _r.error.msg ? _r.error.msg : "<no message>");
-        yaafc_error_destroy(_r.error);
+    uint32_t arg0 = (uint32_t)yjson_as_int(yjson_array_at(args, 0), 0);
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct yaafc_int_result call_result = storage_kv_get(call_ctx, obj, arg0);
+    if (YAAFC_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "storage_kv_get",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        yaafc_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(_result, (int64_t)_r.value);
+    yjson_w_int(result, (int64_t)call_result.value);
     return 0;
 }
 
-static int storage_kv_count_jinvoke(struct object *_obj, const struct yjson_value *_args,
-                          struct yjson_writer *_result, char *_err, size_t _err_cap)
+static int storage_kv_count_jinvoke(struct ctx *ctx, struct object *obj,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
 {
-    struct ctx _ctx = {0};
-    struct yaafc_size_result _r = storage_kv_count(&_ctx, _obj);
-    if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "storage_kv_count",
-                 _r.error.msg ? _r.error.msg : "<no message>");
-        yaafc_error_destroy(_r.error);
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct yaafc_size_result call_result = storage_kv_count(call_ctx, obj);
+    if (YAAFC_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "storage_kv_count",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        yaafc_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(_result, (int64_t)_r.value);
+    yjson_w_int(result, (int64_t)call_result.value);
     return 0;
 }
 
-static int storage_set_jinvoke(struct object *_obj, const struct yjson_value *_args,
-                          struct yjson_writer *_result, char *_err, size_t _err_cap)
+static int storage_set_jinvoke(struct ctx *ctx, struct object *obj,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
 {
-    const char *_a0 = yjson_as_string(yjson_array_at(_args, 0), "");
-    const char *_a1 = yjson_as_string(yjson_array_at(_args, 1), "");
-    int64_t _a2 = (int64_t)yjson_as_int(yjson_array_at(_args, 2), 0);
-    struct ctx _ctx = {0};
-    struct yaafc_int_result _r = storage_set(&_ctx, _obj, _a0, _a1, _a2);
-    if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "storage_set",
-                 _r.error.msg ? _r.error.msg : "<no message>");
-        yaafc_error_destroy(_r.error);
+    const char *arg0 = yjson_as_string(yjson_array_at(args, 0), "");
+    const char *arg1 = yjson_as_string(yjson_array_at(args, 1), "");
+    int64_t arg2 = (int64_t)yjson_as_int(yjson_array_at(args, 2), 0);
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct yaafc_int_result call_result = storage_set(call_ctx, obj, arg0, arg1, arg2);
+    if (YAAFC_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "storage_set",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        yaafc_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(_result, (int64_t)_r.value);
+    yjson_w_int(result, (int64_t)call_result.value);
     return 0;
 }
 
-static int storage_get_jinvoke(struct object *_obj, const struct yjson_value *_args,
-                          struct yjson_writer *_result, char *_err, size_t _err_cap)
+static int storage_get_jinvoke(struct ctx *ctx, struct object *obj,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
 {
-    const char *_a0 = yjson_as_string(yjson_array_at(_args, 0), "");
-    const char *_a1 = yjson_as_string(yjson_array_at(_args, 1), "");
-    struct ctx _ctx = {0};
-    struct yaafc_int64_result _r = storage_get(&_ctx, _obj, _a0, _a1);
-    if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "storage_get",
-                 _r.error.msg ? _r.error.msg : "<no message>");
-        yaafc_error_destroy(_r.error);
+    const char *arg0 = yjson_as_string(yjson_array_at(args, 0), "");
+    const char *arg1 = yjson_as_string(yjson_array_at(args, 1), "");
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct yaafc_int64_result call_result = storage_get(call_ctx, obj, arg0, arg1);
+    if (YAAFC_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "storage_get",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        yaafc_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(_result, (int64_t)_r.value);
+    yjson_w_int(result, (int64_t)call_result.value);
     return 0;
 }
 
-static int storage_exists_jinvoke(struct object *_obj, const struct yjson_value *_args,
-                          struct yjson_writer *_result, char *_err, size_t _err_cap)
+static int storage_exists_jinvoke(struct ctx *ctx, struct object *obj,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
 {
-    const char *_a0 = yjson_as_string(yjson_array_at(_args, 0), "");
-    const char *_a1 = yjson_as_string(yjson_array_at(_args, 1), "");
-    struct ctx _ctx = {0};
-    struct yaafc_int_result _r = storage_exists(&_ctx, _obj, _a0, _a1);
-    if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "storage_exists",
-                 _r.error.msg ? _r.error.msg : "<no message>");
-        yaafc_error_destroy(_r.error);
+    const char *arg0 = yjson_as_string(yjson_array_at(args, 0), "");
+    const char *arg1 = yjson_as_string(yjson_array_at(args, 1), "");
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct yaafc_int_result call_result = storage_exists(call_ctx, obj, arg0, arg1);
+    if (YAAFC_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "storage_exists",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        yaafc_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(_result, (int64_t)_r.value);
+    yjson_w_int(result, (int64_t)call_result.value);
     return 0;
 }
 
-static int storage_del_jinvoke(struct object *_obj, const struct yjson_value *_args,
-                          struct yjson_writer *_result, char *_err, size_t _err_cap)
+static int storage_del_jinvoke(struct ctx *ctx, struct object *obj,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
 {
-    const char *_a0 = yjson_as_string(yjson_array_at(_args, 0), "");
-    const char *_a1 = yjson_as_string(yjson_array_at(_args, 1), "");
-    struct ctx _ctx = {0};
-    struct yaafc_int_result _r = storage_del(&_ctx, _obj, _a0, _a1);
-    if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "storage_del",
-                 _r.error.msg ? _r.error.msg : "<no message>");
-        yaafc_error_destroy(_r.error);
+    const char *arg0 = yjson_as_string(yjson_array_at(args, 0), "");
+    const char *arg1 = yjson_as_string(yjson_array_at(args, 1), "");
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct yaafc_int_result call_result = storage_del(call_ctx, obj, arg0, arg1);
+    if (YAAFC_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "storage_del",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        yaafc_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(_result, (int64_t)_r.value);
+    yjson_w_int(result, (int64_t)call_result.value);
     return 0;
 }
 
-static int storage_count_jinvoke(struct object *_obj, const struct yjson_value *_args,
-                          struct yjson_writer *_result, char *_err, size_t _err_cap)
+static int storage_count_jinvoke(struct ctx *ctx, struct object *obj,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
 {
-    const char *_a0 = yjson_as_string(yjson_array_at(_args, 0), "");
-    struct ctx _ctx = {0};
-    struct yaafc_size_result _r = storage_count(&_ctx, _obj, _a0);
-    if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "storage_count",
-                 _r.error.msg ? _r.error.msg : "<no message>");
-        yaafc_error_destroy(_r.error);
+    const char *arg0 = yjson_as_string(yjson_array_at(args, 0), "");
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct yaafc_size_result call_result = storage_count(call_ctx, obj, arg0);
+    if (YAAFC_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "storage_count",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        yaafc_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(_result, (int64_t)_r.value);
+    yjson_w_int(result, (int64_t)call_result.value);
     return 0;
 }
 

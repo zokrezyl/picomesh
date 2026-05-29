@@ -197,14 +197,15 @@ static int read_full_response(struct yloop_stream *s,
     return 0;
 }
 
-int http_post_json(struct yloop *loop, const struct gateway_url *gw,
-                   const char *path,
-                   const char *bearer,    /* opaque token; may be NULL */
-                   const char *sid,       /* yaafc-sid cookie value; may be NULL */
-                   const char *body, size_t body_len,
-                   struct http_response *resp)
+int http_post(struct yloop *loop, const struct gateway_url *gw,
+              const char *path, const char *content_type,
+              const char *bearer,    /* opaque token; may be NULL */
+              const char *sid,       /* yaafc-sid cookie value; may be NULL */
+              const char *body, size_t body_len,
+              struct http_response *resp)
 {
     if (!loop || !gw || !path || !body || !resp) return -1;
+    if (!content_type) content_type = "application/octet-stream";
     memset(resp, 0, sizeof(*resp));
     /* Reject CRLF / control chars BEFORE writing them into the request
      * stream. `path` and `gw->host` are usually compile-time / config-
@@ -214,8 +215,9 @@ int http_post_json(struct yloop *loop, const struct gateway_url *gw,
      * a fake body) into the gateway-bound request. Validate at the
      * sink so no future caller can regress. */
     if (!header_value_safe(path) || !header_value_safe(gw->host) ||
+        !header_value_safe(content_type) ||
         !header_value_safe(bearer) || !header_value_safe(sid)) {
-        ywarn("http_post_json: unsafe header value rejected");
+        ywarn("http_post: unsafe header value rejected");
         return -1;
     }
 
@@ -232,10 +234,10 @@ int http_post_json(struct yloop *loop, const struct gateway_url *gw,
     int n = snprintf(hdr, sizeof(hdr),
         "POST %s HTTP/1.1\r\n"
         "Host: %s:%d\r\n"
-        "Content-Type: application/json\r\n"
+        "Content-Type: %s\r\n"
         "Content-Length: %zu\r\n"
         "Connection: close\r\n",
-        path, gw->host, gw->port, body_len);
+        path, gw->host, gw->port, content_type, body_len);
     if (n <= 0 || (size_t)n >= sizeof(hdr)) { yloop_close(s); return -1; }
     if (bearer && *bearer) {
         int m = snprintf(hdr + n, sizeof(hdr) - n,
@@ -267,6 +269,16 @@ int http_post_json(struct yloop *loop, const struct gateway_url *gw,
                                 resp->set_cookie, sizeof(resp->set_cookie));
     yloop_close(s);
     return rc;
+}
+
+int http_post_json(struct yloop *loop, const struct gateway_url *gw,
+                   const char *path,
+                   const char *bearer, const char *sid,
+                   const char *body, size_t body_len,
+                   struct http_response *resp)
+{
+    return http_post(loop, gw, path, "application/json",
+                     bearer, sid, body, body_len, resp);
 }
 
 void http_response_free(struct http_response *r)

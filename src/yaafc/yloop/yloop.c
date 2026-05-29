@@ -43,7 +43,15 @@ struct yloop_listener {
 struct yloop_stream {
     struct yloop *owner;
     uv_tcp_t tcp;
-    struct yaafc_coro *coro; /* owns the serve coroutine */
+    /* The coroutine this stream's I/O completions resume. For an
+     * accepted (serve) stream this is the coro spawned to run the
+     * handler, and the stream OWNS it (owns_coro = 1) — it destroys it
+     * on close. An outbound stream opened via yloop_connect_tcp from
+     * inside a serve coroutine merely BORROWS that coro to resume on
+     * connect/read/write (owns_coro = 0): destroying it here would
+     * double-free the coro the serve stream already owns. */
+    struct yaafc_coro *coro;
+    int owns_coro;
 
     /* receive ring */
     uint8_t *rbuf;
@@ -186,7 +194,10 @@ static void on_handle_close(uv_handle_t *h)
      * the surrounding struct. Free the stream wrapper here. */
     struct yloop_stream *s = h->data;
     if (!s) return;
-    if (s->coro && yaafc_coro_is_finished(s->coro)) {
+    /* Only the stream that OWNS the coroutine destroys it. A borrowed
+     * coro (outbound yloop_connect_tcp stream) must not — the owning
+     * serve stream will, and a second destroy here is a double free. */
+    if (s->owns_coro && s->coro && yaafc_coro_is_finished(s->coro)) {
         yaafc_coro_destroy(s->coro);
     }
     free(s->rbuf);
@@ -269,6 +280,7 @@ static void on_connection(uv_stream_t *server, int status)
         return;
     }
     s->coro = sr.value;
+    s->owns_coro = 1; /* the accepted stream owns the serve coro */
     yaafc_coro_resume(s->coro);
 }
 

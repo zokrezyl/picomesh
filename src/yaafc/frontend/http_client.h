@@ -22,12 +22,20 @@ struct http_response {
 /* Parse "http://host:port" → struct. Returns 0 on success, -1 on error. */
 int gateway_url_parse(const char *url, struct gateway_url *out);
 
-/* POST `body` (length `body_len`) to `path` on `gw`, with optional
- * Authorization: Bearer header and yaafc-sid cookie-as-header. Returns
- * 0 on success (response fields populated), -1 on transport failure.
+/* POST `body` (length `body_len`) to `path` on `gw` with the given
+ * Content-Type, plus optional Authorization: Bearer header and
+ * yaafc-sid cookie-as-header. Returns 0 on success (response fields
+ * populated), -1 on transport failure.
  *
  * Must be called from inside a yloop coroutine — internally yields
  * the calling coro across connect / read / write. */
+int http_post(struct yloop *loop, const struct gateway_url *gw,
+              const char *path, const char *content_type,
+              const char *bearer, const char *sid,
+              const char *body, size_t body_len,
+              struct http_response *resp);
+
+/* Convenience wrapper: POST with Content-Type: application/json. */
 int http_post_json(struct yloop *loop, const struct gateway_url *gw,
                    const char *path,
                    const char *bearer, const char *sid,

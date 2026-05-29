@@ -251,83 +251,93 @@ _short_body:
     return _resp_max >= 1 ? 1 : 0;
 }
 
-static int token_issuer_store_login_jinvoke(struct object *_obj, const struct yjson_value *_args,
-                          struct yjson_writer *_result, char *_err, size_t _err_cap)
+static int token_issuer_store_login_jinvoke(struct ctx *ctx, struct object *obj,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
 {
-    uint32_t _a0 = (uint32_t)yjson_as_int(yjson_array_at(_args, 0), 0);
-    uint32_t _a1 = (uint32_t)yjson_as_int(yjson_array_at(_args, 1), 0);
-    struct ctx _ctx = {0};
-    struct yaafc_uint32_result _r = token_issuer_store_login(&_ctx, _obj, _a0, _a1);
-    if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "token_issuer_store_login",
-                 _r.error.msg ? _r.error.msg : "<no message>");
-        yaafc_error_destroy(_r.error);
+    uint32_t arg0 = (uint32_t)yjson_as_int(yjson_array_at(args, 0), 0);
+    uint32_t arg1 = (uint32_t)yjson_as_int(yjson_array_at(args, 1), 0);
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct yaafc_uint32_result call_result = token_issuer_store_login(call_ctx, obj, arg0, arg1);
+    if (YAAFC_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "token_issuer_store_login",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        yaafc_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(_result, (int64_t)_r.value);
+    yjson_w_int(result, (int64_t)call_result.value);
     return 0;
 }
 
-static int token_issuer_store_validate_jinvoke(struct object *_obj, const struct yjson_value *_args,
-                          struct yjson_writer *_result, char *_err, size_t _err_cap)
+static int token_issuer_store_validate_jinvoke(struct ctx *ctx, struct object *obj,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
 {
-    uint32_t _a0 = (uint32_t)yjson_as_int(yjson_array_at(_args, 0), 0);
-    struct ctx _ctx = {0};
-    struct yaafc_uint32_result _r = token_issuer_store_validate(&_ctx, _obj, _a0);
-    if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "token_issuer_store_validate",
-                 _r.error.msg ? _r.error.msg : "<no message>");
-        yaafc_error_destroy(_r.error);
+    uint32_t arg0 = (uint32_t)yjson_as_int(yjson_array_at(args, 0), 0);
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct yaafc_uint32_result call_result = token_issuer_store_validate(call_ctx, obj, arg0);
+    if (YAAFC_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "token_issuer_store_validate",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        yaafc_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(_result, (int64_t)_r.value);
+    yjson_w_int(result, (int64_t)call_result.value);
     return 0;
 }
 
-static int token_issuer_store_refresh_jinvoke(struct object *_obj, const struct yjson_value *_args,
-                          struct yjson_writer *_result, char *_err, size_t _err_cap)
+static int token_issuer_store_refresh_jinvoke(struct ctx *ctx, struct object *obj,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
 {
-    uint32_t _a0 = (uint32_t)yjson_as_int(yjson_array_at(_args, 0), 0);
-    struct ctx _ctx = {0};
-    struct yaafc_uint32_result _r = token_issuer_store_refresh(&_ctx, _obj, _a0);
-    if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "token_issuer_store_refresh",
-                 _r.error.msg ? _r.error.msg : "<no message>");
-        yaafc_error_destroy(_r.error);
+    uint32_t arg0 = (uint32_t)yjson_as_int(yjson_array_at(args, 0), 0);
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct yaafc_uint32_result call_result = token_issuer_store_refresh(call_ctx, obj, arg0);
+    if (YAAFC_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "token_issuer_store_refresh",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        yaafc_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(_result, (int64_t)_r.value);
+    yjson_w_int(result, (int64_t)call_result.value);
     return 0;
 }
 
-static int token_issuer_store_revoke_jinvoke(struct object *_obj, const struct yjson_value *_args,
-                          struct yjson_writer *_result, char *_err, size_t _err_cap)
+static int token_issuer_store_revoke_jinvoke(struct ctx *ctx, struct object *obj,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
 {
-    uint32_t _a0 = (uint32_t)yjson_as_int(yjson_array_at(_args, 0), 0);
-    struct ctx _ctx = {0};
-    struct yaafc_int_result _r = token_issuer_store_revoke(&_ctx, _obj, _a0);
-    if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "token_issuer_store_revoke",
-                 _r.error.msg ? _r.error.msg : "<no message>");
-        yaafc_error_destroy(_r.error);
+    uint32_t arg0 = (uint32_t)yjson_as_int(yjson_array_at(args, 0), 0);
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct yaafc_int_result call_result = token_issuer_store_revoke(call_ctx, obj, arg0);
+    if (YAAFC_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "token_issuer_store_revoke",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        yaafc_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(_result, (int64_t)_r.value);
+    yjson_w_int(result, (int64_t)call_result.value);
     return 0;
 }
 
-static int token_issuer_store_count_active_jinvoke(struct object *_obj, const struct yjson_value *_args,
-                          struct yjson_writer *_result, char *_err, size_t _err_cap)
+static int token_issuer_store_count_active_jinvoke(struct ctx *ctx, struct object *obj,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
 {
-    struct ctx _ctx = {0};
-    struct yaafc_size_result _r = token_issuer_store_count_active(&_ctx, _obj);
-    if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "token_issuer_store_count_active",
-                 _r.error.msg ? _r.error.msg : "<no message>");
-        yaafc_error_destroy(_r.error);
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct yaafc_size_result call_result = token_issuer_store_count_active(call_ctx, obj);
+    if (YAAFC_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "token_issuer_store_count_active",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        yaafc_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(_result, (int64_t)_r.value);
+    yjson_w_int(result, (int64_t)call_result.value);
     return 0;
 }
 

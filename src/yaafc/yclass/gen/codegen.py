@@ -1072,77 +1072,80 @@ static void {module}_install_hooks(void)
 
 
 def emit_jinvoke(m: dict) -> str:
-    """One per method. Reads positional JSON args, calls the local stub
-    (which dispatches via class_dispatch_lookup → the impl), writes
-    the result back through the yjson_writer. Scalar args only — the
-    same restriction as the binary skel."""
+    """One per method. Reads positional JSON args and calls the public
+    stub, writing the return through the yjson_writer. The caller's
+    `ctx` is forwarded straight into the stub: a zeroed/NULL ctx
+    dispatches locally (yttp / cli own the object in-process), while a
+    ctx carrying a live `session` forwards to the owning backend (the
+    gateway, which has no local plugin objects). Scalar / string args
+    only — the same restriction as the binary skel."""
     slot = qualified_slot(m)
     rid = result_type_id(m["return_type"])
     vt = ret_value_type(rid)
-    # The first two args (ctx, obj) are supplied locally — only the
-    # tail goes into the JSON args array.
+    # The first two args (ctx, obj) are supplied by the dispatcher —
+    # only the tail goes into the JSON args array.
     args = m["args"][2:]
 
     arg_reads = []
-    call_parts = ["&_ctx", "_obj"]
+    call_parts = ["call_ctx", "obj"]
     for i, a in enumerate(args):
-        wname = wire_name(a)
         t = a["type"].strip()
-        var = f"_a{i}"
+        var = f"arg{i}"
         if is_struct_ptr(a["type"]):
             arg_reads.append(
-                f"    uint64_t {var} = (uint64_t)yjson_as_int(yjson_array_at(_args, {i}), 0);\n"
+                f"    uint64_t {var} = (uint64_t)yjson_as_int(yjson_array_at(args, {i}), 0);\n"
                 f"    (void){var}; /* struct-ptr args from JSON not supported yet */\n"
             )
             call_parts.append("NULL")
         elif "int64_t" in t or "uint64_t" in t:
             arg_reads.append(
-                f"    {t} {var} = ({t})yjson_as_int(yjson_array_at(_args, {i}), 0);\n"
+                f"    {t} {var} = ({t})yjson_as_int(yjson_array_at(args, {i}), 0);\n"
             )
             call_parts.append(var)
         elif "int" in t or "uint" in t:
             arg_reads.append(
-                f"    {t} {var} = ({t})yjson_as_int(yjson_array_at(_args, {i}), 0);\n"
+                f"    {t} {var} = ({t})yjson_as_int(yjson_array_at(args, {i}), 0);\n"
             )
             call_parts.append(var)
         elif "double" in t or "float" in t:
             arg_reads.append(
-                f"    {t} {var} = ({t})yjson_as_float(yjson_array_at(_args, {i}), 0.0);\n"
+                f"    {t} {var} = ({t})yjson_as_float(yjson_array_at(args, {i}), 0.0);\n"
             )
             call_parts.append(var)
         else:
             arg_reads.append(
-                f"    const char *{var} = yjson_as_string(yjson_array_at(_args, {i}), \"\");\n"
+                f"    const char *{var} = yjson_as_string(yjson_array_at(args, {i}), \"\");\n"
             )
             call_parts.append(var)
-        _ = wname  # name unused outside the binary wire path
 
     call = ", ".join(call_parts)
     rt = f"struct {rid}_result"
 
     if vt is None:
-        write_result = "    yjson_w_null(_result);\n"
+        write_result = "    yjson_w_null(result);\n"
     elif vt in ("int", "int64_t", "uint32_t", "size_t"):
-        write_result = "    yjson_w_int(_result, (int64_t)_r.value);\n"
+        write_result = "    yjson_w_int(result, (int64_t)call_result.value);\n"
     elif vt in ("double", "float"):
-        write_result = "    yjson_w_float(_result, (double)_r.value);\n"
+        write_result = "    yjson_w_float(result, (double)call_result.value);\n"
     elif vt.startswith("const char") or vt == "char *":
-        write_result = "    yjson_w_string(_result, _r.value ? _r.value : \"\");\n"
+        write_result = "    yjson_w_string(result, call_result.value ? call_result.value : \"\");\n"
     else:
-        write_result = ("    yjson_w_null(_result);  "
+        write_result = ("    yjson_w_null(result);  "
                         "/* return type not yet supported in JSON */\n")
 
     return f"""\
-static int {slot}_jinvoke(struct object *_obj, const struct yjson_value *_args,
-                          struct yjson_writer *_result, char *_err, size_t _err_cap)
+static int {slot}_jinvoke(struct ctx *ctx, struct object *obj,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
 {{
 {''.join(arg_reads)}\
-    struct ctx _ctx = {{0}};
-    {rt} _r = {slot}({call});
-    if (YAAFC_IS_ERR(_r)) {{
-        snprintf(_err, _err_cap, "%s: %s", "{slot}",
-                 _r.error.msg ? _r.error.msg : "<no message>");
-        yaafc_error_destroy(_r.error);
+    struct ctx local_ctx = {{0}};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    {rt} call_result = {slot}({call});
+    if (YAAFC_IS_ERR(call_result)) {{
+        snprintf(err, err_cap, "%s: %s", "{slot}",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        yaafc_error_destroy(call_result.error);
         return -1;
     }}
 {write_result}\

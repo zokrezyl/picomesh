@@ -43,6 +43,9 @@
 #include <yaafc/yloop/yloop.h>
 #include <yaafc/yclass/class.h>
 #include <yaafc/yclass/rpc.h>
+#include <yaafc/yclass/jinvoke.h>
+#include <yaafc/yjson/yjson.h>
+#include <yaafc/yconfig/yconfig.h>
 #include <yaafc/ycore/result.h>
 #include <yaafc/ycore/ytrace.h>
 
@@ -1496,6 +1499,376 @@ static const char *query_get(const char *path, const char *key,
     return NULL;
 }
 
+/* ---------- yaapp-compatible gateway API (/_rpc, /_describe) ---------- */
+
+static void send_json(struct yloop_stream *s, int status,
+                      const char *body, size_t body_len, int keep_alive)
+{
+    const char *reason = "OK";
+    if (status == 400) reason = "Bad Request";
+    else if (status == 404) reason = "Not Found";
+    else if (status == 410) reason = "Gone";
+    else if (status == 500) reason = "Internal Server Error";
+    else if (status == 502) reason = "Bad Gateway";
+
+    char hdr[512];
+    int n = snprintf(hdr, sizeof(hdr),
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: %zu\r\n"
+        "Connection: %s\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
+        "\r\n",
+        status, reason, body_len,
+        keep_alive ? "keep-alive" : "close");
+    if (n <= 0) return;
+    yloop_write(s, hdr, (size_t)n);
+    if (body_len) yloop_write(s, body, body_len);
+}
+
+static void send_json_error(struct yloop_stream *s, int status,
+                            const char *message, int keep_alive)
+{
+    struct yjson_writer *w = yjson_writer_new();
+    yjson_w_begin_object(w);
+    yjson_w_key(w, "error"); yjson_w_string(w, message);
+    yjson_w_end_object(w);
+    size_t len;
+    const char *data = yjson_w_data(w, &len);
+    send_json(s, status, data, len, keep_alive);
+    yjson_writer_free(w);
+}
+
+/* Pull one HTTP header value (case-insensitive name) out of the raw
+ * header block into `out`. Mirrors yhttp.c::header_get. Returns 1 on
+ * hit. The block holds the request line + headers up to CRLFCRLF. */
+static int header_value(const char *raw, size_t raw_len, const char *name,
+                        char *out, size_t out_cap)
+{
+    size_t nlen = strlen(name);
+    const char *p = raw;
+    const char *end = raw + raw_len;
+    while (p < end) {
+        const char *eol = memchr(p, '\n', (size_t)(end - p));
+        if (!eol) break;
+        size_t llen = (size_t)(eol - p);
+        if (llen && p[llen - 1] == '\r') llen--;
+        if (llen > nlen + 1 && p[nlen] == ':' &&
+            strncasecmp(p, name, nlen) == 0) {
+            const char *v = p + nlen + 1;
+            while (v < p + llen && (*v == ' ' || *v == '\t')) ++v;
+            size_t vl = (size_t)(p + llen - v);
+            if (vl >= out_cap) vl = out_cap - 1;
+            memcpy(out, v, vl);
+            out[vl] = 0;
+            return 1;
+        }
+        p = eol + 1;
+    }
+    return 0;
+}
+
+/* The opaque session token a programmatic client presents: the
+ * yaafc-sid cookie, a `yaafc-sid:` header, or `Authorization: Bearer
+ * <token>`. All three are opaque-token forms the gateway accepts (see
+ * CLAUDE.md — JWTs never cross this boundary). Returns 1 if a
+ * non-empty token was found. */
+static int extract_session_token(const char *headers_raw, size_t headers_raw_len,
+                                 char *out, size_t cap)
+{
+    if (cookie_get(headers_raw, headers_raw_len, "yaafc-sid", out, cap) && out[0])
+        return 1;
+    if (header_value(headers_raw, headers_raw_len, "yaafc-sid", out, cap) && out[0])
+        return 1;
+    char auth[128];
+    if (header_value(headers_raw, headers_raw_len, "authorization", auth, sizeof(auth))) {
+        const char *p = auth;
+        if (strncasecmp(p, "Bearer ", 7) == 0) p += 7;
+        while (*p == ' ') ++p;
+        size_t n = strlen(p);
+        if (n && n < cap) { memcpy(out, p, n); out[n] = 0; return 1; }
+    }
+    out[0] = 0;
+    return 0;
+}
+
+/* Resolve an opaque sid to the authenticated uid via the session
+ * backend. 0 → anonymous / invalid. */
+static uint32_t uid_for_sid(uint32_t sid)
+{
+    if (!sid) return 0;
+    struct yaafc_engine *e = yaafc_active_engine();
+    if (!e) return 0;
+    struct ctx c = yaafc_engine_service_ctx(e, "session");
+    if (!c.session) return 0;
+    struct object_ptr_result o = session_store_create(&c);
+    if (YAAFC_IS_ERR(o)) { yaafc_error_destroy(o.error); return 0; }
+    struct yaafc_uint32_result lr = session_store_lookup(&c, o.value, sid);
+    object_release_in_ctx(&c, o.value);
+    if (YAAFC_IS_ERR(lr)) { yaafc_error_destroy(lr.error); return 0; }
+    return lr.value;
+}
+
+/* Split a dotted RPC path into the pieces the dispatcher needs.
+ *
+ *   "session.store.start"        → service "session"
+ *                                   class   "session_store"
+ *                                   method  "session_store_start"
+ *   "git_pipeline.store.enqueue" → service "git_pipeline"
+ *                                   class   "git_pipeline_store"
+ *                                   method  "git_pipeline_store_enqueue"
+ *
+ * service = text up to the first '.'; class = text up to the LAST '.'
+ * with '.'→'_'; method = the whole path with '.'→'_' (== the codegen's
+ * qualified slot name, the jinvoke key). Requires at least two dots.
+ * Returns 1 on success. */
+static int path_to_qnames(const char *path,
+                          char *service, size_t service_cap,
+                          char *class_qname, size_t class_cap,
+                          char *method_qname, size_t method_cap)
+{
+    const char *first = strchr(path, '.');
+    if (!first) return 0;
+    const char *last = strrchr(path, '.');
+    if (last == first) return 0; /* need two dots */
+
+    size_t slen = (size_t)(first - path);
+    size_t clen = (size_t)(last - path);
+    size_t mlen = strlen(path);
+    if (slen == 0 || slen >= service_cap) return 0;
+    if (clen >= class_cap) return 0;
+    if (mlen >= method_cap) return 0;
+
+    for (size_t i = 0; i < mlen; ++i) {
+        char ch = path[i];
+        if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+              (ch >= '0' && ch <= '9') || ch == '_' || ch == '.'))
+            return 0; /* keep junk out of class_by_name / jinvoke_for */
+    }
+
+    memcpy(service, path, slen); service[slen] = 0;
+    memcpy(class_qname, path, clen); class_qname[clen] = 0;
+    memcpy(method_qname, path, mlen); method_qname[mlen] = 0;
+    for (char *p = class_qname; *p; ++p) if (*p == '.') *p = '_';
+    for (char *p = method_qname; *p; ++p) if (*p == '.') *p = '_';
+    return 1;
+}
+
+/* POST /_rpc — yaapp-style public gateway dispatch. Body:
+ *   {"path":"service.class.method","args":[...],"kwargs":{...}}
+ * Resolves the opaque session token to a uid, builds a REMOTE ctx for
+ * the named service, creates a backend object, and forwards the call
+ * through the ctx-aware JSON invoker (which packs args to the binary
+ * wire). Positional `args` are honoured today; `kwargs` is accepted
+ * but not yet mapped to parameters. */
+static void route_json_rpc(struct yloop_stream *s,
+                           const char *headers_raw, size_t headers_raw_len,
+                           const char *body, size_t body_len, int keep_alive)
+{
+    struct yaafc_engine *e = yaafc_active_engine();
+    if (!e) { send_json_error(s, 500, "_rpc: no engine", keep_alive); return; }
+
+    struct yjson_doc *doc = yjson_parse(body, body_len);
+    if (!doc) { send_json_error(s, 400, "_rpc: invalid JSON", keep_alive); return; }
+    const struct yjson_value *root = yjson_doc_root(doc);
+    const char *path = yjson_as_string(yjson_object_get(root, "path"), NULL);
+    const struct yjson_value *args = yjson_object_get(root, "args");
+    if (!path || !*path) {
+        yjson_doc_free(doc);
+        send_json_error(s, 400, "_rpc: missing 'path'", keep_alive);
+        return;
+    }
+
+    char service[64], class_qname[160], method_qname[192];
+    if (!path_to_qnames(path, service, sizeof(service),
+                        class_qname, sizeof(class_qname),
+                        method_qname, sizeof(method_qname))) {
+        yjson_doc_free(doc);
+        send_json_error(s, 400, "_rpc: malformed path (want service.class.method)", keep_alive);
+        return;
+    }
+
+    char token[64];
+    uint32_t sid = 0, uid = 0;
+    if (extract_session_token(headers_raw, headers_raw_len, token, sizeof(token))) {
+        sid = (uint32_t)strtoul(token, NULL, 10);
+        uid = uid_for_sid(sid);
+    }
+
+    struct ctx c = yaafc_engine_service_ctx(e, service);
+    c.uid = uid;
+    c.sid = sid;
+    if (!c.session) {
+        yjson_doc_free(doc);
+        send_json_error(s, 502, "_rpc: unknown service", keep_alive);
+        return;
+    }
+
+    struct object_ptr_result obj_r = object_create_in_ctx(&c, class_qname);
+    if (YAAFC_IS_ERR(obj_r)) {
+        yaafc_error_destroy(obj_r.error);
+        yjson_doc_free(doc);
+        send_json_error(s, 502, "_rpc: backend object create failed", keep_alive);
+        return;
+    }
+
+    jinvoke_fn fn = jinvoke_for(method_qname);
+    if (!fn) {
+        object_release_in_ctx(&c, obj_r.value);
+        yjson_doc_free(doc);
+        char msg[256];
+        snprintf(msg, sizeof(msg), "_rpc: no method '%s'", method_qname);
+        send_json_error(s, 404, msg, keep_alive);
+        return;
+    }
+
+    struct yjson_writer *w = yjson_writer_new();
+    yjson_w_begin_object(w);
+    yjson_w_key(w, "result");
+    char err[256] = {0};
+    int rc = fn(&c, obj_r.value, args, w, err, sizeof(err));
+    object_release_in_ctx(&c, obj_r.value);
+    if (rc != 0) {
+        yjson_writer_free(w);
+        yjson_doc_free(doc);
+        send_json_error(s, 500, err[0] ? err : "_rpc: call failed", keep_alive);
+        return;
+    }
+    yjson_w_end_object(w);
+    size_t len;
+    const char *data = yjson_w_data(w, &len);
+    send_json(s, 200, data, len, keep_alive);
+    yjson_writer_free(w);
+    yjson_doc_free(doc);
+}
+
+struct describe_emit_ctx { struct yjson_writer *w; };
+
+static void describe_slot_cb(const char *name, method_slot slot, void *ud)
+{
+    (void)slot;
+    struct describe_emit_ctx *dc = ud;
+    yjson_w_string(dc->w, name);
+}
+
+/* Pull the `service:` field out of one `remotes[]` map entry and append
+ * it to the services array. */
+static int describe_service_field_cb(const char *key, const struct yconfig_node *val, void *ud)
+{
+    struct describe_emit_ctx *dc = ud;
+    if (strcmp(key, "service") == 0) {
+        const char *name = yconfig_node_as_string(val, NULL);
+        if (name) yjson_w_string(dc->w, name);
+    }
+    return 0;
+}
+
+/* GET|POST /_describe[_tree] and /<service.class>/_describe[_tree].
+ * With a class path it lists that class's method slots; at the root it
+ * lists the gateway's configured backend services. `tree` currently
+ * shares the shallow shape (one class level); deeper nesting can layer
+ * on once a per-domain class enumerator exists. */
+static void route_describe(struct yloop_stream *s, const char *class_dotpath,
+                           int tree, int keep_alive)
+{
+    struct yaafc_engine *e = yaafc_active_engine();
+    struct yjson_writer *w = yjson_writer_new();
+
+    if (class_dotpath && *class_dotpath) {
+        char class_qname[160];
+        size_t n = strlen(class_dotpath);
+        if (n >= sizeof(class_qname)) {
+            yjson_writer_free(w);
+            send_json_error(s, 400, "_describe: path too long", keep_alive);
+            return;
+        }
+        memcpy(class_qname, class_dotpath, n + 1);
+        for (char *p = class_qname; *p; ++p) if (*p == '.') *p = '_';
+
+        struct class_ptr_result cr = class_by_name(class_qname);
+        if (YAAFC_IS_ERR(cr) || !cr.value) {
+            if (YAAFC_IS_ERR(cr)) yaafc_error_destroy(cr.error);
+            yjson_writer_free(w);
+            send_json_error(s, 404, "_describe: unknown class", keep_alive);
+            return;
+        }
+        yjson_w_begin_object(w);
+        yjson_w_key(w, "path");    yjson_w_string(w, class_dotpath);
+        yjson_w_key(w, "class");   yjson_w_string(w, class_qname);
+        yjson_w_key(w, "methods"); yjson_w_begin_array(w);
+        struct describe_emit_ctx dc = {.w = w};
+        class_for_each_slot(cr.value, describe_slot_cb, &dc);
+        yjson_w_end_array(w);
+        yjson_w_end_object(w);
+    } else {
+        /* Root: enumerate configured backend services. The gateway's
+         * `remotes:` list is projected onto the config root (gh#1
+         * service projection), so it's reachable as the "remotes" list
+         * node — each entry a map carrying a `service:` field. */
+        yjson_w_begin_object(w);
+        yjson_w_key(w, "services");
+        yjson_w_begin_array(w);
+        const struct yconfig *cfg = e ? yaafc_engine_config(e) : NULL;
+        if (cfg) {
+            struct yconfig_node_ptr_result lr = yconfig_get(cfg, "remotes");
+            if (YAAFC_IS_OK(lr) && lr.value &&
+                yconfig_node_kind(lr.value) == YCONFIG_LIST) {
+                struct describe_emit_ctx dc = {.w = w};
+                size_t n = yconfig_node_size(lr.value);
+                for (size_t i = 0; i < n; ++i) {
+                    const struct yconfig_node *entry = yconfig_node_at(lr.value, i);
+                    if (!entry || yconfig_node_kind(entry) != YCONFIG_MAP) continue;
+                    yconfig_node_for_each(entry, describe_service_field_cb, &dc);
+                }
+            } else if (YAAFC_IS_ERR(lr)) {
+                yaafc_error_destroy(lr.error);
+            }
+        }
+        yjson_w_end_array(w);
+        yjson_w_key(w, "tree"); yjson_w_bool(w, tree ? true : false);
+        yjson_w_end_object(w);
+    }
+
+    size_t len;
+    const char *data = yjson_w_data(w, &len);
+    send_json(s, 200, data, len, keep_alive);
+    yjson_writer_free(w);
+}
+
+/* If `path` is `/<dotpath>/_describe` or `/<dotpath>/_describe_tree`,
+ * dispatch a describe for `<dotpath>` and return 1. The root forms
+ * (/_describe, /_describe_tree) are handled by the caller. */
+static int try_hierarchical_describe(struct yloop_stream *s, const char *path,
+                                     int keep_alive)
+{
+    const char *q = strchr(path, '?');
+    size_t plen = q ? (size_t)(q - path) : strlen(path);
+
+    static const char tree_suffix[] = "/_describe_tree";
+    static const char desc_suffix[] = "/_describe";
+    size_t tlen = sizeof(tree_suffix) - 1;
+    size_t dlen = sizeof(desc_suffix) - 1;
+
+    int tree = 0;
+    size_t suffix_len = 0;
+    if (plen > tlen && memcmp(path + plen - tlen, tree_suffix, tlen) == 0) {
+        tree = 1; suffix_len = tlen;
+    } else if (plen > dlen && memcmp(path + plen - dlen, desc_suffix, dlen) == 0) {
+        tree = 0; suffix_len = dlen;
+    } else {
+        return 0;
+    }
+
+    size_t dot_len = plen - suffix_len;
+    if (dot_len == 0 || path[0] != '/') return 0;
+    char dotpath[160];
+    if (dot_len - 1 >= sizeof(dotpath)) return 0;
+    memcpy(dotpath, path + 1, dot_len - 1);
+    dotpath[dot_len - 1] = 0;
+    route_describe(s, dotpath, tree, keep_alive);
+    return 1;
+}
+
 int yhttp_frontend_try(struct yloop_stream *s,
                        const char *method, const char *path,
                        const char *headers_raw, size_t headers_raw_len,
@@ -1517,6 +1890,43 @@ int yhttp_frontend_try(struct yloop_stream *s,
                   dispatch_uname, sizeof(dispatch_uname));
     int is_get = strcmp(method, "GET") == 0;
     int is_post = strcmp(method, "POST") == 0;
+
+    /* ---- yaapp-compatible public gateway API ----------------------
+     * Matched before the HTML routes. This is the programmatic surface
+     * the browser sidecar, MCP, CLI and tests use. */
+    {
+        const char *q = strchr(path, '?');
+        size_t plen = q ? (size_t)(q - path) : strlen(path);
+
+        /* POST /_rpc — JSON {path,args,kwargs}. The legacy binary shim
+         * (POST /_rpc?op=&id=) stays internal transport: defer to
+         * yhttp.c by returning 0 when an op= query is present. */
+        if (is_post && plen == 5 && memcmp(path, "/_rpc", 5) == 0) {
+            if (q && strstr(q, "op=")) return 0;
+            route_json_rpc(s, headers_raw, headers_raw_len, body, body_len, keep_alive);
+            return 1;
+        }
+
+        /* _describe / _describe_tree — root + hierarchical. */
+        if (is_get || is_post) {
+            if (path_eq(path, "/_describe"))      { route_describe(s, NULL, 0, keep_alive); return 1; }
+            if (path_eq(path, "/_describe_tree")) { route_describe(s, NULL, 1, keep_alive); return 1; }
+            if (try_hierarchical_describe(s, path, keep_alive)) return 1;
+        }
+
+        /* Retire the legacy public surface ON THE GATEWAY. The mesh
+         * control parent keeps /create //invoke //describe — it reaches
+         * none of this code (yhttp_frontend_try returned 0 above for a
+         * process with no `session` remote). */
+        if (is_post && (path_eq(path, "/create") || path_eq(path, "/invoke"))) {
+            send_json_error(s, 410, "removed: use POST /_rpc {\"path\":\"service.class.method\",\"args\":[]}", keep_alive);
+            return 1;
+        }
+        if (is_get && plen == 9 && memcmp(path, "/describe", 9) == 0) {
+            send_json_error(s, 410, "removed: use GET /<service.class>/_describe", keep_alive);
+            return 1;
+        }
+    }
 
     /* Public routes — always handled regardless of auth state. */
     if (is_get && path_eq(path, "/"))                      { route_root(s, uid, dispatch_uname, keep_alive); return 1; }

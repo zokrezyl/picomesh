@@ -666,3 +666,58 @@ int rpc_session_translate_class(struct rpc_session *s, const char *class_name)
     HASH_ADD_KEYPTR(hh, s->translated, t->name, strlen(t->name), t);
     return 0;
 }
+
+/* Generic, class-name-keyed object construction — the runtime twin of
+ * the codegen-emitted `<class>_create(struct ctx *)`. The gateway has
+ * no typed `*_create` for the backend it forwards to (it links no
+ * plugin object code for those services), so it builds the proxy here
+ * by name. ctx with no session → a local instance; ctx with a session
+ * → a remote create + a proxy object carrying the returned handle. */
+struct object_ptr_result object_create_in_ctx(struct ctx *ctx, const char *class_qname)
+{
+    if (!class_qname)
+        return YAAFC_ERR(object_ptr, "object_create_in_ctx: NULL class name");
+
+    struct class_ptr_result class_r = class_by_name(class_qname);
+    if (YAAFC_IS_ERR(class_r))
+        return YAAFC_ERR(object_ptr, "object_create_in_ctx: unknown class", class_r);
+    const struct class *klass = class_r.value;
+    if (!klass)
+        return YAAFC_ERR(object_ptr, "object_create_in_ctx: class not registered");
+
+    if (!ctx || !ctx->session)
+        return object_alloc(klass);
+
+    rpc_session_translate_class(ctx->session, class_qname);
+
+    uint64_t handle = 0;
+    if (rpc_call(ctx->session, RPC_OP_CREATE, 0, class_qname, strlen(class_qname),
+                 &handle, sizeof(handle)) != sizeof(handle) || !handle)
+        return YAAFC_ERR(object_ptr, "object_create_in_ctx: remote create failed");
+
+    void *mem = calloc(1, sizeof(struct object) + sizeof(uint64_t));
+    if (!mem)
+        return YAAFC_ERR(object_ptr, "object_create_in_ctx: calloc(proxy) failed");
+    struct object *obj = mem;
+    *(const struct class **)obj = klass;
+    *(uint64_t *)((char *)obj + sizeof(*obj)) = handle;
+    return YAAFC_OK(object_ptr, obj);
+}
+
+/* Release a value built by object_create_in_ctx. For a remote proxy it
+ * first sends RPC_OP_DESTROY so the backend's handle table doesn't grow
+ * without bound, then frees the local proxy; for a local instance it
+ * defers to object_free. */
+void object_release_in_ctx(struct ctx *ctx, struct object *obj)
+{
+    if (!obj) return;
+    if (ctx && ctx->session) {
+        uint64_t handle;
+        memcpy(&handle, (char *)obj + sizeof(struct object), sizeof(handle));
+        uint8_t removed;
+        rpc_call(ctx->session, RPC_OP_DESTROY, 0, &handle, sizeof(handle), &removed, 1);
+        free(obj);
+        return;
+    }
+    object_free(obj);
+}

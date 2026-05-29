@@ -219,71 +219,79 @@ _short_body:
     return _resp_max >= 1 ? 1 : 0;
 }
 
-static int calculator_calc_add_jinvoke(struct object *_obj, const struct yjson_value *_args,
-                          struct yjson_writer *_result, char *_err, size_t _err_cap)
+static int calculator_calc_add_jinvoke(struct ctx *ctx, struct object *obj,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
 {
-    int64_t _a0 = (int64_t)yjson_as_int(yjson_array_at(_args, 0), 0);
-    int64_t _a1 = (int64_t)yjson_as_int(yjson_array_at(_args, 1), 0);
-    struct ctx _ctx = {0};
-    struct yaafc_int64_result _r = calculator_calc_add(&_ctx, _obj, _a0, _a1);
-    if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "calculator_calc_add",
-                 _r.error.msg ? _r.error.msg : "<no message>");
-        yaafc_error_destroy(_r.error);
+    int64_t arg0 = (int64_t)yjson_as_int(yjson_array_at(args, 0), 0);
+    int64_t arg1 = (int64_t)yjson_as_int(yjson_array_at(args, 1), 0);
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct yaafc_int64_result call_result = calculator_calc_add(call_ctx, obj, arg0, arg1);
+    if (YAAFC_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "calculator_calc_add",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        yaafc_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(_result, (int64_t)_r.value);
+    yjson_w_int(result, (int64_t)call_result.value);
     return 0;
 }
 
-static int calculator_calc_sub_jinvoke(struct object *_obj, const struct yjson_value *_args,
-                          struct yjson_writer *_result, char *_err, size_t _err_cap)
+static int calculator_calc_sub_jinvoke(struct ctx *ctx, struct object *obj,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
 {
-    int64_t _a0 = (int64_t)yjson_as_int(yjson_array_at(_args, 0), 0);
-    int64_t _a1 = (int64_t)yjson_as_int(yjson_array_at(_args, 1), 0);
-    struct ctx _ctx = {0};
-    struct yaafc_int64_result _r = calculator_calc_sub(&_ctx, _obj, _a0, _a1);
-    if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "calculator_calc_sub",
-                 _r.error.msg ? _r.error.msg : "<no message>");
-        yaafc_error_destroy(_r.error);
+    int64_t arg0 = (int64_t)yjson_as_int(yjson_array_at(args, 0), 0);
+    int64_t arg1 = (int64_t)yjson_as_int(yjson_array_at(args, 1), 0);
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct yaafc_int64_result call_result = calculator_calc_sub(call_ctx, obj, arg0, arg1);
+    if (YAAFC_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "calculator_calc_sub",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        yaafc_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(_result, (int64_t)_r.value);
+    yjson_w_int(result, (int64_t)call_result.value);
     return 0;
 }
 
-static int calculator_calc_mul_jinvoke(struct object *_obj, const struct yjson_value *_args,
-                          struct yjson_writer *_result, char *_err, size_t _err_cap)
+static int calculator_calc_mul_jinvoke(struct ctx *ctx, struct object *obj,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
 {
-    int64_t _a0 = (int64_t)yjson_as_int(yjson_array_at(_args, 0), 0);
-    int64_t _a1 = (int64_t)yjson_as_int(yjson_array_at(_args, 1), 0);
-    struct ctx _ctx = {0};
-    struct yaafc_int64_result _r = calculator_calc_mul(&_ctx, _obj, _a0, _a1);
-    if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "calculator_calc_mul",
-                 _r.error.msg ? _r.error.msg : "<no message>");
-        yaafc_error_destroy(_r.error);
+    int64_t arg0 = (int64_t)yjson_as_int(yjson_array_at(args, 0), 0);
+    int64_t arg1 = (int64_t)yjson_as_int(yjson_array_at(args, 1), 0);
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct yaafc_int64_result call_result = calculator_calc_mul(call_ctx, obj, arg0, arg1);
+    if (YAAFC_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "calculator_calc_mul",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        yaafc_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(_result, (int64_t)_r.value);
+    yjson_w_int(result, (int64_t)call_result.value);
     return 0;
 }
 
-static int calculator_calc_div_jinvoke(struct object *_obj, const struct yjson_value *_args,
-                          struct yjson_writer *_result, char *_err, size_t _err_cap)
+static int calculator_calc_div_jinvoke(struct ctx *ctx, struct object *obj,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
 {
-    int64_t _a0 = (int64_t)yjson_as_int(yjson_array_at(_args, 0), 0);
-    int64_t _a1 = (int64_t)yjson_as_int(yjson_array_at(_args, 1), 0);
-    struct ctx _ctx = {0};
-    struct yaafc_int64_result _r = calculator_calc_div(&_ctx, _obj, _a0, _a1);
-    if (YAAFC_IS_ERR(_r)) {
-        snprintf(_err, _err_cap, "%s: %s", "calculator_calc_div",
-                 _r.error.msg ? _r.error.msg : "<no message>");
-        yaafc_error_destroy(_r.error);
+    int64_t arg0 = (int64_t)yjson_as_int(yjson_array_at(args, 0), 0);
+    int64_t arg1 = (int64_t)yjson_as_int(yjson_array_at(args, 1), 0);
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct yaafc_int64_result call_result = calculator_calc_div(call_ctx, obj, arg0, arg1);
+    if (YAAFC_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "calculator_calc_div",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        yaafc_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(_result, (int64_t)_r.value);
+    yjson_w_int(result, (int64_t)call_result.value);
     return 0;
 }
 

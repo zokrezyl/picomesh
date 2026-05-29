@@ -205,7 +205,9 @@ static void handle_invoke(struct yloop_stream *s, const struct yjson_value *id,
     yjson_w_key(w, "result");
 
     char err[256] = {0};
-    int rc = fn((struct object *)obj, args, w, err, sizeof(err));
+    /* Local dispatch: yttp owns the object in-process, so the invoker
+     * gets a NULL ctx and the public stub calls the impl directly. */
+    int rc = fn(NULL, (struct object *)obj, args, w, err, sizeof(err));
     if (rc != 0) {
         /* Roll back the partial response by discarding the writer
          * and emitting an error envelope instead. */

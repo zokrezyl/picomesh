@@ -22,9 +22,11 @@
 set -uo pipefail
 
 YAAFC=./build-desktop-release/yaafc
+FRONTEND=./build-desktop-release/yaafc-frontend
 CONFIG=scenarios/git-yaafc/yaafc.yaml
 CTRL=8800
 WEB=8080
+SIDE=8081
 DB=/tmp/git-yaafc/central.db
 
 mkdir -p tmp /tmp/git-yaafc
@@ -40,6 +42,7 @@ echo "[1/6] starting parent yaafc (yhttp control) on :${CTRL}"
     > tmp/mesh-parent.log 2>&1 &
 PARENT=$!
 cleanup() {
+    pkill -9 -f 'yaafc-frontend' 2>/dev/null || true
     pkill -9 -f 'yaafc.*serve' 2>/dev/null || true
     kill -KILL $PARENT 2>/dev/null || true
 }
@@ -195,6 +198,82 @@ expect_contains 'POST /alice/website/issues/new → 303' "$hdrs" '303 See Other'
 # Parent control still alive.
 out=$(http_post "$CTRL" /invoke "{\"method\":\"mesh_store_count_children\",\"handle\":$H,\"args\":[]}")
 expect_contains "parent.count_children == $SPAWNED" "$out" "\"result\":$SPAWNED"
+
+echo
+echo "[5b] standalone yaafc-frontend sidecar → gateway /_rpc on :${SIDE}"
+# The separated browser frontend: links no plugins, knows no backend
+# ports — every call leaves it as POST /_rpc against the gateway. This
+# proves the chosen architecture (browser → yaafc-frontend → gateway →
+# backends), distinct from the gateway serving its own HTML above.
+"$FRONTEND" --gateway-url "http://127.0.0.1:${WEB}" \
+    --host 127.0.0.1 --port "$SIDE" \
+    --static scenarios/git-yaafc/frontend/static \
+    > tmp/sidecar.log 2>&1 &
+SIDECAR=$!
+sleep 0.7
+
+# GET sidecar /login renders its own sign-in form (not the gateway's).
+out=$(curl -sS --max-time 10 "http://127.0.0.1:${SIDE}/login")
+expect_contains 'sidecar GET /login renders' "$out" '<h1>Sign in</h1>'
+
+# POST sidecar /login forwards the form to the gateway's composite
+# login; the gateway authenticates alice (registered above), mints a
+# session and answers 303 + Set-Cookie, which the sidecar relays.
+rm -f tmp/side-cookies.txt
+hdrs=$(curl -sS --max-time 10 -D - -o /dev/null -c tmp/side-cookies.txt \
+            -XPOST "http://127.0.0.1:${SIDE}/login" \
+            --data-urlencode 'username=alice' --data-urlencode 'password=hunter2')
+expect_contains 'sidecar POST /login → 303 /repos' "$hdrs" '303 See Other.*[Ll]ocation: /repos|[Ll]ocation: /repos.*303'
+expect_contains 'sidecar relays gateway sid cookie' "$hdrs" 'Set-Cookie: yaafc-sid='
+
+# GET sidecar /repos renders a data page sourced from the gateway via
+# /_rpc (git_repo.store.count_total) — the sidecar holds no plugins.
+out=$(curl -sS --max-time 10 -b tmp/side-cookies.txt "http://127.0.0.1:${SIDE}/repos")
+expect_contains 'sidecar GET /repos renders'           "$out" '<h1>Repositories</h1>'
+expect_contains 'sidecar /repos sourced via gateway /_rpc' "$out" 'via the gateway'
+
+# Direct gateway-API checks: yaapp-style surface present, legacy gone.
+out=$(curl -sS --max-time 10 -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+           -H 'Content-Type: application/json' \
+           -d '{"path":"git_repo.store.count_total","args":[]}')
+expect_contains 'gateway POST /_rpc {path,args}' "$out" '"result":'
+
+# Authenticated /_rpc round-trip with a real positional arg + result:
+# resolve alice's session (the sid the sidecar just stored) back to her
+# uid via session.store.lookup. Proves args marshalling, the remote
+# forward, and a meaningful non-zero return — not just a 0 count.
+ASID=$(awk '/yaafc-sid/ {print $NF}' tmp/side-cookies.txt 2>/dev/null | tail -1)
+out=$(curl -sS --max-time 10 -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+           -H 'Content-Type: application/json' \
+           -d "{\"path\":\"session.store.lookup\",\"args\":[${ASID:-0}]}")
+expect_contains 'gateway /_rpc authed round-trip (session.lookup→uid)' "$out" '"result":[1-9][0-9]*'
+
+# Malformed path → stable 400; unknown method → 404.
+code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+            -H 'Content-Type: application/json' -d '{"path":"oneword","args":[]}')
+[ "$code" = "400" ] && note_pass "gateway /_rpc malformed path → 400" \
+                     || note_fail "gateway /_rpc malformed path returned $code (want 400)"
+code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+            -H 'Content-Type: application/json' -d '{"path":"git_repo.store.no_such_method","args":[]}')
+[ "$code" = "404" ] && note_pass "gateway /_rpc unknown method → 404" \
+                     || note_fail "gateway /_rpc unknown method returned $code (want 404)"
+
+# _describe contract: root lists services, class form lists methods.
+out=$(curl -sS --max-time 10 "http://127.0.0.1:${WEB}/_describe")
+expect_contains 'gateway GET /_describe lists services' "$out" '"services":\['
+out=$(curl -sS --max-time 10 "http://127.0.0.1:${WEB}/git_repo.store/_describe")
+expect_contains 'gateway /<class>/_describe lists methods' "$out" 'git_repo_store_count_total'
+
+# Legacy public surface retired on the gateway (8080)…
+code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
+            -XPOST "http://127.0.0.1:${WEB}/create" -d '{"class":"git_repo_store"}')
+[ "$code" = "410" ] && note_pass "gateway retired POST /create (410)" \
+                     || note_fail "gateway POST /create returned $code (want 410)"
+# …but the mesh control parent (8800) MUST still serve it for bootstrap.
+out=$(http_post "$CTRL" /create '{"class":"mesh_store"}')
+expect_contains 'control parent :8800 still serves /create' "$out" '"handle":[0-9]+'
+
+kill -KILL $SIDECAR 2>/dev/null || true
 
 echo
 echo "[6/6] sqlite persistence proof — storage child must have written $DB"
