@@ -19,22 +19,27 @@ You also need passwordless `sudo` for `losetup` / `mount` (used by
 ## Build the image
 
 ```sh
-# 1. cross-compile yaafc for riscv64 (gateway + frontend binaries)
-make -C ../../.. build-linux-riscv64-release
-
-# 2. fetch yetty's kernel + opensbi + alpine-disk, bake binaries +
-#    scenario assets into a bootable ext4 image
-./build-image.sh
+# One target chains it all: cross-compile yaafc for riscv64, stage the
+# host-runnable build-deploy/ tree, fetch yetty's kernel + opensbi +
+# alpine-disk, and bake everything into a bootable ext4 image.
+make -C ../../.. build-yemu-release
 ```
 
-Outputs land under `./build/`:
+Outputs land under `build-yemu-release/` at the repo root:
 
 ```
-build/
-├── alpine-rootfs.img        256 MiB rootfs
+build-yemu-release/
+├── alpine-rootfs.img        256 MiB rootfs (with /opt/git-yaafc/ injected)
 ├── kernel-riscv64.bin       riscv64 linux 7.0 (from yetty release)
-└── opensbi-fw_dynamic.bin   opensbi 1.4 (from yetty release)
+├── opensbi-fw_dynamic.bin   opensbi 1.4 (from yetty release)
+├── cache/                   downloaded yetty release tarballs
+└── work/                    sudo loop-mount scratch
 ```
+
+The yaafc payload comes from `build-deploy/` (staged from
+`scenarios/git-yaafc/{yaafc.yaml,frontend/static,deploy/run.sh.tmpl}`
+by `make build-deploy`); inside the VM it lands at `/opt/git-yaafc/`
+with the riscv64 yaafc binary swapped in.
 
 ## Boot it
 
@@ -43,16 +48,19 @@ build/
 ```
 
 The launcher (baked at `/opt/git-yaafc/run.sh` inside the image)
-brings up loopback + slirp net and runs gateway + frontend. From the
-host:
+mounts /proc /sys /dev, brings up slirp net, starts a control yaafc
+on `127.0.0.1:8800`, then POSTs `/create` + `/invoke
+mesh_store_reconcile_from_config` so the full mesh comes up:
+gateway on `0.0.0.0:8080` plus 11 backends on `127.0.0.1:820X`.
+From the host:
 
 | Service        | Guest port | Host port forward |
 |----------------|------------|-------------------|
 | Gateway (HTTP) | 8080       | 18080             |
-| HTML frontend  | 8081       | 18081             |
 
-Open `http://127.0.0.1:18081/login` in a browser to hit the C
-frontend talking to the C gateway inside the VM.
+Open `http://127.0.0.1:18080/login` in a browser to hit the C
+gateway (which serves the HTML UI directly and forwards everything
+to the backends over yrpc).
 
 Quit with `Ctrl-A X`.
 
@@ -83,17 +91,15 @@ browser via TinyEMU compiled to wasm — no host emulator, no install
 on the visitor's side.
 
 ```sh
-# 1. Cross-compile yaafc + yaafc-frontend for riscv64 (host work, ~3 min)
-make -C ../../.. build-linux-riscv64-release
+# 1. Bake the rootfs (chains riscv64 build + build-deploy + build-image.sh).
+#    Needs sudo for losetup/mount.
+make -C ../../.. build-yemu-release
 
-# 2. Bake the rootfs (needs sudo — see "Build the image" above)
-./build-image.sh
-
-# 3. Compile tinyemu to wasm and stage the VM assets next to it
+# 2. Compile tinyemu to wasm and stage the VM assets next to the bundle.
 make -C ../../.. build-webasm-yemu-release
 
-# 4. Serve locally
-python3 web/build/serve.py 8000 web/build
+# 3. Serve locally
+python3 ../../../build-webasm-yemu-release/serve.py 8000 ../../../build-webasm-yemu-release
 # open http://127.0.0.1:8000/
 ```
 
@@ -101,16 +107,17 @@ The Emscripten SDK has to live at `$HOME/.local/emsdk` (yetty's
 convention — see `yetty/build-tools/install-emscripten.sh`); the
 build script auto-prepends it to `$PATH`. Override with `EMSDK=…`.
 
-Output layout (`scenarios/git-yaafc/yemu/web/build/`):
+Output layout (`build-webasm-yemu-release/`):
 
 | File                          | What                                     |
 |-------------------------------|------------------------------------------|
-| `yaafc-yemu.js`               | emscripten loader (114 KB)               |
+| `yaafc-yemu.js`               | emscripten loader (~125 KB)              |
 | `yaafc-yemu.wasm`             | compiled tinyemu + slirp + temu (~220 KB)|
-| `index.html`                  | UI shell — terminal `<pre>` + input form |
+| `index.html`                  | thin iframe wrapper                      |
+| `tinyemu-iframe.html`         | main UI — boot overlay, slirp shim, netlog |
 | `yaafc.cfg`                   | tinyemu VM config (MEMFS paths)          |
 | `assets/kernel-riscv64.bin`   | yetty linux kernel                       |
-| `assets/opensbi-fw_dynamic.bin` | yetty opensbi                          |
+| `assets/opensbi-fw_jump.elf`  | yetty opensbi (tinyemu-compatible ELF)   |
 | `assets/alpine-rootfs.img`    | yaafc-baked rootfs                       |
 | `serve.py`                    | dev HTTP server (sets COOP/COEP)         |
 

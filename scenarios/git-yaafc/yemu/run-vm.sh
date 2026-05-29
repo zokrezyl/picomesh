@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Boot the riscv64 alpine VM built by ./build-image.sh and run yaafc.
 #
-# Artefacts (all under ./build/):
+# Artefacts (all under $REPO_ROOT/build-yemu-release/):
 #   opensbi-fw_dynamic.bin    yetty opensbi
 #   kernel-riscv64.bin        yetty linux (9p/virtio/ext4 built-in)
 #   alpine-rootfs.img         alpine rootfs with yaafc + yaafc-frontend
@@ -15,7 +15,8 @@
 set -Eeuo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-BUILD="$HERE/build"
+REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
+BUILD="$REPO_ROOT/build-yemu-release"
 
 KERNEL="$BUILD/kernel-riscv64.bin"
 BIOS="$BUILD/opensbi-fw_dynamic.bin"

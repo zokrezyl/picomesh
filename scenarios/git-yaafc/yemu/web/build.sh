@@ -4,10 +4,10 @@
 #
 # Prereqs:
 #   - Emscripten SDK on PATH (`source $HOME/.local/emsdk/emsdk_env.sh`).
-#   - ../build/ already populated by `../build-image.sh` (gives us the
-#     kernel + opensbi + rootfs).
+#   - $REPO_ROOT/build-yemu-release/ populated by `../build-image.sh`
+#     (gives us the kernel + opensbi + rootfs).
 #
-# Output (`./build/`):
+# Output ($REPO_ROOT/build-webasm-yemu-release/):
 #   index.html              loader UI
 #   serve.py                dev HTTP server
 #   yaafc.cfg               tinyemu VM config (MEMFS paths)
@@ -15,14 +15,18 @@
 #   yaafc-yemu.wasm         compiled tinyemu + slirp + temu
 #   assets/
 #     kernel-riscv64.bin
-#     opensbi-fw_dynamic.bin
+#     opensbi-fw_jump.elf
 #     alpine-rootfs.img
 
 set -Eeuo pipefail
 trap 'rc=$?; echo "FAILED: rc=$rc line=$LINENO cmd: $BASH_COMMAND" >&2' ERR
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-YEMU_BUILD="$HERE/../build"
+REPO_ROOT="$(cd "$HERE/../../../.." && pwd)"
+
+# All build artifacts at repo root, never inside the source tree.
+YEMU_BUILD="$REPO_ROOT/build-yemu-release"
+OUT="$REPO_ROOT/build-webasm-yemu-release"
 
 # Prefer the operator's emsdk install over any system emscripten —
 # yetty's install-emscripten.sh drops one at ~/.local/emsdk that's known
@@ -36,7 +40,7 @@ if [ -x "$EMSDK/upstream/emscripten/emcc" ]; then
 fi
 if ! command -v emcmake >/dev/null 2>&1; then
     echo "FAIL: emcmake not on PATH — install emsdk and source emsdk_env.sh" >&2
-    echo "  see ../../../../README.md for the install one-liner" >&2
+    echo "  see $REPO_ROOT/README.md for the install one-liner" >&2
     exit 1
 fi
 
@@ -53,7 +57,7 @@ done
 # project's opensbi-fw_jump.elf which is built for tinyemu's virt
 # machine (htif/SBI-console) and produces actual output through the
 # bridge_console_write path.
-YETTY_OPENSBI="$HERE/../../../../../yetty/build-webasm-ytrace-release/3rdparty/opensbi/opensbi-fw_jump.elf"
+YETTY_OPENSBI="$REPO_ROOT/../yetty/build-webasm-ytrace-release/3rdparty/opensbi/opensbi-fw_jump.elf"
 if [ ! -f "$YETTY_OPENSBI" ]; then
     echo "FAIL: missing yetty's tinyemu-compatible opensbi:" >&2
     echo "  $YETTY_OPENSBI" >&2
@@ -61,24 +65,24 @@ if [ ! -f "$YETTY_OPENSBI" ]; then
     exit 1
 fi
 
-mkdir -p "$HERE/build"
+mkdir -p "$OUT"
 
-echo "==> emcmake configure"
-( cd "$HERE" && emcmake cmake -B build -S . -DCMAKE_BUILD_TYPE=Release )
+echo "==> emcmake configure → $OUT"
+emcmake cmake -B "$OUT" -S "$HERE" -DCMAKE_BUILD_TYPE=Release
 
 echo "==> emmake build"
-( cd "$HERE/build" && cmake --build . --parallel )
+cmake --build "$OUT" --parallel
 
-echo "==> staging VM assets under build/assets/"
-mkdir -p "$HERE/build/assets"
-cp -v "$YEMU_BUILD/kernel-riscv64.bin" "$HERE/build/assets/"
-cp -v "$YETTY_OPENSBI"                 "$HERE/build/assets/opensbi-fw_jump.elf"
-cp -v "$YEMU_BUILD/alpine-rootfs.img"  "$HERE/build/assets/"
+echo "==> staging VM assets under $OUT/assets/"
+mkdir -p "$OUT/assets"
+cp -v "$YEMU_BUILD/kernel-riscv64.bin" "$OUT/assets/"
+cp -v "$YETTY_OPENSBI"                 "$OUT/assets/opensbi-fw_jump.elf"
+cp -v "$YEMU_BUILD/alpine-rootfs.img"  "$OUT/assets/"
 
 echo
-echo "Build ready under $HERE/build/:"
-ls -lh "$HERE/build/yaafc-yemu.js" "$HERE/build/yaafc-yemu.wasm" "$HERE/build/assets/"
+echo "Build ready under $OUT/:"
+ls -lh "$OUT/yaafc-yemu.js" "$OUT/yaafc-yemu.wasm" "$OUT/assets/"
 echo
 echo "Serve locally:"
-echo "  python3 $HERE/build/serve.py 8000 $HERE/build"
+echo "  python3 $OUT/serve.py 8000 $OUT"
 echo "  open http://127.0.0.1:8000/"

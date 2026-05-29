@@ -61,7 +61,7 @@ add_library(yaafc_runtime STATIC
     src/yaafc/frontends/yhttp/yhttp.c
     src/yaafc/frontends/yhttp/frontend.c
     src/yaafc/frontends/cli/cli.c
-    third_party/picohttpparser/picohttpparser.c
+    src/picohttpparser/picohttpparser.c
     src/yaafc/yconfig/yconfig.c
     src/yaafc/yargv/yargv.c
     src/yaafc/yjson/yjson.cpp
@@ -69,8 +69,8 @@ add_library(yaafc_runtime STATIC
 )
 target_include_directories(yaafc_runtime PUBLIC
     include
-    third_party/uthash
-    third_party/picohttpparser
+    include/uthash
+    include/picohttpparser
 )
 
 # All plugin public headers now land in include/yaafc/plugin/<name>/
@@ -263,7 +263,7 @@ add_executable(yaafc-frontend
 target_link_libraries(yaafc-frontend PRIVATE yaafc_runtime)
 target_include_directories(yaafc-frontend PRIVATE
     src/yaafc/frontend
-    third_party/picohttpparser
+    include/picohttpparser
 )
 
 # ---- tests (smoke) ---------------------------------------------------

@@ -30,9 +30,13 @@ trap 'rc=$?; echo "FAILED: rc=$rc line=$LINENO cmd: $BASH_COMMAND" >&2' ERR
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
-CACHE="$HERE/cache"
-BUILD="$HERE/build"
-WORK="$HERE/tmp"
+
+# All build artifacts live at repo-root under build-yemu-release/.
+# Sources stay in scenarios/. NO build output ever lands beside the
+# source tree.
+BUILD="$REPO_ROOT/build-yemu-release"
+CACHE="$BUILD/cache"
+WORK="$BUILD/work"
 
 ALPINE_VER="${ALPINE_VER:-3.23.4-riscv64-1}"
 OPENSBI_VER="${OPENSBI_VER:-1.4-1}"
@@ -114,19 +118,19 @@ mkdir -p "$MNT"
 LOOP="$(sudo losetup -f --show "$BUILD/alpine-rootfs.img")"
 sudo mount "$LOOP" "$MNT"
 
-# tmp/deploy/ is the single source of truth: it's tested locally
-# (cd tmp/deploy && ./run.sh) and copied verbatim into the rootfs
+# build-deploy/ is the single source of truth: it's tested locally
+# (cd build-deploy && ./run.sh) and copied verbatim into the rootfs
 # here. yaafc binary is the only thing we swap (host x86_64 → riscv64).
-DEPLOY="$REPO_ROOT/tmp/deploy"
+DEPLOY="$REPO_ROOT/build-deploy"
 if [ ! -d "$DEPLOY" ]; then
-    echo "FAIL: $DEPLOY missing — run tmp/stage-deploy.sh first" >&2
+    echo "FAIL: $DEPLOY missing — run scenarios/git-yaafc/deploy/stage.sh first" >&2
     exit 1
 fi
 for f in yaafc.yaml run.sh frontend/static/style.css; do
     [ -e "$DEPLOY/$f" ] || { echo "FAIL: $DEPLOY/$f missing" >&2; exit 1; }
 done
 
-echo "==> staging tmp/deploy/ → /opt/git-yaafc/"
+echo "==> staging build-deploy/ → /opt/git-yaafc/"
 sudo install -d -m 755 "$MNT/opt/git-yaafc"
 sudo cp -a "$DEPLOY/yaafc.yaml" "$MNT/opt/git-yaafc/yaafc.yaml"
 sudo cp -a "$DEPLOY/frontend"   "$MNT/opt/git-yaafc/frontend"
@@ -144,104 +148,6 @@ sudo ln -sf /opt/git-yaafc/yaafc "$MNT/usr/local/bin/yaafc"
 # Legacy yaafc-frontend (standalone HTML server) — kept only because
 # its CLI signature is referenced by tests, not used by the demo.
 sudo install -m 755 "$YAAFC_FRONTEND_BIN" "$MNT/usr/local/bin/yaafc-frontend"
-
-# Inline run.sh heredoc kept BELOW for archival reference only — the
-# rootfs takes the file from tmp/deploy/run.sh (just installed).
-# Skip the heredoc by writing it into a discarded path.
-if false; then
-sudo tee /dev/null >/dev/null <<'RUN_EOF'
-#!/bin/sh
-# git-yaafc in-VM launcher. Mirrors scenarios/git-yaafc/mesh-up.sh:
-# start a parent yaafc on a control port, then trigger
-# mesh_store.reconcile_from_config to spawn the full mesh — all
-# backend services on their yrpc ports + the `gateway` service on
-# 8080 with yhttp + the real HTML UI (/login, /register, /repos,
-# /<account>/<repo>, /_rpc). Single bare yaafc on 8080 would serve
-# only the gateway's /login stub; without backends, /register
-# can't store accounts. Hence the bootstrap.
-#
-# `set -e` is OFF: a single child crashing must not knock out PID 1
-# (that would kernel-panic the VM and we'd lose all diagnostics).
-set -u
-export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-
-say() { echo "[run.sh] $*"; }
-
-say "PID=$$ launcher start"
-
-say "mount /proc /sys /dev"
-mount -t proc     proc /proc 2>&1 || say "  proc mount failed (ok if already mounted)"
-mount -t sysfs    sys  /sys  2>&1 || say "  sys mount failed"
-mount -t devtmpfs dev  /dev  2>&1 || say "  devtmpfs mount failed (ok if already mounted)"
-
-say "bring up net"
-ip link set lo up                  2>&1 || say "  lo up failed"
-ip link set eth0 up                2>&1 || say "  eth0 up failed"
-ip addr add 10.0.2.15/24 dev eth0  2>&1 || say "  ip addr add failed"
-ip route add default via 10.0.2.2  2>&1 || say "  ip route add failed"
-
-mkdir -p /var/lib/git-yaafc /tmp/git-yaafc
-
-CTRL=8800
-
-say "spawning parent yaafc (control yhttp on 127.0.0.1:${CTRL})"
-yaafc --config-file /opt/git-yaafc/yaafc.yaml \
-      --frontend yhttp --host 127.0.0.1 --port ${CTRL} serve \
-      </dev/null >/dev/console 2>&1 &
-PARENT=$!
-say "parent pid=${PARENT}"
-
-# Wait for the control port to bind. Without ss/netstat-w we just
-# loop on a wget probe with a short timeout; busybox wget is happy
-# to retry a fresh TCP connect per call.
-say "waiting for control port ${CTRL} to accept…"
-i=0
-while [ $i -lt 60 ]; do
-    if wget -q -O - --timeout=1 --tries=1 "http://127.0.0.1:${CTRL}/" >/dev/null 2>&1; then
-        break
-    fi
-    sleep 1
-    i=$((i + 1))
-done
-say "control port up after ${i}s"
-
-say "POST /create {class:mesh_store}"
-CREATE_RESP=$(wget -q -O - \
-    --header="Content-Type: application/json" \
-    --post-data='{"class":"mesh_store"}' \
-    "http://127.0.0.1:${CTRL}/create" 2>/dev/null || true)
-say "  → ${CREATE_RESP}"
-H=$(echo "${CREATE_RESP}" | sed -nE 's/.*"handle":([0-9]+).*/\1/p')
-if [ -z "${H}" ]; then
-    say "  FAIL: no handle in create response — gateway won't come up"
-    say "  going to sleep so PID 1 stays alive for diagnostics"
-    exec sleep infinity
-fi
-say "  mesh_store handle=${H}"
-
-say "POST /invoke mesh_store_reconcile_from_config"
-INVOKE_BODY='{"method":"mesh_store_reconcile_from_config","handle":'${H}',"args":[]}'
-INVOKE_RESP=$(wget -q -O - \
-    --header="Content-Type: application/json" \
-    --post-data="${INVOKE_BODY}" \
-    "http://127.0.0.1:${CTRL}/invoke" 2>/dev/null || true)
-say "  → ${INVOKE_RESP}"
-SPAWNED=$(echo "${INVOKE_RESP}" | sed -nE 's/.*"result":([0-9]+).*/\1/p')
-say "  spawned=${SPAWNED:-?} mesh children"
-
-say "waiting 3s for children to bind their yrpc/yhttp ports"
-sleep 3
-
-say "post-launch sockets (netstat -ltn):"
-netstat -ltn 2>&1 || say "  netstat unavailable"
-
-say "mesh up — parent yaafc on :${CTRL}, gateway on :8080. wait \$PARENT"
-wait ${PARENT}
-say "parent yaafc exited rc=$?"
-say "sleeping forever to keep PID 1 alive"
-exec sleep infinity
-RUN_EOF
-fi  # close `if false` from above — the heredoc above is dead code
 
 sync
 sudo umount "$MNT"

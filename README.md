@@ -92,7 +92,9 @@ src/yaafc/
 
 gen/codegen.py                         annotated-C → public stubs / skels
 bin/yaafc_main.c                       driver binary (serve | client)
-third_party/uthash/                    vendored uthash header
+include/uthash/                        vendored uthash header
+include/picohttpparser/                vendored picohttpparser header
+src/picohttpparser/                    vendored picohttpparser source
 ```
 
 ## Adding a plugin
