@@ -1,0 +1,162 @@
+name: Deploy yaafc-yemu browser demo to GitHub Pages
+
+# Builds the full yaafc-yemu wasm demo and publishes it to GitHub Pages
+# under the repository's Pages site. The deployed page boots a riscv64
+# Alpine VM in the visitor's browser via TinyEMU wasm, with the yaafc
+# mesh (gateway + 11 backends) launching inside that VM. No yetty
+# dependency — kernel + opensbi are built from this repo's 3rdparty
+# recipes, alpine minirootfs comes straight from dl-cdn.alpinelinux.org.
+#
+# Trigger: every push to main, plus manual dispatch. First run takes
+# ~15 minutes (linux kernel build); subsequent runs reuse the cached
+# 3rdparty tarballs.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      # Skip Pages deploy when only docs change.
+      - 'CMakeLists.txt'
+      - 'Makefile'
+      - 'include/**'
+      - 'src/**'
+      - 'build-tools/**'
+      - 'scenarios/git-yaafc/**'
+      - '.github/workflows/deploy-yaafc-yemu-demo.yml'
+  workflow_dispatch: {}
+
+# Concurrency: skip in-flight runs when a newer push arrives. Pages
+# itself only allows one in-flight deploy per env.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+env:
+  # 64 MiB rootfs — alpine minirootfs (~8 MiB) + yaafc static binary
+  # (~7 MiB) + 49 MiB free space for runtime sqlite/mdbx state. Keeps
+  # the wasm asset under the 100 MiB GitHub Pages soft limit.
+  DISK_MIB: 64
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # We don't depend on history (no submodules); a shallow
+          # clone is enough.
+          fetch-depth: 1
+
+      - name: install build deps
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build \
+            gcc-riscv64-linux-gnu g++-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            qemu-system-misc qemu-utils \
+            e2fsprogs util-linux curl tar python3 \
+            bc bison flex libssl-dev libelf-dev cpio rsync
+
+      - name: install emsdk
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.74
+          actions-cache-folder: 'emsdk-cache-3.1.74'
+
+      # ----- caches -----
+      # Recipe-tarball cache. Keyed on the version files of each
+      # recipe so a bump invalidates exactly what changed, nothing
+      # else. The user-cache (~/.cache/yaafc-3rdparty) holds source
+      # tarballs (linux-7.0.tar.gz, opensbi-v1.4.tar.gz) — those
+      # don't change unless the version bumps.
+      - name: cache 3rdparty tarballs (~/.cache/yaafc-3rdparty)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/yaafc-3rdparty
+          key: yaafc-3rdparty-cache-v1-${{ hashFiles('build-tools/3rdparty/*/version', 'build-tools/3rdparty/*/_build.sh', 'build-tools/3rdparty/linux/linux-kernel-*.config') }}
+          restore-keys: |
+            yaafc-3rdparty-cache-v1-
+
+      # Built 3rdparty outputs (already extracted, ready to use).
+      # Same cache key as above — if the user-cache hits, this hits
+      # too and we skip the actual build step.
+      - name: cache built 3rdparty (build-yemu-release/3rdparty + 3rdparty-cache)
+        uses: actions/cache@v4
+        with:
+          path: |
+            build-yemu-release/3rdparty
+            build-yemu-release/3rdparty-cache
+          key: yaafc-yemu-3rdparty-build-v1-${{ hashFiles('build-tools/3rdparty/*/version', 'build-tools/3rdparty/*/_build.sh', 'build-tools/3rdparty/linux/linux-kernel-*.config') }}
+
+      # ----- yaafc host + cross builds -----
+      - name: build yaafc host (build-desktop-release)
+        run: make build-desktop-release
+
+      - name: build yaafc riscv64 (build-linux-riscv64-release)
+        run: make build-linux-riscv64-release
+
+      - name: stage build-deploy/
+        run: make build-deploy
+
+      # ----- yemu rootfs (this triggers the local linux+opensbi recipes
+      #       AND fetches alpine minirootfs from alpinelinux.org) -----
+      - name: bake yemu rootfs
+        run: |
+          # sudo on GitHub-hosted runners is passwordless for the
+          # runner user — losetup + mount work without prompting.
+          make build-yemu-release
+
+      - name: shrink alpine-rootfs.img
+        run: |
+          # The image was created with truncate -s ${DISK_MIB} MiB; if
+          # the actual content is smaller we can shrink to fit and
+          # keep the deployed asset small.
+          IMG=build-yemu-release/alpine-rootfs.img
+          sudo e2fsck -fy "$IMG"      || true
+          sudo resize2fs -M "$IMG"    || true
+          # Truncate trailing zero pages so the wire size matches the
+          # actual ext4 footprint.
+          BLOCKS=$(sudo dumpe2fs -h "$IMG" 2>/dev/null \
+                   | awk '/Block count/   {print $3}')
+          BSIZE=$(sudo  dumpe2fs -h "$IMG" 2>/dev/null \
+                   | awk '/Block size/    {print $3}')
+          SIZE=$(( BLOCKS * BSIZE ))
+          echo "shrinking to ${SIZE} bytes (${BLOCKS} blocks @ ${BSIZE}B)"
+          truncate -s "$SIZE" "$IMG"
+          ls -lh "$IMG"
+
+      # ----- webasm bundle -----
+      - name: build wasm bundle
+        run: make build-webasm-yemu-release
+
+      - name: list deploy contents
+        run: |
+          du -sh build-webasm-yemu-release/
+          ls -lh build-webasm-yemu-release/
+          ls -lh build-webasm-yemu-release/assets/
+
+      # ----- Pages deploy -----
+      - uses: actions/configure-pages@v5
+
+      - name: upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build-webasm-yemu-release
+
+  deploy:
+    name: deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

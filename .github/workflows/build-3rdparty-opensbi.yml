@@ -1,0 +1,63 @@
+name: Build 3rdparty — opensbi
+
+# RISC-V SBI firmware (opensbi-fw_jump.elf + opensbi-fw_dynamic.bin).
+# Platform-independent — RISC-V binary regardless of build host.
+# Triggered on `lib-opensbi-<version>` tags. Version source of truth:
+# build-tools/3rdparty/opensbi/version.
+
+on:
+  push:
+    tags:
+      - 'lib-opensbi-*'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      tag:     ${{ steps.read.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: read
+        run: |
+          set -euo pipefail
+          V="$(tr -d '[:space:]' < build-tools/3rdparty/opensbi/version)"
+          [ -n "$V" ] || { echo "version file is empty" >&2; exit 1; }
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            REF="${GITHUB_REF#refs/tags/}"
+            EXPECT="lib-opensbi-$V"
+            if [ "$REF" != "$EXPECT" ]; then
+              echo "tag $REF does not match version file ($EXPECT)" >&2
+              exit 1
+            fi
+          fi
+          echo "version=$V"     >> "$GITHUB_OUTPUT"
+          echo "tag=lib-opensbi-$V" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install build deps
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            build-essential curl tar \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
+      - name: build opensbi tarball
+        run: |
+          mkdir -p out
+          OUTPUT_DIR="$PWD/out" \
+          CACHE_DIR="$PWD/.cache" \
+          WORK_DIR="$PWD/.work" \
+            bash build-tools/3rdparty/opensbi/_build.sh
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.resolve.outputs.tag }}
+          files: out/opensbi-*.tar.gz
+          fail_on_unmatched_files: true
