@@ -6,9 +6,9 @@
 
 #include <yaafc/plugin/password_authn/password_authn.h>
 
-typedef struct yaafc_int_result (*password_authn_store_register_fn)(struct ctx *, struct object *, uint32_t, int64_t);
-typedef struct yaafc_int_result (*password_authn_store_authenticate_fn)(struct ctx *, struct object *, uint32_t, int64_t);
-typedef struct yaafc_int_result (*password_authn_store_change_password_fn)(struct ctx *, struct object *, uint32_t, int64_t);
-typedef struct yaafc_size_result (*password_authn_store_count_registered_fn)(struct ctx *, struct object *);
+typedef struct yaafc_int_result (*password_authn_store_register_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t, int64_t);
+typedef struct yaafc_int_result (*password_authn_store_authenticate_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t, int64_t);
+typedef struct yaafc_int_result (*password_authn_store_change_password_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t, int64_t);
+typedef struct yaafc_size_result (*password_authn_store_count_registered_fn)(struct ctx *, struct object *, struct yheaders *);
 
 #endif

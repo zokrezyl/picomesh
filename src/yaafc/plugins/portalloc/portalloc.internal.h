@@ -6,8 +6,8 @@
 
 #include <yaafc/plugin/portalloc/portalloc.h>
 
-typedef struct yaafc_uint32_result (*portalloc_store_allocate_fn)(struct ctx *, struct object *, uint32_t);
-typedef struct yaafc_int_result (*portalloc_store_release_fn)(struct ctx *, struct object *, uint32_t);
-typedef struct yaafc_size_result (*portalloc_store_count_used_fn)(struct ctx *, struct object *);
+typedef struct yaafc_uint32_result (*portalloc_store_allocate_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
+typedef struct yaafc_int_result (*portalloc_store_release_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
+typedef struct yaafc_size_result (*portalloc_store_count_used_fn)(struct ctx *, struct object *, struct yheaders *);
 
 #endif

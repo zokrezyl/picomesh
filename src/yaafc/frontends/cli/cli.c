@@ -170,9 +170,9 @@ int yaafc_cli_dispatch(struct yaafc_engine *e)
 
     struct yjson_writer *w = yjson_writer_new();
     char err[256] = {0};
-    /* Local dispatch: the cli created the object in-process, so the
-     * invoker gets a NULL ctx and the public stub calls the impl. */
-    int rc = fn(NULL, obj, yjson_doc_root(adoc), w, err, sizeof(err));
+    /* Local dispatch: the cli owns the object in-process — NULL ctx and
+     * NULL headers. */
+    int rc = fn(NULL, obj, NULL, yjson_doc_root(adoc), w, err, sizeof(err));
     if (rc != 0) {
         fprintf(stderr, "cli: %s\n", err[0] ? err : "invoke failed");
     } else {

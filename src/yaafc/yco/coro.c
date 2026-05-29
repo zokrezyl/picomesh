@@ -96,11 +96,20 @@ void yaafc_coro_yield(void)
 void yaafc_coro_resume(struct yaafc_coro *coro)
 {
     if (!coro || coro->finished) return;
+    /* Save and restore the caller's "current" around the switch so that
+     * resume works when called from WITHIN another coroutine (nested
+     * resume) — e.g. a cooperative lock handing off to the next waiter.
+     * The resumed coro clears current_slot to NULL when it yields/
+     * finishes; without restoring here, the nesting caller would keep
+     * running with current_slot == NULL and its next yloop_read/write
+     * would latch the wrong (NULL) coro, losing the wakeup. When resume
+     * is called from the loop's main stack `prev` is NULL, so existing
+     * callers are unaffected. */
+    struct yaafc_coro *prev = *current_slot();
     coro->resumer = co_active();
     *current_slot() = coro;
     co_switch(coro->thread);
-    /* When the coroutine yields back, current_slot is NULL (coroutine
-     * cleared it on yield/finish). */
+    *current_slot() = prev;
 }
 
 void yaafc_coro_destroy(struct yaafc_coro *coro)

@@ -39,7 +39,7 @@ static struct portalloc_store_data *pa(struct object *obj)
 }
 
 YAAFC_CLASS_ANNOTATE("override@portalloc:store:store_allocate")
-struct yaafc_uint32_result portalloc_store_allocate_impl(struct ctx *ctx, struct object *obj,
+struct yaafc_uint32_result portalloc_store_allocate_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                          uint32_t service_id)
 {
     (void)ctx;
@@ -72,7 +72,7 @@ struct yaafc_uint32_result portalloc_store_allocate_impl(struct ctx *ctx, struct
 }
 
 YAAFC_CLASS_ANNOTATE("override@portalloc:store:store_release")
-struct yaafc_int_result portalloc_store_release_impl(struct ctx *ctx, struct object *obj,
+struct yaafc_int_result portalloc_store_release_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                      uint32_t port)
 {
     (void)ctx;
@@ -89,7 +89,7 @@ struct yaafc_int_result portalloc_store_release_impl(struct ctx *ctx, struct obj
 }
 
 YAAFC_CLASS_ANNOTATE("override@portalloc:store:store_count_used")
-struct yaafc_size_result portalloc_store_count_used_impl(struct ctx *ctx, struct object *obj)
+struct yaafc_size_result portalloc_store_count_used_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
     (void)ctx;
     return YAAFC_OK(yaafc_size, pa(obj)->count);

@@ -8,6 +8,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: owner_id
         type: uint32_t
       - name: owner_name
@@ -23,6 +25,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: repo_id
         type: uint32_t
   - slot: store_owner_of
@@ -34,6 +38,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: repo_id
         type: uint32_t
   - slot: store_count_for_owner
@@ -45,6 +51,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: owner_id
         type: uint32_t
   - slot: store_count_total
@@ -56,6 +64,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
 classes:
   - name: store
     domain: git_repo

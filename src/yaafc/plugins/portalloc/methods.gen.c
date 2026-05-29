@@ -2,11 +2,13 @@
 #include "portalloc.internal.h"
 #include <yaafc/ycore/result.h>
 #include <yaafc/ycore/ytrace.h>
+#include <yaafc/ycore/yspan.h>
 #include <yaafc/yclass/rpc.h>
+#include <yaafc/yclass/yheaders.h>
 #include <stdint.h>
 #include <string.h>
 
-struct yaafc_uint32_result portalloc_store_allocate(struct ctx * ctx, struct object * obj, uint32_t service_id)
+struct yaafc_uint32_result portalloc_store_allocate(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t service_id)
 {
     static method_slot _slot = METHOD_SLOT_UNDEFINED;
     if (_slot == METHOD_SLOT_UNDEFINED) {
@@ -20,28 +22,23 @@ struct yaafc_uint32_result portalloc_store_allocate(struct ctx * ctx, struct obj
     if (!obj) return YAAFC_ERR(yaafc_uint32, "portalloc_store_allocate: NULL object");
 
     struct ctx *_s = ctx;
-    if (_s && _s->session) {
-        uint32_t _rid = rpc_session_ensure_remote_id(_s->session, _slot);
+    if (_s && _s->peer) {
+        uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return YAAFC_ERR(yaafc_uint32, "portalloc_store_allocate: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
-        /* Caller-auth prefix: every backend yrpc body starts with the
-         * (uid, sid) of the gateway-resolved caller. The skel pops
-         * these into its local ctx before unpacking args. (For the
-         * HTTP /_rpc shim, the gateway translates Cookie/Bearer to
-         * (uid, sid) and emits the exact same yrpc body downstream.) */
+        /* Headers section: the FRAMEWORK serializes the request-header
+         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * of the packed business args. The skel parses it straight back
+         * into the `hdrs` argument. The codegen never inspects the
+         * contents — it just lets the framework (de)serialize the bag. */
         {
-            uint32_t _u = _s->uid, _i = _s->sid;
-            if (_off + 8 > sizeof(_a))
-                return YAAFC_ERR(yaafc_uint32, "portalloc_store_allocate: pack overflow");
-            memcpy(_a + _off, &_u, 4); _off += 4;
-            memcpy(_a + _off, &_i, 4); _off += 4;
+            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            if (_hn == 0)
+                return YAAFC_ERR(yaafc_uint32, "portalloc_store_allocate: header serialize overflow");
+            _off = _hn;
         }
-        /* Also stamp the session in case it's HTTP-mode (the gateway's
-         * outbound, if it ever needs to talk HTTP). Cheap no-op for
-         * TCP-mode sessions. */
-        rpc_session_set_auth(_s->session, _s->uid, _s->sid);
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -51,9 +48,15 @@ struct yaafc_uint32_result portalloc_store_allocate(struct ctx * ctx, struct obj
         if (_off + sizeof(service_id) > sizeof(_a))
             return YAAFC_ERR(yaafc_uint32, "portalloc_store_allocate: pack overflow");
         memcpy(_a + _off, &service_id, sizeof(service_id)); _off += sizeof(service_id);
+        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
+        if (!span_trace) span_trace = "-";
+        double span_start = yaafc_ytime_monotonic_sec();
         uint8_t _wbuf[1 + 4 + 256];
-        size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
+        size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
+        double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+        ydebug("span trace=%s op=rpc.portalloc_store_allocate dur_us=%.0f", span_trace, span_us);
+        yspan_record("rpc.portalloc_store_allocate", span_us);
         if (_wn < 1) return YAAFC_ERR(yaafc_uint32, "portalloc_store_allocate: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -71,11 +74,11 @@ struct yaafc_uint32_result portalloc_store_allocate(struct ctx * ctx, struct obj
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return YAAFC_ERR(yaafc_uint32, "portalloc_store_allocate: no impl on this class");
-        return ((portalloc_store_allocate_fn)fn)(ctx, obj, service_id);
+        return ((portalloc_store_allocate_fn)fn)(ctx, obj, hdrs, service_id);
     }
 }
 
-struct yaafc_int_result portalloc_store_release(struct ctx * ctx, struct object * obj, uint32_t port)
+struct yaafc_int_result portalloc_store_release(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t port)
 {
     static method_slot _slot = METHOD_SLOT_UNDEFINED;
     if (_slot == METHOD_SLOT_UNDEFINED) {
@@ -89,28 +92,23 @@ struct yaafc_int_result portalloc_store_release(struct ctx * ctx, struct object 
     if (!obj) return YAAFC_ERR(yaafc_int, "portalloc_store_release: NULL object");
 
     struct ctx *_s = ctx;
-    if (_s && _s->session) {
-        uint32_t _rid = rpc_session_ensure_remote_id(_s->session, _slot);
+    if (_s && _s->peer) {
+        uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return YAAFC_ERR(yaafc_int, "portalloc_store_release: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
-        /* Caller-auth prefix: every backend yrpc body starts with the
-         * (uid, sid) of the gateway-resolved caller. The skel pops
-         * these into its local ctx before unpacking args. (For the
-         * HTTP /_rpc shim, the gateway translates Cookie/Bearer to
-         * (uid, sid) and emits the exact same yrpc body downstream.) */
+        /* Headers section: the FRAMEWORK serializes the request-header
+         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * of the packed business args. The skel parses it straight back
+         * into the `hdrs` argument. The codegen never inspects the
+         * contents — it just lets the framework (de)serialize the bag. */
         {
-            uint32_t _u = _s->uid, _i = _s->sid;
-            if (_off + 8 > sizeof(_a))
-                return YAAFC_ERR(yaafc_int, "portalloc_store_release: pack overflow");
-            memcpy(_a + _off, &_u, 4); _off += 4;
-            memcpy(_a + _off, &_i, 4); _off += 4;
+            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            if (_hn == 0)
+                return YAAFC_ERR(yaafc_int, "portalloc_store_release: header serialize overflow");
+            _off = _hn;
         }
-        /* Also stamp the session in case it's HTTP-mode (the gateway's
-         * outbound, if it ever needs to talk HTTP). Cheap no-op for
-         * TCP-mode sessions. */
-        rpc_session_set_auth(_s->session, _s->uid, _s->sid);
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -120,9 +118,15 @@ struct yaafc_int_result portalloc_store_release(struct ctx * ctx, struct object 
         if (_off + sizeof(port) > sizeof(_a))
             return YAAFC_ERR(yaafc_int, "portalloc_store_release: pack overflow");
         memcpy(_a + _off, &port, sizeof(port)); _off += sizeof(port);
+        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
+        if (!span_trace) span_trace = "-";
+        double span_start = yaafc_ytime_monotonic_sec();
         uint8_t _wbuf[1 + 4 + 256];
-        size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
+        size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
+        double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+        ydebug("span trace=%s op=rpc.portalloc_store_release dur_us=%.0f", span_trace, span_us);
+        yspan_record("rpc.portalloc_store_release", span_us);
         if (_wn < 1) return YAAFC_ERR(yaafc_int, "portalloc_store_release: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -140,11 +144,11 @@ struct yaafc_int_result portalloc_store_release(struct ctx * ctx, struct object 
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return YAAFC_ERR(yaafc_int, "portalloc_store_release: no impl on this class");
-        return ((portalloc_store_release_fn)fn)(ctx, obj, port);
+        return ((portalloc_store_release_fn)fn)(ctx, obj, hdrs, port);
     }
 }
 
-struct yaafc_size_result portalloc_store_count_used(struct ctx * ctx, struct object * obj)
+struct yaafc_size_result portalloc_store_count_used(struct ctx * ctx, struct object * obj, struct yheaders * hdrs)
 {
     static method_slot _slot = METHOD_SLOT_UNDEFINED;
     if (_slot == METHOD_SLOT_UNDEFINED) {
@@ -158,37 +162,38 @@ struct yaafc_size_result portalloc_store_count_used(struct ctx * ctx, struct obj
     if (!obj) return YAAFC_ERR(yaafc_size, "portalloc_store_count_used: NULL object");
 
     struct ctx *_s = ctx;
-    if (_s && _s->session) {
-        uint32_t _rid = rpc_session_ensure_remote_id(_s->session, _slot);
+    if (_s && _s->peer) {
+        uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return YAAFC_ERR(yaafc_size, "portalloc_store_count_used: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
-        /* Caller-auth prefix: every backend yrpc body starts with the
-         * (uid, sid) of the gateway-resolved caller. The skel pops
-         * these into its local ctx before unpacking args. (For the
-         * HTTP /_rpc shim, the gateway translates Cookie/Bearer to
-         * (uid, sid) and emits the exact same yrpc body downstream.) */
+        /* Headers section: the FRAMEWORK serializes the request-header
+         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * of the packed business args. The skel parses it straight back
+         * into the `hdrs` argument. The codegen never inspects the
+         * contents — it just lets the framework (de)serialize the bag. */
         {
-            uint32_t _u = _s->uid, _i = _s->sid;
-            if (_off + 8 > sizeof(_a))
-                return YAAFC_ERR(yaafc_size, "portalloc_store_count_used: pack overflow");
-            memcpy(_a + _off, &_u, 4); _off += 4;
-            memcpy(_a + _off, &_i, 4); _off += 4;
+            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            if (_hn == 0)
+                return YAAFC_ERR(yaafc_size, "portalloc_store_count_used: header serialize overflow");
+            _off = _hn;
         }
-        /* Also stamp the session in case it's HTTP-mode (the gateway's
-         * outbound, if it ever needs to talk HTTP). Cheap no-op for
-         * TCP-mode sessions. */
-        rpc_session_set_auth(_s->session, _s->uid, _s->sid);
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
                 return YAAFC_ERR(yaafc_size, "portalloc_store_count_used: pack overflow");
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
+        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
+        if (!span_trace) span_trace = "-";
+        double span_start = yaafc_ytime_monotonic_sec();
         uint8_t _wbuf[1 + 4 + 256];
-        size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
+        size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
+        double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+        ydebug("span trace=%s op=rpc.portalloc_store_count_used dur_us=%.0f", span_trace, span_us);
+        yspan_record("rpc.portalloc_store_count_used", span_us);
         if (_wn < 1) return YAAFC_ERR(yaafc_size, "portalloc_store_count_used: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -206,7 +211,7 @@ struct yaafc_size_result portalloc_store_count_used(struct ctx * ctx, struct obj
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return YAAFC_ERR(yaafc_size, "portalloc_store_count_used: no impl on this class");
-        return ((portalloc_store_count_used_fn)fn)(ctx, obj);
+        return ((portalloc_store_count_used_fn)fn)(ctx, obj, hdrs);
     }
 }
 

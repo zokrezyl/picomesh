@@ -8,6 +8,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: client_id
         type: uint32_t
       - name: secret_id
@@ -21,6 +23,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: code
         type: uint32_t
       - name: user_id
@@ -34,6 +38,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: code
         type: uint32_t
   - slot: store_count_codes
@@ -45,6 +51,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
 classes:
   - name: store
     domain: github_authn

@@ -10,6 +10,7 @@
 struct yaafc_int_result;
 struct yaafc_size_result;
 struct yaafc_uint32_result;
+struct yheaders;
 struct object_ptr_result;
 struct class_ptr_result;
 
@@ -20,9 +21,9 @@ struct class_ptr_result session_store_class_get(void);
 struct object_ptr_result session_store_create(struct ctx *ctx);
 
 /* ---- methods ---- */
-struct yaafc_uint32_result session_store_start(struct ctx * ctx, struct object * obj, uint32_t user_id, uint32_t provider_id);
-struct yaafc_uint32_result session_store_lookup(struct ctx * ctx, struct object * obj, uint32_t sid);
-struct yaafc_int_result session_store_destroy(struct ctx * ctx, struct object * obj, uint32_t sid);
-struct yaafc_size_result session_store_count_active(struct ctx * ctx, struct object * obj);
+struct yaafc_uint32_result session_store_start(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t user_id, uint32_t provider_id);
+struct yaafc_uint32_result session_store_lookup(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t sid);
+struct yaafc_int_result session_store_destroy(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t sid);
+struct yaafc_size_result session_store_count_active(struct ctx * ctx, struct object * obj, struct yheaders * hdrs);
 
 #endif

@@ -2,11 +2,13 @@
 #include "personal_access_tokens.internal.h"
 #include <yaafc/ycore/result.h>
 #include <yaafc/ycore/ytrace.h>
+#include <yaafc/ycore/yspan.h>
 #include <yaafc/yclass/rpc.h>
+#include <yaafc/yclass/yheaders.h>
 #include <stdint.h>
 #include <string.h>
 
-struct yaafc_uint32_result personal_access_tokens_store_mint(struct ctx * ctx, struct object * obj, uint32_t user_id)
+struct yaafc_uint32_result personal_access_tokens_store_mint(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t user_id)
 {
     static method_slot _slot = METHOD_SLOT_UNDEFINED;
     if (_slot == METHOD_SLOT_UNDEFINED) {
@@ -20,28 +22,23 @@ struct yaafc_uint32_result personal_access_tokens_store_mint(struct ctx * ctx, s
     if (!obj) return YAAFC_ERR(yaafc_uint32, "personal_access_tokens_store_mint: NULL object");
 
     struct ctx *_s = ctx;
-    if (_s && _s->session) {
-        uint32_t _rid = rpc_session_ensure_remote_id(_s->session, _slot);
+    if (_s && _s->peer) {
+        uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return YAAFC_ERR(yaafc_uint32, "personal_access_tokens_store_mint: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
-        /* Caller-auth prefix: every backend yrpc body starts with the
-         * (uid, sid) of the gateway-resolved caller. The skel pops
-         * these into its local ctx before unpacking args. (For the
-         * HTTP /_rpc shim, the gateway translates Cookie/Bearer to
-         * (uid, sid) and emits the exact same yrpc body downstream.) */
+        /* Headers section: the FRAMEWORK serializes the request-header
+         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * of the packed business args. The skel parses it straight back
+         * into the `hdrs` argument. The codegen never inspects the
+         * contents — it just lets the framework (de)serialize the bag. */
         {
-            uint32_t _u = _s->uid, _i = _s->sid;
-            if (_off + 8 > sizeof(_a))
-                return YAAFC_ERR(yaafc_uint32, "personal_access_tokens_store_mint: pack overflow");
-            memcpy(_a + _off, &_u, 4); _off += 4;
-            memcpy(_a + _off, &_i, 4); _off += 4;
+            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            if (_hn == 0)
+                return YAAFC_ERR(yaafc_uint32, "personal_access_tokens_store_mint: header serialize overflow");
+            _off = _hn;
         }
-        /* Also stamp the session in case it's HTTP-mode (the gateway's
-         * outbound, if it ever needs to talk HTTP). Cheap no-op for
-         * TCP-mode sessions. */
-        rpc_session_set_auth(_s->session, _s->uid, _s->sid);
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -51,9 +48,15 @@ struct yaafc_uint32_result personal_access_tokens_store_mint(struct ctx * ctx, s
         if (_off + sizeof(user_id) > sizeof(_a))
             return YAAFC_ERR(yaafc_uint32, "personal_access_tokens_store_mint: pack overflow");
         memcpy(_a + _off, &user_id, sizeof(user_id)); _off += sizeof(user_id);
+        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
+        if (!span_trace) span_trace = "-";
+        double span_start = yaafc_ytime_monotonic_sec();
         uint8_t _wbuf[1 + 4 + 256];
-        size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
+        size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
+        double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+        ydebug("span trace=%s op=rpc.personal_access_tokens_store_mint dur_us=%.0f", span_trace, span_us);
+        yspan_record("rpc.personal_access_tokens_store_mint", span_us);
         if (_wn < 1) return YAAFC_ERR(yaafc_uint32, "personal_access_tokens_store_mint: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -71,11 +74,11 @@ struct yaafc_uint32_result personal_access_tokens_store_mint(struct ctx * ctx, s
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return YAAFC_ERR(yaafc_uint32, "personal_access_tokens_store_mint: no impl on this class");
-        return ((personal_access_tokens_store_mint_fn)fn)(ctx, obj, user_id);
+        return ((personal_access_tokens_store_mint_fn)fn)(ctx, obj, hdrs, user_id);
     }
 }
 
-struct yaafc_uint32_result personal_access_tokens_store_lookup(struct ctx * ctx, struct object * obj, uint32_t pat_id)
+struct yaafc_uint32_result personal_access_tokens_store_lookup(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t pat_id)
 {
     static method_slot _slot = METHOD_SLOT_UNDEFINED;
     if (_slot == METHOD_SLOT_UNDEFINED) {
@@ -89,28 +92,23 @@ struct yaafc_uint32_result personal_access_tokens_store_lookup(struct ctx * ctx,
     if (!obj) return YAAFC_ERR(yaafc_uint32, "personal_access_tokens_store_lookup: NULL object");
 
     struct ctx *_s = ctx;
-    if (_s && _s->session) {
-        uint32_t _rid = rpc_session_ensure_remote_id(_s->session, _slot);
+    if (_s && _s->peer) {
+        uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return YAAFC_ERR(yaafc_uint32, "personal_access_tokens_store_lookup: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
-        /* Caller-auth prefix: every backend yrpc body starts with the
-         * (uid, sid) of the gateway-resolved caller. The skel pops
-         * these into its local ctx before unpacking args. (For the
-         * HTTP /_rpc shim, the gateway translates Cookie/Bearer to
-         * (uid, sid) and emits the exact same yrpc body downstream.) */
+        /* Headers section: the FRAMEWORK serializes the request-header
+         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * of the packed business args. The skel parses it straight back
+         * into the `hdrs` argument. The codegen never inspects the
+         * contents — it just lets the framework (de)serialize the bag. */
         {
-            uint32_t _u = _s->uid, _i = _s->sid;
-            if (_off + 8 > sizeof(_a))
-                return YAAFC_ERR(yaafc_uint32, "personal_access_tokens_store_lookup: pack overflow");
-            memcpy(_a + _off, &_u, 4); _off += 4;
-            memcpy(_a + _off, &_i, 4); _off += 4;
+            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            if (_hn == 0)
+                return YAAFC_ERR(yaafc_uint32, "personal_access_tokens_store_lookup: header serialize overflow");
+            _off = _hn;
         }
-        /* Also stamp the session in case it's HTTP-mode (the gateway's
-         * outbound, if it ever needs to talk HTTP). Cheap no-op for
-         * TCP-mode sessions. */
-        rpc_session_set_auth(_s->session, _s->uid, _s->sid);
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -120,9 +118,15 @@ struct yaafc_uint32_result personal_access_tokens_store_lookup(struct ctx * ctx,
         if (_off + sizeof(pat_id) > sizeof(_a))
             return YAAFC_ERR(yaafc_uint32, "personal_access_tokens_store_lookup: pack overflow");
         memcpy(_a + _off, &pat_id, sizeof(pat_id)); _off += sizeof(pat_id);
+        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
+        if (!span_trace) span_trace = "-";
+        double span_start = yaafc_ytime_monotonic_sec();
         uint8_t _wbuf[1 + 4 + 256];
-        size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
+        size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
+        double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+        ydebug("span trace=%s op=rpc.personal_access_tokens_store_lookup dur_us=%.0f", span_trace, span_us);
+        yspan_record("rpc.personal_access_tokens_store_lookup", span_us);
         if (_wn < 1) return YAAFC_ERR(yaafc_uint32, "personal_access_tokens_store_lookup: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -140,11 +144,11 @@ struct yaafc_uint32_result personal_access_tokens_store_lookup(struct ctx * ctx,
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return YAAFC_ERR(yaafc_uint32, "personal_access_tokens_store_lookup: no impl on this class");
-        return ((personal_access_tokens_store_lookup_fn)fn)(ctx, obj, pat_id);
+        return ((personal_access_tokens_store_lookup_fn)fn)(ctx, obj, hdrs, pat_id);
     }
 }
 
-struct yaafc_int_result personal_access_tokens_store_revoke(struct ctx * ctx, struct object * obj, uint32_t pat_id)
+struct yaafc_int_result personal_access_tokens_store_revoke(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t pat_id)
 {
     static method_slot _slot = METHOD_SLOT_UNDEFINED;
     if (_slot == METHOD_SLOT_UNDEFINED) {
@@ -158,28 +162,23 @@ struct yaafc_int_result personal_access_tokens_store_revoke(struct ctx * ctx, st
     if (!obj) return YAAFC_ERR(yaafc_int, "personal_access_tokens_store_revoke: NULL object");
 
     struct ctx *_s = ctx;
-    if (_s && _s->session) {
-        uint32_t _rid = rpc_session_ensure_remote_id(_s->session, _slot);
+    if (_s && _s->peer) {
+        uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return YAAFC_ERR(yaafc_int, "personal_access_tokens_store_revoke: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
-        /* Caller-auth prefix: every backend yrpc body starts with the
-         * (uid, sid) of the gateway-resolved caller. The skel pops
-         * these into its local ctx before unpacking args. (For the
-         * HTTP /_rpc shim, the gateway translates Cookie/Bearer to
-         * (uid, sid) and emits the exact same yrpc body downstream.) */
+        /* Headers section: the FRAMEWORK serializes the request-header
+         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * of the packed business args. The skel parses it straight back
+         * into the `hdrs` argument. The codegen never inspects the
+         * contents — it just lets the framework (de)serialize the bag. */
         {
-            uint32_t _u = _s->uid, _i = _s->sid;
-            if (_off + 8 > sizeof(_a))
-                return YAAFC_ERR(yaafc_int, "personal_access_tokens_store_revoke: pack overflow");
-            memcpy(_a + _off, &_u, 4); _off += 4;
-            memcpy(_a + _off, &_i, 4); _off += 4;
+            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            if (_hn == 0)
+                return YAAFC_ERR(yaafc_int, "personal_access_tokens_store_revoke: header serialize overflow");
+            _off = _hn;
         }
-        /* Also stamp the session in case it's HTTP-mode (the gateway's
-         * outbound, if it ever needs to talk HTTP). Cheap no-op for
-         * TCP-mode sessions. */
-        rpc_session_set_auth(_s->session, _s->uid, _s->sid);
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -189,9 +188,15 @@ struct yaafc_int_result personal_access_tokens_store_revoke(struct ctx * ctx, st
         if (_off + sizeof(pat_id) > sizeof(_a))
             return YAAFC_ERR(yaafc_int, "personal_access_tokens_store_revoke: pack overflow");
         memcpy(_a + _off, &pat_id, sizeof(pat_id)); _off += sizeof(pat_id);
+        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
+        if (!span_trace) span_trace = "-";
+        double span_start = yaafc_ytime_monotonic_sec();
         uint8_t _wbuf[1 + 4 + 256];
-        size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
+        size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
+        double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+        ydebug("span trace=%s op=rpc.personal_access_tokens_store_revoke dur_us=%.0f", span_trace, span_us);
+        yspan_record("rpc.personal_access_tokens_store_revoke", span_us);
         if (_wn < 1) return YAAFC_ERR(yaafc_int, "personal_access_tokens_store_revoke: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -209,11 +214,11 @@ struct yaafc_int_result personal_access_tokens_store_revoke(struct ctx * ctx, st
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return YAAFC_ERR(yaafc_int, "personal_access_tokens_store_revoke: no impl on this class");
-        return ((personal_access_tokens_store_revoke_fn)fn)(ctx, obj, pat_id);
+        return ((personal_access_tokens_store_revoke_fn)fn)(ctx, obj, hdrs, pat_id);
     }
 }
 
-struct yaafc_size_result personal_access_tokens_store_list_for_user(struct ctx * ctx, struct object * obj, uint32_t user_id)
+struct yaafc_size_result personal_access_tokens_store_list_for_user(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t user_id)
 {
     static method_slot _slot = METHOD_SLOT_UNDEFINED;
     if (_slot == METHOD_SLOT_UNDEFINED) {
@@ -227,28 +232,23 @@ struct yaafc_size_result personal_access_tokens_store_list_for_user(struct ctx *
     if (!obj) return YAAFC_ERR(yaafc_size, "personal_access_tokens_store_list_for_user: NULL object");
 
     struct ctx *_s = ctx;
-    if (_s && _s->session) {
-        uint32_t _rid = rpc_session_ensure_remote_id(_s->session, _slot);
+    if (_s && _s->peer) {
+        uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return YAAFC_ERR(yaafc_size, "personal_access_tokens_store_list_for_user: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
-        /* Caller-auth prefix: every backend yrpc body starts with the
-         * (uid, sid) of the gateway-resolved caller. The skel pops
-         * these into its local ctx before unpacking args. (For the
-         * HTTP /_rpc shim, the gateway translates Cookie/Bearer to
-         * (uid, sid) and emits the exact same yrpc body downstream.) */
+        /* Headers section: the FRAMEWORK serializes the request-header
+         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * of the packed business args. The skel parses it straight back
+         * into the `hdrs` argument. The codegen never inspects the
+         * contents — it just lets the framework (de)serialize the bag. */
         {
-            uint32_t _u = _s->uid, _i = _s->sid;
-            if (_off + 8 > sizeof(_a))
-                return YAAFC_ERR(yaafc_size, "personal_access_tokens_store_list_for_user: pack overflow");
-            memcpy(_a + _off, &_u, 4); _off += 4;
-            memcpy(_a + _off, &_i, 4); _off += 4;
+            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            if (_hn == 0)
+                return YAAFC_ERR(yaafc_size, "personal_access_tokens_store_list_for_user: header serialize overflow");
+            _off = _hn;
         }
-        /* Also stamp the session in case it's HTTP-mode (the gateway's
-         * outbound, if it ever needs to talk HTTP). Cheap no-op for
-         * TCP-mode sessions. */
-        rpc_session_set_auth(_s->session, _s->uid, _s->sid);
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -258,9 +258,15 @@ struct yaafc_size_result personal_access_tokens_store_list_for_user(struct ctx *
         if (_off + sizeof(user_id) > sizeof(_a))
             return YAAFC_ERR(yaafc_size, "personal_access_tokens_store_list_for_user: pack overflow");
         memcpy(_a + _off, &user_id, sizeof(user_id)); _off += sizeof(user_id);
+        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
+        if (!span_trace) span_trace = "-";
+        double span_start = yaafc_ytime_monotonic_sec();
         uint8_t _wbuf[1 + 4 + 256];
-        size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
+        size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
+        double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+        ydebug("span trace=%s op=rpc.personal_access_tokens_store_list_for_user dur_us=%.0f", span_trace, span_us);
+        yspan_record("rpc.personal_access_tokens_store_list_for_user", span_us);
         if (_wn < 1) return YAAFC_ERR(yaafc_size, "personal_access_tokens_store_list_for_user: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -278,11 +284,11 @@ struct yaafc_size_result personal_access_tokens_store_list_for_user(struct ctx *
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return YAAFC_ERR(yaafc_size, "personal_access_tokens_store_list_for_user: no impl on this class");
-        return ((personal_access_tokens_store_list_for_user_fn)fn)(ctx, obj, user_id);
+        return ((personal_access_tokens_store_list_for_user_fn)fn)(ctx, obj, hdrs, user_id);
     }
 }
 
-struct yaafc_size_result personal_access_tokens_store_count_active(struct ctx * ctx, struct object * obj)
+struct yaafc_size_result personal_access_tokens_store_count_active(struct ctx * ctx, struct object * obj, struct yheaders * hdrs)
 {
     static method_slot _slot = METHOD_SLOT_UNDEFINED;
     if (_slot == METHOD_SLOT_UNDEFINED) {
@@ -296,37 +302,38 @@ struct yaafc_size_result personal_access_tokens_store_count_active(struct ctx * 
     if (!obj) return YAAFC_ERR(yaafc_size, "personal_access_tokens_store_count_active: NULL object");
 
     struct ctx *_s = ctx;
-    if (_s && _s->session) {
-        uint32_t _rid = rpc_session_ensure_remote_id(_s->session, _slot);
+    if (_s && _s->peer) {
+        uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return YAAFC_ERR(yaafc_size, "personal_access_tokens_store_count_active: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
-        /* Caller-auth prefix: every backend yrpc body starts with the
-         * (uid, sid) of the gateway-resolved caller. The skel pops
-         * these into its local ctx before unpacking args. (For the
-         * HTTP /_rpc shim, the gateway translates Cookie/Bearer to
-         * (uid, sid) and emits the exact same yrpc body downstream.) */
+        /* Headers section: the FRAMEWORK serializes the request-header
+         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * of the packed business args. The skel parses it straight back
+         * into the `hdrs` argument. The codegen never inspects the
+         * contents — it just lets the framework (de)serialize the bag. */
         {
-            uint32_t _u = _s->uid, _i = _s->sid;
-            if (_off + 8 > sizeof(_a))
-                return YAAFC_ERR(yaafc_size, "personal_access_tokens_store_count_active: pack overflow");
-            memcpy(_a + _off, &_u, 4); _off += 4;
-            memcpy(_a + _off, &_i, 4); _off += 4;
+            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            if (_hn == 0)
+                return YAAFC_ERR(yaafc_size, "personal_access_tokens_store_count_active: header serialize overflow");
+            _off = _hn;
         }
-        /* Also stamp the session in case it's HTTP-mode (the gateway's
-         * outbound, if it ever needs to talk HTTP). Cheap no-op for
-         * TCP-mode sessions. */
-        rpc_session_set_auth(_s->session, _s->uid, _s->sid);
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
                 return YAAFC_ERR(yaafc_size, "personal_access_tokens_store_count_active: pack overflow");
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
+        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
+        if (!span_trace) span_trace = "-";
+        double span_start = yaafc_ytime_monotonic_sec();
         uint8_t _wbuf[1 + 4 + 256];
-        size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
+        size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
+        double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+        ydebug("span trace=%s op=rpc.personal_access_tokens_store_count_active dur_us=%.0f", span_trace, span_us);
+        yspan_record("rpc.personal_access_tokens_store_count_active", span_us);
         if (_wn < 1) return YAAFC_ERR(yaafc_size, "personal_access_tokens_store_count_active: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -344,7 +351,7 @@ struct yaafc_size_result personal_access_tokens_store_count_active(struct ctx * 
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return YAAFC_ERR(yaafc_size, "personal_access_tokens_store_count_active: no impl on this class");
-        return ((personal_access_tokens_store_count_active_fn)fn)(ctx, obj);
+        return ((personal_access_tokens_store_count_active_fn)fn)(ctx, obj, hdrs);
     }
 }
 

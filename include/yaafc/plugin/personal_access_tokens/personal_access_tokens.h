@@ -10,6 +10,7 @@
 struct yaafc_int_result;
 struct yaafc_size_result;
 struct yaafc_uint32_result;
+struct yheaders;
 struct object_ptr_result;
 struct class_ptr_result;
 
@@ -20,10 +21,10 @@ struct class_ptr_result personal_access_tokens_store_class_get(void);
 struct object_ptr_result personal_access_tokens_store_create(struct ctx *ctx);
 
 /* ---- methods ---- */
-struct yaafc_uint32_result personal_access_tokens_store_mint(struct ctx * ctx, struct object * obj, uint32_t user_id);
-struct yaafc_uint32_result personal_access_tokens_store_lookup(struct ctx * ctx, struct object * obj, uint32_t pat_id);
-struct yaafc_int_result personal_access_tokens_store_revoke(struct ctx * ctx, struct object * obj, uint32_t pat_id);
-struct yaafc_size_result personal_access_tokens_store_list_for_user(struct ctx * ctx, struct object * obj, uint32_t user_id);
-struct yaafc_size_result personal_access_tokens_store_count_active(struct ctx * ctx, struct object * obj);
+struct yaafc_uint32_result personal_access_tokens_store_mint(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t user_id);
+struct yaafc_uint32_result personal_access_tokens_store_lookup(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t pat_id);
+struct yaafc_int_result personal_access_tokens_store_revoke(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t pat_id);
+struct yaafc_size_result personal_access_tokens_store_list_for_user(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t user_id);
+struct yaafc_size_result personal_access_tokens_store_count_active(struct ctx * ctx, struct object * obj, struct yheaders * hdrs);
 
 #endif

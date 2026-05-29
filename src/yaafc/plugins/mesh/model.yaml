@@ -8,6 +8,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: service_id
         type: uint32_t
       - name: port
@@ -21,6 +23,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: service_id
         type: uint32_t
   - slot: store_forget
@@ -32,6 +36,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: service_id
         type: uint32_t
   - slot: store_count_services
@@ -43,6 +49,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
   - slot: store_spawn_yaafc
     domain: mesh
     owning_class: store
@@ -52,6 +60,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: port
         type: uint32_t
   - slot: store_kill_pid
@@ -63,6 +73,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: pid
         type: int32_t
   - slot: store_count_children
@@ -74,6 +86,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
   - slot: store_reconcile_from_config
     domain: mesh
     owning_class: store
@@ -83,6 +97,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
   - slot: store_reconcile
     domain: mesh
     owning_class: store
@@ -92,6 +108,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
 classes:
   - name: store
     domain: mesh

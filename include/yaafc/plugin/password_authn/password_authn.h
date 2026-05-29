@@ -9,6 +9,7 @@
 
 struct yaafc_int_result;
 struct yaafc_size_result;
+struct yheaders;
 struct object_ptr_result;
 struct class_ptr_result;
 
@@ -19,9 +20,9 @@ struct class_ptr_result password_authn_store_class_get(void);
 struct object_ptr_result password_authn_store_create(struct ctx *ctx);
 
 /* ---- methods ---- */
-struct yaafc_int_result password_authn_store_register(struct ctx * ctx, struct object * obj, uint32_t user_id, int64_t hash);
-struct yaafc_int_result password_authn_store_authenticate(struct ctx * ctx, struct object * obj, uint32_t user_id, int64_t hash);
-struct yaafc_int_result password_authn_store_change_password(struct ctx * ctx, struct object * obj, uint32_t user_id, int64_t hash);
-struct yaafc_size_result password_authn_store_count_registered(struct ctx * ctx, struct object * obj);
+struct yaafc_int_result password_authn_store_register(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t user_id, int64_t hash);
+struct yaafc_int_result password_authn_store_authenticate(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t user_id, int64_t hash);
+struct yaafc_int_result password_authn_store_change_password(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t user_id, int64_t hash);
+struct yaafc_size_result password_authn_store_count_registered(struct ctx * ctx, struct object * obj, struct yheaders * hdrs);
 
 #endif

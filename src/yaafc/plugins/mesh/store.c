@@ -61,7 +61,7 @@ static struct mesh_store_data *ms(struct object *obj)
 }
 
 YAAFC_CLASS_ANNOTATE("override@mesh:store:store_register_service")
-struct yaafc_int_result mesh_store_register_service_impl(struct ctx *ctx, struct object *obj,
+struct yaafc_int_result mesh_store_register_service_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                          uint32_t service_id, uint32_t port)
 {
     (void)ctx;
@@ -87,7 +87,7 @@ struct yaafc_int_result mesh_store_register_service_impl(struct ctx *ctx, struct
 }
 
 YAAFC_CLASS_ANNOTATE("override@mesh:store:store_resolve")
-struct yaafc_uint32_result mesh_store_resolve_impl(struct ctx *ctx, struct object *obj,
+struct yaafc_uint32_result mesh_store_resolve_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                    uint32_t service_id)
 {
     (void)ctx;
@@ -101,7 +101,7 @@ struct yaafc_uint32_result mesh_store_resolve_impl(struct ctx *ctx, struct objec
 }
 
 YAAFC_CLASS_ANNOTATE("override@mesh:store:store_forget")
-struct yaafc_int_result mesh_store_forget_impl(struct ctx *ctx, struct object *obj,
+struct yaafc_int_result mesh_store_forget_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                uint32_t service_id)
 {
     (void)ctx;
@@ -117,7 +117,7 @@ struct yaafc_int_result mesh_store_forget_impl(struct ctx *ctx, struct object *o
 }
 
 YAAFC_CLASS_ANNOTATE("override@mesh:store:store_count_services")
-struct yaafc_size_result mesh_store_count_services_impl(struct ctx *ctx, struct object *obj)
+struct yaafc_size_result mesh_store_count_services_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
     (void)ctx;
     return YAAFC_OK(yaafc_size, ms(obj)->count);
@@ -174,7 +174,7 @@ struct mesh_child_cookie {
 static void mesh_child_exit_cb_real(struct yloop_process *p, int64_t exit_status,
                                     int term_signal, void *ud)
 {
-    (void)p; (void)term_signal;
+    (void)p;
     struct mesh_child_cookie *c = ud;
     if (!c) return;
     struct mesh_store_data *d = ms(c->obj);
@@ -183,13 +183,14 @@ static void mesh_child_exit_cb_real(struct yloop_process *p, int64_t exit_status
         d->children[slot].exited = 1;
         d->children[slot].exit_status = (int)exit_status;
         d->child_count--;
-        yinfo("mesh: child pid=%d exited (status=%d)", c->pid, (int)exit_status);
+        yinfo("mesh: child pid=%d exited (status=%d, term_signal=%d)",
+              c->pid, (int)exit_status, term_signal);
     }
     free(c);
 }
 
 YAAFC_CLASS_ANNOTATE("override@mesh:store:store_spawn_yaafc")
-struct yaafc_int_result mesh_store_spawn_yaafc_impl(struct ctx *ctx, struct object *obj,
+struct yaafc_int_result mesh_store_spawn_yaafc_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                     uint32_t port)
 {
     (void)ctx;
@@ -243,7 +244,7 @@ struct yaafc_int_result mesh_store_spawn_yaafc_impl(struct ctx *ctx, struct obje
 }
 
 YAAFC_CLASS_ANNOTATE("override@mesh:store:store_kill_pid")
-struct yaafc_int_result mesh_store_kill_pid_impl(struct ctx *ctx, struct object *obj,
+struct yaafc_int_result mesh_store_kill_pid_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                  int32_t pid)
 {
     (void)ctx;
@@ -258,7 +259,7 @@ struct yaafc_int_result mesh_store_kill_pid_impl(struct ctx *ctx, struct object 
 }
 
 YAAFC_CLASS_ANNOTATE("override@mesh:store:store_count_children")
-struct yaafc_size_result mesh_store_count_children_impl(struct ctx *ctx, struct object *obj)
+struct yaafc_size_result mesh_store_count_children_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
     (void)ctx;
     return YAAFC_OK(yaafc_size, ms(obj)->child_count);
@@ -366,7 +367,8 @@ static int reconcile_walk_cb(const char *service_name,
 
 YAAFC_CLASS_ANNOTATE("override@mesh:store:store_reconcile_from_config")
 struct yaafc_int_result mesh_store_reconcile_from_config_impl(struct ctx *ctx,
-                                                              struct object *obj)
+                                                              struct object *obj,
+                                                              struct yheaders *hdrs)
 {
     (void)ctx;
     struct yaafc_engine *e = yaafc_active_engine();
@@ -388,7 +390,7 @@ struct yaafc_int_result mesh_store_reconcile_from_config_impl(struct ctx *ctx,
 }
 
 YAAFC_CLASS_ANNOTATE("override@mesh:store:store_reconcile")
-struct yaafc_int_result mesh_store_reconcile_impl(struct ctx *ctx, struct object *obj)
+struct yaafc_int_result mesh_store_reconcile_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
     (void)ctx;
     /* No actual orchestration yet — placeholder for the spawn loop. */

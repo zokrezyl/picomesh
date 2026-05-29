@@ -1,9 +1,11 @@
 /* GENERATED — do not edit. */
 #include <yaafc/yclass/rpc.h>
 #include <yaafc/yclass/jinvoke.h>
+#include <yaafc/yclass/yheaders.h>
 #include <yaafc/yjson/yjson.h>
 #include <yaafc/ycore/result.h>
 #include <yaafc/ycore/ytrace.h>
+#include <yaafc/ycore/yspan.h>
 #include <yaafc/yclass/class.h>
 #include "storage.internal.h"
 #include <stdint.h>
@@ -15,12 +17,16 @@ static size_t storage_kv_set_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
-    /* Caller-auth prefix (uid, sid) is the first 8 bytes of every
-     * yrpc CALL body — set by the public stub on the way out. */
     struct ctx _local = {0};
-    if (_off + 8 > _body_len) goto _short_body;
-    memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
-    memcpy(&_local.sid, (const uint8_t *)_body + _off, 4); _off += 4;
+    /* The framework header section is first on every CALL body — parse
+     * it back into the `hdrs` argument before the packed business args. */
+    struct yheaders *_hdrs = NULL;
+    {
+        size_t _hconsumed = 0;
+        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
+        if (!_hdrs) goto _short_body;
+        _off = _hconsumed;
+    }
     struct object *_obj = NULL;
     {
         if (_off + 8 > _body_len) goto _short_body;
@@ -36,7 +42,15 @@ static size_t storage_kv_set_skel(const void *_body, size_t _body_len,
     if (_off + sizeof(_v2) > _body_len) goto _short_body;
     memcpy(&_v2, (const uint8_t *)_body + _off, sizeof(_v2));
     _off += sizeof(_v2);
-    struct yaafc_int_result _r = storage_kv_set(&_local, _obj, _v1, _v2);
+    double span_start = yaafc_ytime_monotonic_sec();
+    struct yaafc_int_result _r = storage_kv_set(&_local, _obj, _hdrs, _v1, _v2);
+    {
+        double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
+        ydebug("span trace=%s op=skel.storage_kv_set dur_us=%.0f", span_trace ? span_trace : "-", span_us);
+        yspan_record("skel.storage_kv_set", span_us);
+    }
+    yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
         yaafc_error_print(stderr, "[skel] storage_kv_set", _r.error);
@@ -59,6 +73,7 @@ static size_t storage_kv_set_skel(const void *_body, size_t _body_len,
     memcpy((uint8_t *)_resp + 1, &_r.value, sizeof(_r.value));
     return 1 + sizeof(_r.value);
 _short_body:
+    yheaders_free(_hdrs);
     if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
     return _resp_max >= 1 ? 1 : 0;
 }
@@ -67,12 +82,16 @@ static size_t storage_kv_get_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
-    /* Caller-auth prefix (uid, sid) is the first 8 bytes of every
-     * yrpc CALL body — set by the public stub on the way out. */
     struct ctx _local = {0};
-    if (_off + 8 > _body_len) goto _short_body;
-    memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
-    memcpy(&_local.sid, (const uint8_t *)_body + _off, 4); _off += 4;
+    /* The framework header section is first on every CALL body — parse
+     * it back into the `hdrs` argument before the packed business args. */
+    struct yheaders *_hdrs = NULL;
+    {
+        size_t _hconsumed = 0;
+        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
+        if (!_hdrs) goto _short_body;
+        _off = _hconsumed;
+    }
     struct object *_obj = NULL;
     {
         if (_off + 8 > _body_len) goto _short_body;
@@ -84,7 +103,15 @@ static size_t storage_kv_get_skel(const void *_body, size_t _body_len,
     if (_off + sizeof(_v1) > _body_len) goto _short_body;
     memcpy(&_v1, (const uint8_t *)_body + _off, sizeof(_v1));
     _off += sizeof(_v1);
-    struct yaafc_int_result _r = storage_kv_get(&_local, _obj, _v1);
+    double span_start = yaafc_ytime_monotonic_sec();
+    struct yaafc_int_result _r = storage_kv_get(&_local, _obj, _hdrs, _v1);
+    {
+        double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
+        ydebug("span trace=%s op=skel.storage_kv_get dur_us=%.0f", span_trace ? span_trace : "-", span_us);
+        yspan_record("skel.storage_kv_get", span_us);
+    }
+    yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
         yaafc_error_print(stderr, "[skel] storage_kv_get", _r.error);
@@ -107,6 +134,7 @@ static size_t storage_kv_get_skel(const void *_body, size_t _body_len,
     memcpy((uint8_t *)_resp + 1, &_r.value, sizeof(_r.value));
     return 1 + sizeof(_r.value);
 _short_body:
+    yheaders_free(_hdrs);
     if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
     return _resp_max >= 1 ? 1 : 0;
 }
@@ -115,12 +143,16 @@ static size_t storage_kv_count_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
-    /* Caller-auth prefix (uid, sid) is the first 8 bytes of every
-     * yrpc CALL body — set by the public stub on the way out. */
     struct ctx _local = {0};
-    if (_off + 8 > _body_len) goto _short_body;
-    memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
-    memcpy(&_local.sid, (const uint8_t *)_body + _off, 4); _off += 4;
+    /* The framework header section is first on every CALL body — parse
+     * it back into the `hdrs` argument before the packed business args. */
+    struct yheaders *_hdrs = NULL;
+    {
+        size_t _hconsumed = 0;
+        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
+        if (!_hdrs) goto _short_body;
+        _off = _hconsumed;
+    }
     struct object *_obj = NULL;
     {
         if (_off + 8 > _body_len) goto _short_body;
@@ -128,7 +160,15 @@ static size_t storage_kv_count_skel(const void *_body, size_t _body_len,
         memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
         _obj = (struct object *)rpc_handle_resolve(_h);
     }
-    struct yaafc_size_result _r = storage_kv_count(&_local, _obj);
+    double span_start = yaafc_ytime_monotonic_sec();
+    struct yaafc_size_result _r = storage_kv_count(&_local, _obj, _hdrs);
+    {
+        double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
+        ydebug("span trace=%s op=skel.storage_kv_count dur_us=%.0f", span_trace ? span_trace : "-", span_us);
+        yspan_record("skel.storage_kv_count", span_us);
+    }
+    yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
         yaafc_error_print(stderr, "[skel] storage_kv_count", _r.error);
@@ -151,6 +191,7 @@ static size_t storage_kv_count_skel(const void *_body, size_t _body_len,
     memcpy((uint8_t *)_resp + 1, &_r.value, sizeof(_r.value));
     return 1 + sizeof(_r.value);
 _short_body:
+    yheaders_free(_hdrs);
     if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
     return _resp_max >= 1 ? 1 : 0;
 }
@@ -159,12 +200,16 @@ static size_t storage_set_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
-    /* Caller-auth prefix (uid, sid) is the first 8 bytes of every
-     * yrpc CALL body — set by the public stub on the way out. */
     struct ctx _local = {0};
-    if (_off + 8 > _body_len) goto _short_body;
-    memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
-    memcpy(&_local.sid, (const uint8_t *)_body + _off, 4); _off += 4;
+    /* The framework header section is first on every CALL body — parse
+     * it back into the `hdrs` argument before the packed business args. */
+    struct yheaders *_hdrs = NULL;
+    {
+        size_t _hconsumed = 0;
+        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
+        if (!_hdrs) goto _short_body;
+        _off = _hconsumed;
+    }
     struct object *_obj = NULL;
     {
         if (_off + 8 > _body_len) goto _short_body;
@@ -196,7 +241,15 @@ static size_t storage_set_skel(const void *_body, size_t _body_len,
     if (_off + sizeof(_v3) > _body_len) goto _short_body;
     memcpy(&_v3, (const uint8_t *)_body + _off, sizeof(_v3));
     _off += sizeof(_v3);
-    struct yaafc_int_result _r = storage_set(&_local, _obj, _s1, _s2, _v3);
+    double span_start = yaafc_ytime_monotonic_sec();
+    struct yaafc_int_result _r = storage_set(&_local, _obj, _hdrs, _s1, _s2, _v3);
+    {
+        double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
+        ydebug("span trace=%s op=skel.storage_set dur_us=%.0f", span_trace ? span_trace : "-", span_us);
+        yspan_record("skel.storage_set", span_us);
+    }
+    yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
         yaafc_error_print(stderr, "[skel] storage_set", _r.error);
@@ -219,6 +272,7 @@ static size_t storage_set_skel(const void *_body, size_t _body_len,
     memcpy((uint8_t *)_resp + 1, &_r.value, sizeof(_r.value));
     return 1 + sizeof(_r.value);
 _short_body:
+    yheaders_free(_hdrs);
     if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
     return _resp_max >= 1 ? 1 : 0;
 }
@@ -227,12 +281,16 @@ static size_t storage_get_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
-    /* Caller-auth prefix (uid, sid) is the first 8 bytes of every
-     * yrpc CALL body — set by the public stub on the way out. */
     struct ctx _local = {0};
-    if (_off + 8 > _body_len) goto _short_body;
-    memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
-    memcpy(&_local.sid, (const uint8_t *)_body + _off, 4); _off += 4;
+    /* The framework header section is first on every CALL body — parse
+     * it back into the `hdrs` argument before the packed business args. */
+    struct yheaders *_hdrs = NULL;
+    {
+        size_t _hconsumed = 0;
+        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
+        if (!_hdrs) goto _short_body;
+        _off = _hconsumed;
+    }
     struct object *_obj = NULL;
     {
         if (_off + 8 > _body_len) goto _short_body;
@@ -260,7 +318,15 @@ static size_t storage_get_skel(const void *_body, size_t _body_len,
         if (_slen) memcpy(_s2, (const uint8_t *)_body + _off, _slen);
         _s2[_slen] = 0; _off += _slen;
     }
-    struct yaafc_int64_result _r = storage_get(&_local, _obj, _s1, _s2);
+    double span_start = yaafc_ytime_monotonic_sec();
+    struct yaafc_int64_result _r = storage_get(&_local, _obj, _hdrs, _s1, _s2);
+    {
+        double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
+        ydebug("span trace=%s op=skel.storage_get dur_us=%.0f", span_trace ? span_trace : "-", span_us);
+        yspan_record("skel.storage_get", span_us);
+    }
+    yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
         yaafc_error_print(stderr, "[skel] storage_get", _r.error);
@@ -283,6 +349,7 @@ static size_t storage_get_skel(const void *_body, size_t _body_len,
     memcpy((uint8_t *)_resp + 1, &_r.value, sizeof(_r.value));
     return 1 + sizeof(_r.value);
 _short_body:
+    yheaders_free(_hdrs);
     if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
     return _resp_max >= 1 ? 1 : 0;
 }
@@ -291,12 +358,16 @@ static size_t storage_exists_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
-    /* Caller-auth prefix (uid, sid) is the first 8 bytes of every
-     * yrpc CALL body — set by the public stub on the way out. */
     struct ctx _local = {0};
-    if (_off + 8 > _body_len) goto _short_body;
-    memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
-    memcpy(&_local.sid, (const uint8_t *)_body + _off, 4); _off += 4;
+    /* The framework header section is first on every CALL body — parse
+     * it back into the `hdrs` argument before the packed business args. */
+    struct yheaders *_hdrs = NULL;
+    {
+        size_t _hconsumed = 0;
+        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
+        if (!_hdrs) goto _short_body;
+        _off = _hconsumed;
+    }
     struct object *_obj = NULL;
     {
         if (_off + 8 > _body_len) goto _short_body;
@@ -324,7 +395,15 @@ static size_t storage_exists_skel(const void *_body, size_t _body_len,
         if (_slen) memcpy(_s2, (const uint8_t *)_body + _off, _slen);
         _s2[_slen] = 0; _off += _slen;
     }
-    struct yaafc_int_result _r = storage_exists(&_local, _obj, _s1, _s2);
+    double span_start = yaafc_ytime_monotonic_sec();
+    struct yaafc_int_result _r = storage_exists(&_local, _obj, _hdrs, _s1, _s2);
+    {
+        double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
+        ydebug("span trace=%s op=skel.storage_exists dur_us=%.0f", span_trace ? span_trace : "-", span_us);
+        yspan_record("skel.storage_exists", span_us);
+    }
+    yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
         yaafc_error_print(stderr, "[skel] storage_exists", _r.error);
@@ -347,6 +426,7 @@ static size_t storage_exists_skel(const void *_body, size_t _body_len,
     memcpy((uint8_t *)_resp + 1, &_r.value, sizeof(_r.value));
     return 1 + sizeof(_r.value);
 _short_body:
+    yheaders_free(_hdrs);
     if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
     return _resp_max >= 1 ? 1 : 0;
 }
@@ -355,12 +435,16 @@ static size_t storage_del_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
-    /* Caller-auth prefix (uid, sid) is the first 8 bytes of every
-     * yrpc CALL body — set by the public stub on the way out. */
     struct ctx _local = {0};
-    if (_off + 8 > _body_len) goto _short_body;
-    memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
-    memcpy(&_local.sid, (const uint8_t *)_body + _off, 4); _off += 4;
+    /* The framework header section is first on every CALL body — parse
+     * it back into the `hdrs` argument before the packed business args. */
+    struct yheaders *_hdrs = NULL;
+    {
+        size_t _hconsumed = 0;
+        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
+        if (!_hdrs) goto _short_body;
+        _off = _hconsumed;
+    }
     struct object *_obj = NULL;
     {
         if (_off + 8 > _body_len) goto _short_body;
@@ -388,7 +472,15 @@ static size_t storage_del_skel(const void *_body, size_t _body_len,
         if (_slen) memcpy(_s2, (const uint8_t *)_body + _off, _slen);
         _s2[_slen] = 0; _off += _slen;
     }
-    struct yaafc_int_result _r = storage_del(&_local, _obj, _s1, _s2);
+    double span_start = yaafc_ytime_monotonic_sec();
+    struct yaafc_int_result _r = storage_del(&_local, _obj, _hdrs, _s1, _s2);
+    {
+        double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
+        ydebug("span trace=%s op=skel.storage_del dur_us=%.0f", span_trace ? span_trace : "-", span_us);
+        yspan_record("skel.storage_del", span_us);
+    }
+    yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
         yaafc_error_print(stderr, "[skel] storage_del", _r.error);
@@ -411,6 +503,7 @@ static size_t storage_del_skel(const void *_body, size_t _body_len,
     memcpy((uint8_t *)_resp + 1, &_r.value, sizeof(_r.value));
     return 1 + sizeof(_r.value);
 _short_body:
+    yheaders_free(_hdrs);
     if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
     return _resp_max >= 1 ? 1 : 0;
 }
@@ -419,12 +512,16 @@ static size_t storage_count_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
-    /* Caller-auth prefix (uid, sid) is the first 8 bytes of every
-     * yrpc CALL body — set by the public stub on the way out. */
     struct ctx _local = {0};
-    if (_off + 8 > _body_len) goto _short_body;
-    memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
-    memcpy(&_local.sid, (const uint8_t *)_body + _off, 4); _off += 4;
+    /* The framework header section is first on every CALL body — parse
+     * it back into the `hdrs` argument before the packed business args. */
+    struct yheaders *_hdrs = NULL;
+    {
+        size_t _hconsumed = 0;
+        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
+        if (!_hdrs) goto _short_body;
+        _off = _hconsumed;
+    }
     struct object *_obj = NULL;
     {
         if (_off + 8 > _body_len) goto _short_body;
@@ -442,7 +539,15 @@ static size_t storage_count_skel(const void *_body, size_t _body_len,
         if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
         _s1[_slen] = 0; _off += _slen;
     }
-    struct yaafc_size_result _r = storage_count(&_local, _obj, _s1);
+    double span_start = yaafc_ytime_monotonic_sec();
+    struct yaafc_size_result _r = storage_count(&_local, _obj, _hdrs, _s1);
+    {
+        double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
+        ydebug("span trace=%s op=skel.storage_count dur_us=%.0f", span_trace ? span_trace : "-", span_us);
+        yspan_record("skel.storage_count", span_us);
+    }
+    yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {
         yaafc_error_print(stderr, "[skel] storage_count", _r.error);
@@ -465,11 +570,12 @@ static size_t storage_count_skel(const void *_body, size_t _body_len,
     memcpy((uint8_t *)_resp + 1, &_r.value, sizeof(_r.value));
     return 1 + sizeof(_r.value);
 _short_body:
+    yheaders_free(_hdrs);
     if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
     return _resp_max >= 1 ? 1 : 0;
 }
 
-static int storage_kv_set_jinvoke(struct ctx *ctx, struct object *obj,
+static int storage_kv_set_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
 {
@@ -477,7 +583,7 @@ static int storage_kv_set_jinvoke(struct ctx *ctx, struct object *obj,
     int32_t arg1 = (int32_t)yjson_as_int(yjson_array_at(args, 1), 0);
     struct ctx local_ctx = {0};
     struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct yaafc_int_result call_result = storage_kv_set(call_ctx, obj, arg0, arg1);
+    struct yaafc_int_result call_result = storage_kv_set(call_ctx, obj, hdrs, arg0, arg1);
     if (YAAFC_IS_ERR(call_result)) {
         snprintf(err, err_cap, "%s: %s", "storage_kv_set",
                  call_result.error.msg ? call_result.error.msg : "<no message>");
@@ -488,14 +594,14 @@ static int storage_kv_set_jinvoke(struct ctx *ctx, struct object *obj,
     return 0;
 }
 
-static int storage_kv_get_jinvoke(struct ctx *ctx, struct object *obj,
+static int storage_kv_get_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
 {
     uint32_t arg0 = (uint32_t)yjson_as_int(yjson_array_at(args, 0), 0);
     struct ctx local_ctx = {0};
     struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct yaafc_int_result call_result = storage_kv_get(call_ctx, obj, arg0);
+    struct yaafc_int_result call_result = storage_kv_get(call_ctx, obj, hdrs, arg0);
     if (YAAFC_IS_ERR(call_result)) {
         snprintf(err, err_cap, "%s: %s", "storage_kv_get",
                  call_result.error.msg ? call_result.error.msg : "<no message>");
@@ -506,13 +612,13 @@ static int storage_kv_get_jinvoke(struct ctx *ctx, struct object *obj,
     return 0;
 }
 
-static int storage_kv_count_jinvoke(struct ctx *ctx, struct object *obj,
+static int storage_kv_count_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
 {
     struct ctx local_ctx = {0};
     struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct yaafc_size_result call_result = storage_kv_count(call_ctx, obj);
+    struct yaafc_size_result call_result = storage_kv_count(call_ctx, obj, hdrs);
     if (YAAFC_IS_ERR(call_result)) {
         snprintf(err, err_cap, "%s: %s", "storage_kv_count",
                  call_result.error.msg ? call_result.error.msg : "<no message>");
@@ -523,7 +629,7 @@ static int storage_kv_count_jinvoke(struct ctx *ctx, struct object *obj,
     return 0;
 }
 
-static int storage_set_jinvoke(struct ctx *ctx, struct object *obj,
+static int storage_set_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
 {
@@ -532,7 +638,7 @@ static int storage_set_jinvoke(struct ctx *ctx, struct object *obj,
     int64_t arg2 = (int64_t)yjson_as_int(yjson_array_at(args, 2), 0);
     struct ctx local_ctx = {0};
     struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct yaafc_int_result call_result = storage_set(call_ctx, obj, arg0, arg1, arg2);
+    struct yaafc_int_result call_result = storage_set(call_ctx, obj, hdrs, arg0, arg1, arg2);
     if (YAAFC_IS_ERR(call_result)) {
         snprintf(err, err_cap, "%s: %s", "storage_set",
                  call_result.error.msg ? call_result.error.msg : "<no message>");
@@ -543,7 +649,7 @@ static int storage_set_jinvoke(struct ctx *ctx, struct object *obj,
     return 0;
 }
 
-static int storage_get_jinvoke(struct ctx *ctx, struct object *obj,
+static int storage_get_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
 {
@@ -551,7 +657,7 @@ static int storage_get_jinvoke(struct ctx *ctx, struct object *obj,
     const char *arg1 = yjson_as_string(yjson_array_at(args, 1), "");
     struct ctx local_ctx = {0};
     struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct yaafc_int64_result call_result = storage_get(call_ctx, obj, arg0, arg1);
+    struct yaafc_int64_result call_result = storage_get(call_ctx, obj, hdrs, arg0, arg1);
     if (YAAFC_IS_ERR(call_result)) {
         snprintf(err, err_cap, "%s: %s", "storage_get",
                  call_result.error.msg ? call_result.error.msg : "<no message>");
@@ -562,7 +668,7 @@ static int storage_get_jinvoke(struct ctx *ctx, struct object *obj,
     return 0;
 }
 
-static int storage_exists_jinvoke(struct ctx *ctx, struct object *obj,
+static int storage_exists_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
 {
@@ -570,7 +676,7 @@ static int storage_exists_jinvoke(struct ctx *ctx, struct object *obj,
     const char *arg1 = yjson_as_string(yjson_array_at(args, 1), "");
     struct ctx local_ctx = {0};
     struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct yaafc_int_result call_result = storage_exists(call_ctx, obj, arg0, arg1);
+    struct yaafc_int_result call_result = storage_exists(call_ctx, obj, hdrs, arg0, arg1);
     if (YAAFC_IS_ERR(call_result)) {
         snprintf(err, err_cap, "%s: %s", "storage_exists",
                  call_result.error.msg ? call_result.error.msg : "<no message>");
@@ -581,7 +687,7 @@ static int storage_exists_jinvoke(struct ctx *ctx, struct object *obj,
     return 0;
 }
 
-static int storage_del_jinvoke(struct ctx *ctx, struct object *obj,
+static int storage_del_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
 {
@@ -589,7 +695,7 @@ static int storage_del_jinvoke(struct ctx *ctx, struct object *obj,
     const char *arg1 = yjson_as_string(yjson_array_at(args, 1), "");
     struct ctx local_ctx = {0};
     struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct yaafc_int_result call_result = storage_del(call_ctx, obj, arg0, arg1);
+    struct yaafc_int_result call_result = storage_del(call_ctx, obj, hdrs, arg0, arg1);
     if (YAAFC_IS_ERR(call_result)) {
         snprintf(err, err_cap, "%s: %s", "storage_del",
                  call_result.error.msg ? call_result.error.msg : "<no message>");
@@ -600,14 +706,14 @@ static int storage_del_jinvoke(struct ctx *ctx, struct object *obj,
     return 0;
 }
 
-static int storage_count_jinvoke(struct ctx *ctx, struct object *obj,
+static int storage_count_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
 {
     const char *arg0 = yjson_as_string(yjson_array_at(args, 0), "");
     struct ctx local_ctx = {0};
     struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct yaafc_size_result call_result = storage_count(call_ctx, obj, arg0);
+    struct yaafc_size_result call_result = storage_count(call_ctx, obj, hdrs, arg0);
     if (YAAFC_IS_ERR(call_result)) {
         snprintf(err, err_cap, "%s: %s", "storage_count",
                  call_result.error.msg ? call_result.error.msg : "<no message>");
@@ -626,14 +732,14 @@ struct object_ptr_result storage_kv_create(struct ctx *ctx)
         return YAAFC_ERR(object_ptr, "storage_kv_create: class accessor failed", _kr);
     const struct class *_klass = _kr.value;
 
-    if (!ctx || !ctx->session)
+    if (!ctx || !ctx->peer)
         return object_alloc(_klass);
 
-    rpc_session_translate_class(ctx->session, "storage_kv");
+    peer_channel_translate_class(ctx->peer, "storage_kv");
 
     uint64_t _h = 0;
     const char *_name = "storage_kv";
-    if (rpc_call(ctx->session, RPC_OP_CREATE, 0, _name, strlen(_name),
+    if (rpc_call(ctx->peer, RPC_OP_CREATE, 0, _name, strlen(_name),
                  &_h, sizeof(_h)) != sizeof(_h) || !_h)
         return YAAFC_ERR(object_ptr, "storage_kv_create: remote create failed");
 
@@ -654,14 +760,14 @@ struct object_ptr_result storage_db_create(struct ctx *ctx)
         return YAAFC_ERR(object_ptr, "storage_db_create: class accessor failed", _kr);
     const struct class *_klass = _kr.value;
 
-    if (!ctx || !ctx->session)
+    if (!ctx || !ctx->peer)
         return object_alloc(_klass);
 
-    rpc_session_translate_class(ctx->session, "storage_db");
+    peer_channel_translate_class(ctx->peer, "storage_db");
 
     uint64_t _h = 0;
     const char *_name = "storage_db";
-    if (rpc_call(ctx->session, RPC_OP_CREATE, 0, _name, strlen(_name),
+    if (rpc_call(ctx->peer, RPC_OP_CREATE, 0, _name, strlen(_name),
                  &_h, sizeof(_h)) != sizeof(_h) || !_h)
         return YAAFC_ERR(object_ptr, "storage_db_create: remote create failed");
 

@@ -26,7 +26,7 @@
 #include <yaafc/ycore/ytrace.h>
 #include <yaafc/yclass/class.h>
 #include <yaafc/yengine/engine.h>
-#include <yaafc/plugin/storage/storage.h>
+#include <yaafc/plugin/sharded_storage/sharded_storage.h>
 #include <yaafc/yclass/rpc.h>
 
 #include <stdint.h>
@@ -48,10 +48,10 @@ static struct acc_storage_handle_result open_storage(void)
 {
     struct yaafc_engine *e = yaafc_active_engine();
     if (!e) return YAAFC_ERR(acc_storage_handle, "accounts: no active engine");
-    struct acc_storage_handle h = {.c = yaafc_engine_service_ctx(e, "storage")};
-    if (!h.c.session)
+    struct acc_storage_handle h = {.c = yaafc_engine_service_ctx(e, "sharded_storage")};
+    if (!h.c.peer)
         return YAAFC_ERR(acc_storage_handle, "accounts: no 'storage' remote");
-    struct object_ptr_result o = storage_db_create(&h.c);
+    struct object_ptr_result o = sharded_storage_db_create(&h.c);
     if (YAAFC_IS_ERR(o)) return YAAFC_ERR(acc_storage_handle, "accounts: storage_db_create failed", o);
     h.obj = o.value;
     return YAAFC_OK(acc_storage_handle, h);
@@ -62,33 +62,33 @@ static struct acc_storage_handle_result open_storage(void)
 static void close_storage(struct acc_storage_handle *h)
 {
     if (!h || !h->obj) return;
-    if (h->c.session) {
+    if (h->c.peer) {
         uint64_t _h;
         memcpy(&_h, (char *)h->obj + sizeof(struct object), sizeof(_h));
         uint8_t _r;
-        rpc_call(h->c.session, RPC_OP_DESTROY, 0, &_h, sizeof(_h), &_r, 1);
+        rpc_call(h->c.peer, RPC_OP_DESTROY, 0, &_h, sizeof(_h), &_r, 1);
     }
     free(h->obj);
     h->obj = NULL;
 }
 
-static int64_t kv_get_or(struct acc_storage_handle *h, const char *key, int64_t fallback)
+static int64_t kv_get_or(struct acc_storage_handle *h, struct yheaders *hdrs, const char *key, int64_t fallback)
 {
-    struct yaafc_int64_result r = storage_get(&h->c, h->obj, ACCOUNTS_CTX, key);
+    struct yaafc_int64_result r = sharded_storage_db_get(&h->c, h->obj, hdrs, ACCOUNTS_CTX, key);
     if (YAAFC_IS_ERR(r)) { yaafc_error_destroy(r.error); return fallback; }
     return r.value;
 }
 
-static int kv_exists(struct acc_storage_handle *h, const char *key)
+static int kv_exists(struct acc_storage_handle *h, struct yheaders *hdrs, const char *key)
 {
-    struct yaafc_int_result r = storage_exists(&h->c, h->obj, ACCOUNTS_CTX, key);
+    struct yaafc_int_result r = sharded_storage_db_exists(&h->c, h->obj, hdrs, ACCOUNTS_CTX, key);
     int present = YAAFC_IS_OK(r) && r.value;
     if (YAAFC_IS_ERR(r)) yaafc_error_destroy(r.error);
     return present;
 }
 
 YAAFC_CLASS_ANNOTATE("override@accounts:store:store_register")
-struct yaafc_int_result accounts_store_register_impl(struct ctx *ctx, struct object *obj,
+struct yaafc_int_result accounts_store_register_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                     uint32_t uid)
 {
     (void)ctx; (void)obj;
@@ -98,21 +98,21 @@ struct yaafc_int_result accounts_store_register_impl(struct ctx *ctx, struct obj
 
     char k[64];
     snprintf(k, sizeof(k), "user:%u", uid);
-    if (kv_exists(&h, k)) {
+    if (kv_exists(&h, hdrs, k)) {
         close_storage(&h);
         ydebug("accounts_register: uid=%u already exists", uid);
         return YAAFC_OK(yaafc_int, 0);
     }
-    storage_set(&h.c, h.obj, ACCOUNTS_CTX, k, 1);
-    int64_t count = kv_get_or(&h, "count", 0) + 1;
-    storage_set(&h.c, h.obj, ACCOUNTS_CTX, "count", count);
+    sharded_storage_db_set(&h.c, h.obj, hdrs, ACCOUNTS_CTX, k, 1);
+    int64_t count = kv_get_or(&h, hdrs, "count", 0) + 1;
+    sharded_storage_db_set(&h.c, h.obj, hdrs, ACCOUNTS_CTX, "count", count);
     close_storage(&h);
     yinfo("accounts_register: uid=%u (total=%lld)", uid, (long long)count);
     return YAAFC_OK(yaafc_int, 1);
 }
 
 YAAFC_CLASS_ANNOTATE("override@accounts:store:store_exists")
-struct yaafc_int_result accounts_store_exists_impl(struct ctx *ctx, struct object *obj,
+struct yaafc_int_result accounts_store_exists_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                   uint32_t uid)
 {
     (void)ctx; (void)obj;
@@ -121,13 +121,13 @@ struct yaafc_int_result accounts_store_exists_impl(struct ctx *ctx, struct objec
     struct acc_storage_handle h = sr.value;
     char k[64];
     snprintf(k, sizeof(k), "user:%u", uid);
-    int present = kv_exists(&h, k);
+    int present = kv_exists(&h, hdrs, k);
     close_storage(&h);
     return YAAFC_OK(yaafc_int, present);
 }
 
 YAAFC_CLASS_ANNOTATE("override@accounts:store:store_set_balance")
-struct yaafc_int_result accounts_store_set_balance_impl(struct ctx *ctx, struct object *obj,
+struct yaafc_int_result accounts_store_set_balance_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                         uint32_t uid, int64_t n)
 {
     (void)ctx; (void)obj;
@@ -136,19 +136,19 @@ struct yaafc_int_result accounts_store_set_balance_impl(struct ctx *ctx, struct 
     struct acc_storage_handle h = sr.value;
     char k[64];
     snprintf(k, sizeof(k), "user:%u", uid);
-    if (!kv_exists(&h, k)) {
+    if (!kv_exists(&h, hdrs, k)) {
         close_storage(&h);
         return YAAFC_ERR(yaafc_int, "accounts_set_balance: unknown uid");
     }
     snprintf(k, sizeof(k), "balance:%u", uid);
-    storage_set(&h.c, h.obj, ACCOUNTS_CTX, k, n);
+    sharded_storage_db_set(&h.c, h.obj, hdrs, ACCOUNTS_CTX, k, n);
     close_storage(&h);
     ydebug("accounts_set_balance: uid=%u balance=%lld", uid, (long long)n);
     return YAAFC_OK(yaafc_int, 1);
 }
 
 YAAFC_CLASS_ANNOTATE("override@accounts:store:store_balance")
-struct yaafc_int64_result accounts_store_balance_impl(struct ctx *ctx, struct object *obj,
+struct yaafc_int64_result accounts_store_balance_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                       uint32_t uid)
 {
     (void)ctx; (void)obj;
@@ -157,24 +157,24 @@ struct yaafc_int64_result accounts_store_balance_impl(struct ctx *ctx, struct ob
     struct acc_storage_handle h = sr.value;
     char k[64];
     snprintf(k, sizeof(k), "user:%u", uid);
-    if (!kv_exists(&h, k)) {
+    if (!kv_exists(&h, hdrs, k)) {
         close_storage(&h);
         return YAAFC_ERR(yaafc_int64, "accounts_balance: unknown uid");
     }
     snprintf(k, sizeof(k), "balance:%u", uid);
-    int64_t bal = kv_get_or(&h, k, 0);
+    int64_t bal = kv_get_or(&h, hdrs, k, 0);
     close_storage(&h);
     return YAAFC_OK(yaafc_int64, bal);
 }
 
 YAAFC_CLASS_ANNOTATE("override@accounts:store:store_count")
-struct yaafc_size_result accounts_store_count_impl(struct ctx *ctx, struct object *obj)
+struct yaafc_size_result accounts_store_count_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
     (void)ctx; (void)obj;
     struct acc_storage_handle_result sr = open_storage();
     if (YAAFC_IS_ERR(sr)) return YAAFC_ERR(yaafc_size, "accounts_count: open_storage failed", sr);
     struct acc_storage_handle h = sr.value;
-    int64_t c = kv_get_or(&h, "count", 0);
+    int64_t c = kv_get_or(&h, hdrs, "count", 0);
     close_storage(&h);
     return YAAFC_OK(yaafc_size, (size_t)(c < 0 ? 0 : c));
 }

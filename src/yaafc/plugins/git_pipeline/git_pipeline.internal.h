@@ -6,11 +6,11 @@
 
 #include <yaafc/plugin/git_pipeline/git_pipeline.h>
 
-typedef struct yaafc_uint32_result (*git_pipeline_store_enqueue_fn)(struct ctx *, struct object *, uint32_t);
-typedef struct yaafc_uint32_result (*git_pipeline_store_lease_fn)(struct ctx *, struct object *, uint32_t);
-typedef struct yaafc_int_result (*git_pipeline_store_complete_fn)(struct ctx *, struct object *, uint32_t, int32_t);
-typedef struct yaafc_size_result (*git_pipeline_store_count_pending_fn)(struct ctx *, struct object *);
-typedef struct yaafc_size_result (*git_pipeline_store_count_running_fn)(struct ctx *, struct object *);
-typedef struct yaafc_size_result (*git_pipeline_store_count_done_fn)(struct ctx *, struct object *);
+typedef struct yaafc_uint32_result (*git_pipeline_store_enqueue_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
+typedef struct yaafc_uint32_result (*git_pipeline_store_lease_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
+typedef struct yaafc_int_result (*git_pipeline_store_complete_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t, int32_t);
+typedef struct yaafc_size_result (*git_pipeline_store_count_pending_fn)(struct ctx *, struct object *, struct yheaders *);
+typedef struct yaafc_size_result (*git_pipeline_store_count_running_fn)(struct ctx *, struct object *, struct yheaders *);
+typedef struct yaafc_size_result (*git_pipeline_store_count_done_fn)(struct ctx *, struct object *, struct yheaders *);
 
 #endif

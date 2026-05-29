@@ -50,9 +50,11 @@ endif()
 add_library(yaafc_runtime STATIC
     src/yaafc/ycore/result.c
     src/yaafc/ycore/ytrace.c
+    src/yaafc/ycore/yspan.c
     src/yaafc/yclass/class.c
     src/yaafc/yclass/rpc.c
     src/yaafc/yclass/jinvoke.c
+    src/yaafc/yclass/yheaders.c
     src/yaafc/yco/coro.c
     src/yaafc/yloop/yloop.c
     src/yaafc/yengine/engine.c
@@ -175,6 +177,7 @@ endfunction()
 # then append <name> to YAAFC_PLUGINS below.
 set(YAAFC_PLUGINS
     storage
+    sharded_storage
     calculator
     time
     accounts

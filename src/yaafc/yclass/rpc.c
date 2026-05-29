@@ -305,54 +305,57 @@ static size_t handle_create(const void *body, size_t body_len, void *resp, size_
     return sizeof(h);
 }
 
+size_t rpc_dispatch_one(uint32_t header, const void *body, size_t body_len,
+                        void *resp, size_t resp_max)
+{
+    enum rpc_op op = RPC_HDR_OP(header);
+    uint32_t id = RPC_HDR_ID(header);
+
+    switch (op) {
+    case RPC_OP_CALL: {
+        rpc_skel_fn fn = rpc_skel_for((method_slot)id);
+        if (fn) {
+            ydebug("CALL slot=%u body_len=%zu", id, body_len);
+            return fn(body, body_len, resp, resp_max);
+        }
+        ywarn("CALL slot=%u — no skel", id);
+        return 0;
+    }
+    case RPC_OP_RESOLVE_SLOT:
+        return handle_resolve_slot(body, body_len, resp, resp_max);
+    case RPC_OP_GET_CLASS:
+        return handle_get_class(body, body_len, resp, resp_max);
+    case RPC_OP_CREATE:
+        return handle_create(body, body_len, resp, resp_max);
+    case RPC_OP_DESTROY:
+        return handle_destroy(body, body_len, resp, resp_max);
+    default:
+        ywarn("unknown op=%u", op);
+        return 0;
+    }
+}
+
 void rpc_server_run_io(void *ud, rpc_io_read_fn rd, rpc_io_write_fn wr)
 {
-    /* Per-peer buffers, not statics: multiple peer coroutines run
-     * concurrently inside the same process (cooperative libco) and
-     * would clobber a shared scratch buffer between yields. */
+    /* Sequential, one-request-at-a-time server over an arbitrary
+     * transport (the blocking-fd path). The multiplexing yloop server
+     * lives in the yrpc frontend and dispatches each request in its own
+     * coroutine; this one stays portable and lock-free by construction. */
     uint8_t *body = malloc(BUF_MAX);
     uint8_t *resp = malloc(BUF_MAX);
     if (!body || !resp) { free(body); free(resp); return; }
 
     for (;;) {
-        uint32_t header = 0, body_len = 0;
+        uint32_t header = 0, req_id = 0, body_len = 0;
         if (rd(ud, &header, 4) != 4) goto done;
+        if (rd(ud, &req_id, 4) != 4) goto done;
         if (rd(ud, &body_len, 4) != 4) goto done;
         if (body_len > BUF_MAX) goto done;
         if (body_len && rd(ud, body, body_len) != body_len) goto done;
 
-        enum rpc_op op = RPC_HDR_OP(header);
-        uint32_t id = RPC_HDR_ID(header);
-        uint32_t resp_len = 0;
+        uint32_t resp_len = (uint32_t)rpc_dispatch_one(header, body, body_len, resp, BUF_MAX);
 
-        switch (op) {
-        case RPC_OP_CALL: {
-            rpc_skel_fn fn = rpc_skel_for((method_slot)id);
-            if (fn) {
-                ydebug("CALL slot=%u body_len=%u", id, body_len);
-                resp_len = (uint32_t)fn(body, body_len, resp, BUF_MAX);
-            } else {
-                ywarn("CALL slot=%u — no skel", id);
-            }
-            break;
-        }
-        case RPC_OP_RESOLVE_SLOT:
-            resp_len = (uint32_t)handle_resolve_slot(body, body_len, resp, BUF_MAX);
-            break;
-        case RPC_OP_GET_CLASS:
-            resp_len = (uint32_t)handle_get_class(body, body_len, resp, BUF_MAX);
-            break;
-        case RPC_OP_CREATE:
-            resp_len = (uint32_t)handle_create(body, body_len, resp, BUF_MAX);
-            break;
-        case RPC_OP_DESTROY:
-            resp_len = (uint32_t)handle_destroy(body, body_len, resp, BUF_MAX);
-            break;
-        default:
-            ywarn("unknown op=%u", op);
-            break;
-        }
-
+        if (wr(ud, &req_id, 4) != 4) goto done;
         if (wr(ud, &resp_len, 4) != 4) goto done;
         if (resp_len && wr(ud, resp, resp_len) != resp_len) goto done;
     }
@@ -380,31 +383,37 @@ struct remote_id_entry {
     UT_hash_handle hh;
 };
 
-enum rpc_session_mode {
+enum peer_channel_mode {
     RPC_MODE_TCP = 0,   /* legacy yrpc binary on the bare fd */
     RPC_MODE_HTTP = 1,  /* HTTP envelope, auth via headers */
 };
 
-struct rpc_session {
+struct peer_channel {
     int fd;
-    enum rpc_session_mode mode;
+    enum peer_channel_mode mode;
+    uint32_t next_req_id; /* RPC_MODE_TCP raw path: per-connection frame id */
     char *http_host;     /* Host header, RPC_MODE_HTTP only */
     uint32_t auth_uid;   /* X-Yaafc-Uid for HTTP requests */
     uint32_t auth_sid;   /* X-Yaafc-Sid for HTTP requests */
     struct remote_id_entry *remote_ids;
     struct translated_class *translated;
+    /* Optional async transport (installed by a yloop-aware layer). When
+     * set, rpc_call delegates here instead of doing blocking fd I/O. */
+    void *async_ctx;
+    rpc_async_call_fn async_call;
+    void (*async_destroy)(void *ctx);
 };
 
-struct rpc_session *rpc_session_create(int fd)
+struct peer_channel *peer_channel_create(int fd)
 {
-    struct rpc_session *s = calloc(1, sizeof(*s));
+    struct peer_channel *s = calloc(1, sizeof(*s));
     if (s) { s->fd = fd; s->mode = RPC_MODE_TCP; }
     return s;
 }
 
-struct rpc_session *rpc_session_create_http(int fd, const char *host)
+struct peer_channel *peer_channel_create_http(int fd, const char *host)
 {
-    struct rpc_session *s = calloc(1, sizeof(*s));
+    struct peer_channel *s = calloc(1, sizeof(*s));
     if (!s) return NULL;
     s->fd = fd;
     s->mode = RPC_MODE_HTTP;
@@ -412,16 +421,26 @@ struct rpc_session *rpc_session_create_http(int fd, const char *host)
     return s;
 }
 
-void rpc_session_set_auth(struct rpc_session *s, uint32_t uid, uint32_t sid)
+void peer_channel_set_auth(struct peer_channel *s, uint32_t uid, uint32_t sid)
 {
     if (!s) return;
     s->auth_uid = uid;
     s->auth_sid = sid;
 }
 
-void rpc_session_destroy(struct rpc_session *s)
+void peer_channel_set_async(struct peer_channel *s, void *ctx,
+                           rpc_async_call_fn call, void (*destroy)(void *ctx))
 {
     if (!s) return;
+    s->async_ctx = ctx;
+    s->async_call = call;
+    s->async_destroy = destroy;
+}
+
+void peer_channel_destroy(struct peer_channel *s)
+{
+    if (!s) return;
+    if (s->async_destroy && s->async_ctx) s->async_destroy(s->async_ctx);
     struct translated_class *cur, *tmp;
     HASH_ITER(hh, s->translated, cur, tmp) {
         HASH_DEL(s->translated, cur);
@@ -438,7 +457,7 @@ void rpc_session_destroy(struct rpc_session *s)
     free(s);
 }
 
-uint32_t rpc_session_remote_id(struct rpc_session *s, method_slot slot)
+uint32_t peer_channel_remote_id(struct peer_channel *s, method_slot slot)
 {
     if (!s) return RPC_REMOTE_ID_UNRESOLVED;
     struct remote_id_entry *e = NULL;
@@ -446,7 +465,7 @@ uint32_t rpc_session_remote_id(struct rpc_session *s, method_slot slot)
     return e ? e->remote_id : RPC_REMOTE_ID_UNRESOLVED;
 }
 
-void rpc_session_set_remote_id(struct rpc_session *s, method_slot slot, uint32_t remote_id)
+void peer_channel_set_remote_id(struct peer_channel *s, method_slot slot, uint32_t remote_id)
 {
     if (!s) return;
     struct remote_id_entry *e = NULL;
@@ -475,7 +494,7 @@ void rpc_session_set_remote_id(struct rpc_session *s, method_slot slot, uint32_t
  *
  * Response is HTTP/1.1 with a Content-Length-framed binary body —
  * exactly the same shape as the legacy yrpc payload would be. */
-static size_t rpc_call_http(struct rpc_session *s, enum rpc_op op, uint32_t id,
+static size_t rpc_call_http(struct peer_channel *s, enum rpc_op op, uint32_t id,
                             const void *body, size_t body_len,
                             void *resp, size_t resp_max)
 {
@@ -564,22 +583,38 @@ static size_t rpc_call_http(struct rpc_session *s, enum rpc_op op, uint32_t id,
     return content_length;
 }
 
-size_t rpc_call(struct rpc_session *s, enum rpc_op op, uint32_t id, const void *body,
+size_t rpc_call(struct peer_channel *s, enum rpc_op op, uint32_t id, const void *body,
                 size_t body_len, void *resp, size_t resp_max)
 {
     if (!s) return 0;
     ydebug("mode=%d op=%u id=%u body_len=%zu", s->mode, op, id, body_len);
+
+    /* Async transport (yloop-aware, non-blocking) takes precedence when
+     * installed — it carries the call over a coroutine-yielding
+     * connection instead of blocking the loop on the bare fd. */
+    if (s->async_call)
+        return s->async_call(s->async_ctx, op, id, body, body_len, resp, resp_max);
 
     if (s->mode == RPC_MODE_HTTP) {
         return rpc_call_http(s, op, id, body, body_len, resp, resp_max);
     }
 
     uint32_t header = RPC_HDR_MAKE(op, id);
+    uint32_t req_id = ++s->next_req_id;
     uint32_t bl = (uint32_t)body_len;
     if (write_full(s->fd, &header, 4) < 0) return 0;
+    if (write_full(s->fd, &req_id, 4) < 0) return 0;
     if (write_full(s->fd, &bl, 4) < 0) return 0;
     if (body_len && write_full(s->fd, body, body_len) < 0) return 0;
 
+    /* Strictly sequential on this transport: read the echoed req_id and
+     * confirm it matches before consuming the payload. */
+    uint32_t resp_req_id = 0;
+    if (read_full(s->fd, &resp_req_id, 4) < 0) return 0;
+    if (resp_req_id != req_id) {
+        ywarn("rpc_call: req_id mismatch (sent %u got %u)", req_id, resp_req_id);
+        return 0;
+    }
     uint32_t resp_len = 0;
     if (read_full(s->fd, &resp_len, 4) < 0) return 0;
     if (resp_len > resp_max) {
@@ -596,10 +631,10 @@ size_t rpc_call(struct rpc_session *s, enum rpc_op op, uint32_t id, const void *
     return resp_len;
 }
 
-uint32_t rpc_session_ensure_remote_id(struct rpc_session *s, method_slot local_slot)
+uint32_t peer_channel_ensure_remote_id(struct peer_channel *s, method_slot local_slot)
 {
     if (!s) return RPC_REMOTE_ID_UNRESOLVED;
-    uint32_t cached = rpc_session_remote_id(s, local_slot);
+    uint32_t cached = peer_channel_remote_id(s, local_slot);
     if (cached != RPC_REMOTE_ID_UNRESOLVED) return cached;
 
     struct const_char_ptr_result nr = method_slot_name(local_slot);
@@ -614,12 +649,12 @@ uint32_t rpc_session_ensure_remote_id(struct rpc_session *s, method_slot local_s
         rpc_call(s, RPC_OP_RESOLVE_SLOT, 0, name, strlen(name), &remote, sizeof(remote));
     if (n != sizeof(remote) || remote == RPC_REMOTE_ID_UNRESOLVED) return RPC_REMOTE_ID_UNRESOLVED;
 
-    rpc_session_set_remote_id(s, local_slot, remote);
+    peer_channel_set_remote_id(s, local_slot, remote);
     ydebug("lazy resolve '%s' local=%u remote=%u", name, local_slot, remote);
     return remote;
 }
 
-int rpc_session_translate_class(struct rpc_session *s, const char *class_name)
+int peer_channel_translate_class(struct peer_channel *s, const char *class_name)
 {
     if (!s || !class_name) return -1;
     struct translated_class *t = NULL;
@@ -649,7 +684,7 @@ int rpc_session_translate_class(struct rpc_session *s, const char *class_name)
 
         struct method_slot_result lr = method_slot_by_qname(slot_name);
         if (YAAFC_IS_OK(lr)) {
-            rpc_session_set_remote_id(s, lr.value, rid);
+            peer_channel_set_remote_id(s, lr.value, rid);
             ydebug("xlat['%s'] local=%u remote=%u", slot_name, lr.value, rid);
         } else {
             yaafc_error_destroy(lr.error);
@@ -685,13 +720,13 @@ struct object_ptr_result object_create_in_ctx(struct ctx *ctx, const char *class
     if (!klass)
         return YAAFC_ERR(object_ptr, "object_create_in_ctx: class not registered");
 
-    if (!ctx || !ctx->session)
+    if (!ctx || !ctx->peer)
         return object_alloc(klass);
 
-    rpc_session_translate_class(ctx->session, class_qname);
+    peer_channel_translate_class(ctx->peer, class_qname);
 
     uint64_t handle = 0;
-    if (rpc_call(ctx->session, RPC_OP_CREATE, 0, class_qname, strlen(class_qname),
+    if (rpc_call(ctx->peer, RPC_OP_CREATE, 0, class_qname, strlen(class_qname),
                  &handle, sizeof(handle)) != sizeof(handle) || !handle)
         return YAAFC_ERR(object_ptr, "object_create_in_ctx: remote create failed");
 
@@ -711,11 +746,11 @@ struct object_ptr_result object_create_in_ctx(struct ctx *ctx, const char *class
 void object_release_in_ctx(struct ctx *ctx, struct object *obj)
 {
     if (!obj) return;
-    if (ctx && ctx->session) {
+    if (ctx && ctx->peer) {
         uint64_t handle;
         memcpy(&handle, (char *)obj + sizeof(struct object), sizeof(handle));
         uint8_t removed;
-        rpc_call(ctx->session, RPC_OP_DESTROY, 0, &handle, sizeof(handle), &removed, 1);
+        rpc_call(ctx->peer, RPC_OP_DESTROY, 0, &handle, sizeof(handle), &removed, 1);
         free(obj);
         return;
     }

@@ -6,10 +6,10 @@
 
 #include <yaafc/plugin/token_issuer/token_issuer.h>
 
-typedef struct yaafc_uint32_result (*token_issuer_store_login_fn)(struct ctx *, struct object *, uint32_t, uint32_t);
-typedef struct yaafc_uint32_result (*token_issuer_store_validate_fn)(struct ctx *, struct object *, uint32_t);
-typedef struct yaafc_uint32_result (*token_issuer_store_refresh_fn)(struct ctx *, struct object *, uint32_t);
-typedef struct yaafc_int_result (*token_issuer_store_revoke_fn)(struct ctx *, struct object *, uint32_t);
-typedef struct yaafc_size_result (*token_issuer_store_count_active_fn)(struct ctx *, struct object *);
+typedef struct yaafc_uint32_result (*token_issuer_store_login_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t, uint32_t);
+typedef struct yaafc_uint32_result (*token_issuer_store_validate_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
+typedef struct yaafc_uint32_result (*token_issuer_store_refresh_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
+typedef struct yaafc_int_result (*token_issuer_store_revoke_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
+typedef struct yaafc_size_result (*token_issuer_store_count_active_fn)(struct ctx *, struct object *, struct yheaders *);
 
 #endif

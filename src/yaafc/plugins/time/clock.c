@@ -25,7 +25,7 @@ struct YAAFC_CLASS_ANNOTATE("class@time:clock") time_clock_data {
 };
 
 YAAFC_CLASS_ANNOTATE("override@time:clock:clock_now_ms")
-struct yaafc_int64_result time_clock_now_ms_impl(struct ctx *ctx, struct object *obj)
+struct yaafc_int64_result time_clock_now_ms_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
     (void)ctx; (void)obj;
     int64_t ms = yaafc_yplatform_time_wall_ms();
@@ -34,7 +34,7 @@ struct yaafc_int64_result time_clock_now_ms_impl(struct ctx *ctx, struct object 
 }
 
 YAAFC_CLASS_ANNOTATE("override@time:clock:clock_sleep_ms")
-struct yaafc_int64_result time_clock_sleep_ms_impl(struct ctx *ctx, struct object *obj,
+struct yaafc_int64_result time_clock_sleep_ms_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                    uint32_t ms)
 {
     (void)ctx; (void)obj;

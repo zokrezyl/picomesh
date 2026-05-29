@@ -41,6 +41,7 @@ static struct personal_access_tokens_store_data *pat(struct object *obj)
 YAAFC_CLASS_ANNOTATE("override@personal_access_tokens:store:store_mint")
 struct yaafc_uint32_result personal_access_tokens_store_mint_impl(struct ctx *ctx,
                                                                   struct object *obj,
+                                                                  struct yheaders *hdrs,
                                                                   uint32_t user_id)
 {
     (void)ctx;
@@ -62,6 +63,7 @@ struct yaafc_uint32_result personal_access_tokens_store_mint_impl(struct ctx *ct
 YAAFC_CLASS_ANNOTATE("override@personal_access_tokens:store:store_lookup")
 struct yaafc_uint32_result personal_access_tokens_store_lookup_impl(struct ctx *ctx,
                                                                     struct object *obj,
+                                                                    struct yheaders *hdrs,
                                                                     uint32_t pat_id)
 {
     (void)ctx;
@@ -77,6 +79,7 @@ struct yaafc_uint32_result personal_access_tokens_store_lookup_impl(struct ctx *
 YAAFC_CLASS_ANNOTATE("override@personal_access_tokens:store:store_revoke")
 struct yaafc_int_result personal_access_tokens_store_revoke_impl(struct ctx *ctx,
                                                                  struct object *obj,
+                                                                 struct yheaders *hdrs,
                                                                  uint32_t pat_id)
 {
     (void)ctx;
@@ -93,7 +96,7 @@ struct yaafc_int_result personal_access_tokens_store_revoke_impl(struct ctx *ctx
 
 YAAFC_CLASS_ANNOTATE("override@personal_access_tokens:store:store_list_for_user")
 struct yaafc_size_result personal_access_tokens_store_list_for_user_impl(
-    struct ctx *ctx, struct object *obj, uint32_t user_id)
+    struct ctx *ctx, struct object *obj, struct yheaders *hdrs, uint32_t user_id)
 {
     (void)ctx;
     struct personal_access_tokens_store_data *d = pat(obj);
@@ -106,7 +109,8 @@ struct yaafc_size_result personal_access_tokens_store_list_for_user_impl(
 
 YAAFC_CLASS_ANNOTATE("override@personal_access_tokens:store:store_count_active")
 struct yaafc_size_result personal_access_tokens_store_count_active_impl(struct ctx *ctx,
-                                                                        struct object *obj)
+                                                                        struct object *obj,
+                                                                        struct yheaders *hdrs)
 {
     (void)ctx;
     return YAAFC_OK(yaafc_size, pat(obj)->count);

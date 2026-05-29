@@ -26,16 +26,17 @@ extern "C" {
 
 struct object;
 struct ctx;
+struct yheaders;
 
-/* Invoker signature. `ctx` is the request context handed to the public
- * stub: NULL (or a zeroed ctx) dispatches locally, a ctx with a live
- * `session` forwards to the owning backend. `args` is a JSON array
- * (positional). `obj` is the instance the call targets (a local object
- * or a remote proxy). On success, the invoker pushes ONE value (the
- * method's return) into `result`. On failure it writes a diagnostic
- * into `err_msg` (a NUL-terminated buffer of `err_cap` bytes) and
- * returns non-zero. */
-typedef int (*jinvoke_fn)(struct ctx *ctx, struct object *obj,
+/* Invoker signature. `ctx` is the framework dispatch context (NULL/
+ * zeroed → local; live `session` → forward to the owning backend).
+ * `hdrs` is the request-header bag passed straight through to the stub
+ * (the dispatch layer populates it from the envelope). `args` is the
+ * positional JSON args array; `obj` is the target instance (local or a
+ * remote proxy). On success the invoker pushes ONE value into `result`;
+ * on failure it writes a diagnostic into `err_msg` (NUL-terminated, of
+ * `err_cap` bytes) and returns non-zero. */
+typedef int (*jinvoke_fn)(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err_msg, size_t err_cap);
 

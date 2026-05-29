@@ -34,7 +34,7 @@ static struct storage_kv_data *kv_data(struct object *obj)
 }
 
 YAAFC_CLASS_ANNOTATE("override@storage:kv:kv_set")
-struct yaafc_int_result storage_kv_set_impl(struct ctx *ctx, struct object *obj,
+struct yaafc_int_result storage_kv_set_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                              uint32_t key_id, int32_t value)
 {
     (void)ctx;
@@ -63,7 +63,7 @@ struct yaafc_int_result storage_kv_set_impl(struct ctx *ctx, struct object *obj,
 }
 
 YAAFC_CLASS_ANNOTATE("override@storage:kv:kv_get")
-struct yaafc_int_result storage_kv_get_impl(struct ctx *ctx, struct object *obj,
+struct yaafc_int_result storage_kv_get_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                              uint32_t key_id)
 {
     (void)ctx;
@@ -81,7 +81,7 @@ struct yaafc_int_result storage_kv_get_impl(struct ctx *ctx, struct object *obj,
 }
 
 YAAFC_CLASS_ANNOTATE("override@storage:kv:kv_count")
-struct yaafc_size_result storage_kv_count_impl(struct ctx *ctx, struct object *obj)
+struct yaafc_size_result storage_kv_count_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
     (void)ctx;
     struct storage_kv_data *d = kv_data(obj);

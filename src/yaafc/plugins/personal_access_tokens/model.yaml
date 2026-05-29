@@ -8,6 +8,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: user_id
         type: uint32_t
   - slot: store_lookup
@@ -19,6 +21,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: pat_id
         type: uint32_t
   - slot: store_revoke
@@ -30,6 +34,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: pat_id
         type: uint32_t
   - slot: store_list_for_user
@@ -41,6 +47,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: user_id
         type: uint32_t
   - slot: store_count_active
@@ -52,6 +60,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
 classes:
   - name: store
     domain: personal_access_tokens

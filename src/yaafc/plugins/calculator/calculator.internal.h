@@ -6,9 +6,9 @@
 
 #include <yaafc/plugin/calculator/calculator.h>
 
-typedef struct yaafc_int64_result (*calculator_calc_add_fn)(struct ctx *, struct object *, int64_t, int64_t);
-typedef struct yaafc_int64_result (*calculator_calc_sub_fn)(struct ctx *, struct object *, int64_t, int64_t);
-typedef struct yaafc_int64_result (*calculator_calc_mul_fn)(struct ctx *, struct object *, int64_t, int64_t);
-typedef struct yaafc_int64_result (*calculator_calc_div_fn)(struct ctx *, struct object *, int64_t, int64_t);
+typedef struct yaafc_int64_result (*calculator_calc_add_fn)(struct ctx *, struct object *, struct yheaders *, int64_t, int64_t);
+typedef struct yaafc_int64_result (*calculator_calc_sub_fn)(struct ctx *, struct object *, struct yheaders *, int64_t, int64_t);
+typedef struct yaafc_int64_result (*calculator_calc_mul_fn)(struct ctx *, struct object *, struct yheaders *, int64_t, int64_t);
+typedef struct yaafc_int64_result (*calculator_calc_div_fn)(struct ctx *, struct object *, struct yheaders *, int64_t, int64_t);
 
 #endif

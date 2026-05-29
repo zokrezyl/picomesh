@@ -208,36 +208,36 @@ static int cmd_client(struct yaafc_engine *e)
         perror("connect"); close(fd); return 1;
     }
     yinfo("yaafc client: connected to %s:%d", host, port);
-    struct rpc_session *s = rpc_session_create(fd);
+    struct peer_channel *s = peer_channel_create(fd);
     if (!s) { close(fd); return 1; }
-    struct ctx ctx = {.session = s};
+    struct ctx ctx = {.peer = s};
 
     struct object_ptr_result kv_r = storage_kv_create(&ctx);
-    if (YAAFC_IS_ERR(kv_r)) { rpc_session_destroy(s); return die_err("kv_create", kv_r.error); }
+    if (YAAFC_IS_ERR(kv_r)) { peer_channel_destroy(s); return die_err("kv_create", kv_r.error); }
     struct object *kv = kv_r.value;
     for (uint32_t k = 1; k <= 3; ++k) {
-        struct yaafc_int_result sr = storage_kv_set(&ctx, kv, k, (int32_t)(k * 10));
-        if (YAAFC_IS_ERR(sr)) { rpc_session_destroy(s); return die_err("kv_set", sr.error); }
+        struct yaafc_int_result sr = storage_kv_set(&ctx, kv, NULL, k, (int32_t)(k * 10));
+        if (YAAFC_IS_ERR(sr)) { peer_channel_destroy(s); return die_err("kv_set", sr.error); }
     }
     for (uint32_t k = 1; k <= 3; ++k) {
-        struct yaafc_int_result gr = storage_kv_get(&ctx, kv, k);
-        if (YAAFC_IS_ERR(gr)) { rpc_session_destroy(s); return die_err("kv_get", gr.error); }
+        struct yaafc_int_result gr = storage_kv_get(&ctx, kv, NULL, k);
+        if (YAAFC_IS_ERR(gr)) { peer_channel_destroy(s); return die_err("kv_get", gr.error); }
         yinfo("client: kv[%u] = %d", k, gr.value);
     }
     free(kv);
 
     struct object_ptr_result cr = calculator_calc_create(&ctx);
-    if (YAAFC_IS_ERR(cr)) { rpc_session_destroy(s); return die_err("calc_create", cr.error); }
+    if (YAAFC_IS_ERR(cr)) { peer_channel_destroy(s); return die_err("calc_create", cr.error); }
     struct object *calc = cr.value;
-    struct yaafc_int64_result ar = calculator_calc_add(&ctx, calc, 6, 7);
-    if (YAAFC_IS_ERR(ar)) { rpc_session_destroy(s); return die_err("calc_add", ar.error); }
+    struct yaafc_int64_result ar = calculator_calc_add(&ctx, calc, NULL, 6, 7);
+    if (YAAFC_IS_ERR(ar)) { peer_channel_destroy(s); return die_err("calc_add", ar.error); }
     yinfo("client: 6 + 7 = %lld", (long long)ar.value);
-    struct yaafc_int64_result mr = calculator_calc_mul(&ctx, calc, 6, 7);
-    if (YAAFC_IS_ERR(mr)) { rpc_session_destroy(s); return die_err("calc_mul", mr.error); }
+    struct yaafc_int64_result mr = calculator_calc_mul(&ctx, calc, NULL, 6, 7);
+    if (YAAFC_IS_ERR(mr)) { peer_channel_destroy(s); return die_err("calc_mul", mr.error); }
     yinfo("client: 6 * 7 = %lld", (long long)mr.value);
     free(calc);
 
-    rpc_session_destroy(s);
+    peer_channel_destroy(s);
     return 0;
 }
 

@@ -37,7 +37,7 @@ static struct git_pipeline_store_data *gp(struct object *obj)
 }
 
 YAAFC_CLASS_ANNOTATE("override@git_pipeline:store:store_enqueue")
-struct yaafc_uint32_result git_pipeline_store_enqueue_impl(struct ctx *ctx, struct object *obj,
+struct yaafc_uint32_result git_pipeline_store_enqueue_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                            uint32_t repo_id)
 {
     (void)ctx;
@@ -58,7 +58,7 @@ struct yaafc_uint32_result git_pipeline_store_enqueue_impl(struct ctx *ctx, stru
 }
 
 YAAFC_CLASS_ANNOTATE("override@git_pipeline:store:store_lease")
-struct yaafc_uint32_result git_pipeline_store_lease_impl(struct ctx *ctx, struct object *obj,
+struct yaafc_uint32_result git_pipeline_store_lease_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                          uint32_t runner_id)
 {
     (void)ctx;
@@ -77,7 +77,7 @@ struct yaafc_uint32_result git_pipeline_store_lease_impl(struct ctx *ctx, struct
 }
 
 YAAFC_CLASS_ANNOTATE("override@git_pipeline:store:store_complete")
-struct yaafc_int_result git_pipeline_store_complete_impl(struct ctx *ctx, struct object *obj,
+struct yaafc_int_result git_pipeline_store_complete_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                          uint32_t job_id, int32_t status)
 {
     (void)ctx;
@@ -102,21 +102,21 @@ static size_t count_status(const struct git_pipeline_store_data *d, int status)
 }
 
 YAAFC_CLASS_ANNOTATE("override@git_pipeline:store:store_count_pending")
-struct yaafc_size_result git_pipeline_store_count_pending_impl(struct ctx *ctx, struct object *obj)
+struct yaafc_size_result git_pipeline_store_count_pending_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
     (void)ctx;
     return YAAFC_OK(yaafc_size, count_status(gp(obj), 0));
 }
 
 YAAFC_CLASS_ANNOTATE("override@git_pipeline:store:store_count_running")
-struct yaafc_size_result git_pipeline_store_count_running_impl(struct ctx *ctx, struct object *obj)
+struct yaafc_size_result git_pipeline_store_count_running_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
     (void)ctx;
     return YAAFC_OK(yaafc_size, count_status(gp(obj), 1));
 }
 
 YAAFC_CLASS_ANNOTATE("override@git_pipeline:store:store_count_done")
-struct yaafc_size_result git_pipeline_store_count_done_impl(struct ctx *ctx, struct object *obj)
+struct yaafc_size_result git_pipeline_store_count_done_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
     (void)ctx;
     const struct git_pipeline_store_data *d = gp(obj);

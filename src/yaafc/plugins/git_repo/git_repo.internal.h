@@ -6,10 +6,10 @@
 
 #include <yaafc/plugin/git_repo/git_repo.h>
 
-typedef struct yaafc_uint32_result (*git_repo_store_make_fn)(struct ctx *, struct object *, uint32_t, const char *, const char *);
-typedef struct yaafc_int_result (*git_repo_store_delete_fn)(struct ctx *, struct object *, uint32_t);
-typedef struct yaafc_uint32_result (*git_repo_store_owner_of_fn)(struct ctx *, struct object *, uint32_t);
-typedef struct yaafc_size_result (*git_repo_store_count_for_owner_fn)(struct ctx *, struct object *, uint32_t);
-typedef struct yaafc_size_result (*git_repo_store_count_total_fn)(struct ctx *, struct object *);
+typedef struct yaafc_uint32_result (*git_repo_store_make_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t, const char *, const char *);
+typedef struct yaafc_int_result (*git_repo_store_delete_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
+typedef struct yaafc_uint32_result (*git_repo_store_owner_of_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
+typedef struct yaafc_size_result (*git_repo_store_count_for_owner_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
+typedef struct yaafc_size_result (*git_repo_store_count_total_fn)(struct ctx *, struct object *, struct yheaders *);
 
 #endif

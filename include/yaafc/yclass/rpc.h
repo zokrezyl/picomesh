@@ -3,6 +3,11 @@
  * Wire request:
  *   u32 header     — bits 31:28 = enum rpc_op, bits 27:0 = id
  *                    (id is the slot index for RPC_OP_CALL, 0 otherwise)
+ *   u32 req_id     — caller-assigned, unique per connection. The server
+ *                    treats it as opaque and echoes it in the response.
+ *                    It carries the request/response pairing so a single
+ *                    connection can multiplex many in-flight calls and
+ *                    the responses may come back out of order.
  *   u32 body_len
  *   u8  body[body_len]
  *
@@ -12,6 +17,7 @@
  *   ... packed args follow ...
  *
  * Wire response:
+ *   u32 req_id     — echoes the request's req_id.
  *   u32 resp_len
  *   u8  resp[resp_len]
  *
@@ -41,7 +47,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-struct rpc_session;
+struct peer_channel;
 
 /* Wire-bytes → typed-call bridge for one slot. */
 typedef size_t (*rpc_skel_fn)(const void *body, size_t body_len, void *resp, size_t resp_max);
@@ -76,6 +82,14 @@ typedef size_t (*rpc_io_write_fn)(void *ud, const void *buf, size_t n);
 
 void rpc_server_run_io(void *ud, rpc_io_read_fn rd, rpc_io_write_fn wr);
 
+/* Dispatch one decoded request frame to its op/skel and produce the
+ * response payload (the bytes that follow req_id + resp_len on the
+ * wire). Returns the response length, 0 on a missing skel / error.
+ * Factored out of rpc_server_run_io so a multiplexing server can run
+ * each request in its own coroutine and frame the reply itself. */
+size_t rpc_dispatch_one(uint32_t header, const void *body, size_t body_len,
+                        void *resp, size_t resp_max);
+
 /* Blocking POSIX fd convenience wrapper. */
 void rpc_server_run(int fd);
 
@@ -102,7 +116,7 @@ size_t rpc_handle_admin_op(enum rpc_op op,
 
 /* Raw-binary transport (legacy yrpc): each rpc_call writes header,
  * body_len, body to the fd; reads u32 resp_len + bytes. */
-struct rpc_session *rpc_session_create(int fd);
+struct peer_channel *peer_channel_create(int fd);
 
 /* HTTP transport: each rpc_call is wrapped in a POST /_rpc?op=N&id=N
  * HTTP/1.1 request. Auth context flows via HTTP headers
@@ -114,24 +128,37 @@ struct rpc_session *rpc_session_create(int fd);
  *
  * The fd must be a connected TCP socket to a yhttp server. `host` is
  * stashed as the HTTP Host header. */
-struct rpc_session *rpc_session_create_http(int fd, const char *host);
+struct peer_channel *peer_channel_create_http(int fd, const char *host);
 
-void rpc_session_destroy(struct rpc_session *s);
+void peer_channel_destroy(struct peer_channel *s);
 
 /* Set auth headers attached to subsequent calls. Only meaningful for
  * HTTP-mode sessions; ignored otherwise. */
-void rpc_session_set_auth(struct rpc_session *s, uint32_t uid, uint32_t sid);
+void peer_channel_set_auth(struct peer_channel *s, uint32_t uid, uint32_t sid);
 
-size_t rpc_call(struct rpc_session *s, enum rpc_op op, uint32_t id, const void *body,
+/* Install an async transport for this session. When set, rpc_call
+ * delegates entirely to `call` (same signature/semantics as rpc_call)
+ * instead of doing blocking fd I/O — letting a yloop-aware layer carry
+ * the call over a coroutine-yielding, non-blocking connection. `ctx`
+ * is the transport's opaque state; `destroy` (if non-NULL) frees it
+ * from peer_channel_destroy. rpc.c stays free of any yloop dependency:
+ * the engine supplies these. */
+typedef size_t (*rpc_async_call_fn)(void *ctx, enum rpc_op op, uint32_t id,
+                                    const void *body, size_t body_len,
+                                    void *resp, size_t resp_max);
+void peer_channel_set_async(struct peer_channel *s, void *ctx,
+                           rpc_async_call_fn call, void (*destroy)(void *ctx));
+
+size_t rpc_call(struct peer_channel *s, enum rpc_op op, uint32_t id, const void *body,
                 size_t body_len, void *resp, size_t resp_max);
 
 #define RPC_REMOTE_ID_UNRESOLVED UINT32_MAX
 
-uint32_t rpc_session_remote_id(struct rpc_session *s, method_slot local_slot);
-void rpc_session_set_remote_id(struct rpc_session *s, method_slot local_slot, uint32_t remote_id);
+uint32_t peer_channel_remote_id(struct peer_channel *s, method_slot local_slot);
+void peer_channel_set_remote_id(struct peer_channel *s, method_slot local_slot, uint32_t remote_id);
 
-int rpc_session_translate_class(struct rpc_session *s, const char *class_name);
-uint32_t rpc_session_ensure_remote_id(struct rpc_session *s, method_slot local_slot);
+int peer_channel_translate_class(struct peer_channel *s, const char *class_name);
+uint32_t peer_channel_ensure_remote_id(struct peer_channel *s, method_slot local_slot);
 
 /* Generic, class-name-keyed object construction/teardown — the runtime
  * twin of the codegen-emitted typed `<class>_create(struct ctx *)`.

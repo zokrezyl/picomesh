@@ -19,9 +19,12 @@
 
 #include <yaafc/ycore/result.h>
 #include <yaafc/ycore/ytrace.h>
+#include <yaafc/ycore/yspan.h>
 #include <yaafc/yclass/class.h>
+#include <yaafc/yclass/yheaders.h>
 #include <yaafc/yengine/engine.h>
 #include <yaafc/yconfig/yconfig.h>
+#include <yaafc/yloop/yloop.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -106,75 +109,142 @@ static const char *rc_msg(enum storage_rc rc)
     return "unknown rc";
 }
 
+/* ---- DB work offload --------------------------------------------------
+ *
+ * sqlite/mdbx calls block; running them on the loop thread freezes the
+ * whole backend process for every other peer. Each op is instead handed
+ * to libuv's worker pool via yloop_run_blocking, suspending only the
+ * serving coroutine until it returns — the loop keeps serving other
+ * peers meanwhile (asyncio run_in_executor shape).
+ *
+ * Thread-safety: each storage object owns its own backend connection
+ * (opened lazily inside the op) and is driven by one coroutine at a
+ * time, so a single connection is never touched from two threads at
+ * once. Distinct objects use distinct connections — safe to run in
+ * parallel on the pool (sqlite does its own file-level locking). */
+enum storage_op {
+    STORAGE_OP_SET, STORAGE_OP_GET, STORAGE_OP_EXISTS,
+    STORAGE_OP_DEL, STORAGE_OP_COUNT,
+};
+
+struct storage_work {
+    struct storage_data *d;
+    enum storage_op op;
+    const char *context;
+    const char *key;
+    int64_t value;     /* in:  set */
+    int64_t out_i64;   /* out: get */
+    int out_i;         /* out: exists / del */
+    size_t out_sz;     /* out: count */
+    enum storage_rc rc;
+};
+
+/* Runs on a worker-pool thread — touches only its own `arg`. */
+static void storage_work_fn(void *arg)
+{
+    struct storage_work *w = arg;
+    const struct backend_ops *vt = w->d->vt;
+    switch (w->op) {
+    case STORAGE_OP_SET:    w->rc = vt->set(w->d, w->context, w->key, w->value); break;
+    case STORAGE_OP_GET:    w->rc = vt->get(w->d, w->context, w->key, &w->out_i64); break;
+    case STORAGE_OP_EXISTS: w->rc = vt->exists(w->d, w->context, w->key, &w->out_i); break;
+    case STORAGE_OP_DEL:    w->rc = vt->del(w->d, w->context, w->key, &w->out_i); break;
+    case STORAGE_OP_COUNT:  w->rc = vt->count(w->d, w->context, &w->out_sz); break;
+    }
+}
+
+/* Offload `w` to the loop's worker pool (suspending the serving coro)
+ * if we're on a loop coroutine; otherwise run inline. */
+static void storage_run(struct storage_work *w)
+{
+    struct yaafc_engine *e = yaafc_active_engine();
+    struct yloop *l = e ? yaafc_engine_loop(e) : NULL;
+    if (!l) { storage_work_fn(w); return; }
+    struct yaafc_void_result r = yloop_run_blocking(l, storage_work_fn, w);
+    if (YAAFC_IS_ERR(r)) { yaafc_error_destroy(r.error); storage_work_fn(w); }
+}
+
 YAAFC_CLASS_ANNOTATE("override@storage:db:set")
-struct yaafc_int_result storage_set_impl(struct ctx *ctx, struct object *obj,
+struct yaafc_int_result storage_set_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                          const char *context, const char *key,
                                          int64_t value)
 {
     (void)ctx;
+    const char *trace = hdrs ? yheaders_get(hdrs, "trace_id") : NULL;
     struct storage_data *d = sd(obj);
     struct yaafc_void_result eb = ensure_backend(d);
     if (YAAFC_IS_ERR(eb)) return YAAFC_ERR(yaafc_int, "storage_set: backend init failed", eb);
-    enum storage_rc rc = d->vt->set(d, context, key, value);
-    if (rc != STORAGE_RC_OK) return YAAFC_ERR(yaafc_int, rc_msg(rc));
+    struct storage_work w = {.d = d, .op = STORAGE_OP_SET,
+                             .context = context, .key = key, .value = value};
+    double span_start = yaafc_ytime_monotonic_sec();
+    storage_run(&w);
+    double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+    ydebug("span trace=%s op=db.set.%s dur_us=%.0f", trace ? trace : "-", context, span_us);
+    yspan_record("db.set", span_us);
+    if (w.rc != STORAGE_RC_OK) return YAAFC_ERR(yaafc_int, rc_msg(w.rc));
     yinfo("storage_set: %s/%s=%lld", context, key, (long long)value);
     return YAAFC_OK(yaafc_int, 1);
 }
 
 YAAFC_CLASS_ANNOTATE("override@storage:db:get")
-struct yaafc_int64_result storage_get_impl(struct ctx *ctx, struct object *obj,
+struct yaafc_int64_result storage_get_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                            const char *context, const char *key)
 {
     (void)ctx;
+    const char *trace = hdrs ? yheaders_get(hdrs, "trace_id") : NULL;
     struct storage_data *d = sd(obj);
     struct yaafc_void_result eb = ensure_backend(d);
     if (YAAFC_IS_ERR(eb)) return YAAFC_ERR(yaafc_int64, "storage_get: backend init failed", eb);
-    int64_t v = 0;
-    enum storage_rc rc = d->vt->get(d, context, key, &v);
-    if (rc != STORAGE_RC_OK) return YAAFC_ERR(yaafc_int64, rc_msg(rc));
-    return YAAFC_OK(yaafc_int64, v);
+    struct storage_work w = {.d = d, .op = STORAGE_OP_GET, .context = context, .key = key};
+    double span_start = yaafc_ytime_monotonic_sec();
+    storage_run(&w);
+    double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+    ydebug("span trace=%s op=db.get.%s dur_us=%.0f", trace ? trace : "-", context, span_us);
+    yspan_record("db.get", span_us);
+    if (w.rc != STORAGE_RC_OK) return YAAFC_ERR(yaafc_int64, rc_msg(w.rc));
+    return YAAFC_OK(yaafc_int64, w.out_i64);
 }
 
 YAAFC_CLASS_ANNOTATE("override@storage:db:exists")
-struct yaafc_int_result storage_exists_impl(struct ctx *ctx, struct object *obj,
+struct yaafc_int_result storage_exists_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                             const char *context, const char *key)
 {
     (void)ctx;
     struct storage_data *d = sd(obj);
     struct yaafc_void_result eb = ensure_backend(d);
     if (YAAFC_IS_ERR(eb)) return YAAFC_ERR(yaafc_int, "storage_exists: backend init failed", eb);
-    int present = 0;
-    enum storage_rc rc = d->vt->exists(d, context, key, &present);
-    if (rc != STORAGE_RC_OK) return YAAFC_ERR(yaafc_int, rc_msg(rc));
-    return YAAFC_OK(yaafc_int, present);
+    struct storage_work w = {.d = d, .op = STORAGE_OP_EXISTS, .context = context, .key = key};
+    storage_run(&w);
+    if (w.rc != STORAGE_RC_OK) return YAAFC_ERR(yaafc_int, rc_msg(w.rc));
+    return YAAFC_OK(yaafc_int, w.out_i);
 }
 
 YAAFC_CLASS_ANNOTATE("override@storage:db:del")
-struct yaafc_int_result storage_del_impl(struct ctx *ctx, struct object *obj,
+struct yaafc_int_result storage_del_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                          const char *context, const char *key)
 {
     (void)ctx;
     struct storage_data *d = sd(obj);
     struct yaafc_void_result eb = ensure_backend(d);
     if (YAAFC_IS_ERR(eb)) return YAAFC_ERR(yaafc_int, "storage_del: backend init failed", eb);
-    int removed = 0;
-    enum storage_rc rc = d->vt->del(d, context, key, &removed);
-    if (rc != STORAGE_RC_OK) return YAAFC_ERR(yaafc_int, rc_msg(rc));
-    return YAAFC_OK(yaafc_int, removed);
+    struct storage_work w = {.d = d, .op = STORAGE_OP_DEL, .context = context, .key = key};
+    storage_run(&w);
+    if (w.rc != STORAGE_RC_OK) return YAAFC_ERR(yaafc_int, rc_msg(w.rc));
+    return YAAFC_OK(yaafc_int, w.out_i);
 }
 
 YAAFC_CLASS_ANNOTATE("override@storage:db:count")
-struct yaafc_size_result storage_count_impl(struct ctx *ctx, struct object *obj,
+struct yaafc_size_result storage_count_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                             const char *context)
 {
     (void)ctx;
     struct storage_data *d = sd(obj);
     struct yaafc_void_result eb = ensure_backend(d);
     if (YAAFC_IS_ERR(eb)) return YAAFC_ERR(yaafc_size, "storage_count: backend init failed", eb);
-    size_t n = 0;
-    enum storage_rc rc = d->vt->count(d, context, &n);
-    if (rc != STORAGE_RC_OK) return YAAFC_ERR(yaafc_size, rc_msg(rc));
-    return YAAFC_OK(yaafc_size, n);
+    struct storage_work w = {.d = d, .op = STORAGE_OP_COUNT, .context = context};
+    storage_run(&w);
+    if (w.rc != STORAGE_RC_OK) return YAAFC_ERR(yaafc_size, rc_msg(w.rc));
+    return YAAFC_OK(yaafc_size, w.out_sz);
 }
 
 /* The two backend translation units are #included so they remain

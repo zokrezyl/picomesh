@@ -10,6 +10,7 @@
 struct yaafc_int64_result;
 struct yaafc_int_result;
 struct yaafc_size_result;
+struct yheaders;
 struct object_ptr_result;
 struct class_ptr_result;
 
@@ -20,10 +21,10 @@ struct class_ptr_result accounts_store_class_get(void);
 struct object_ptr_result accounts_store_create(struct ctx *ctx);
 
 /* ---- methods ---- */
-struct yaafc_int_result accounts_store_register(struct ctx * ctx, struct object * obj, uint32_t uid);
-struct yaafc_int_result accounts_store_exists(struct ctx * ctx, struct object * obj, uint32_t uid);
-struct yaafc_int_result accounts_store_set_balance(struct ctx * ctx, struct object * obj, uint32_t uid, int64_t n);
-struct yaafc_int64_result accounts_store_balance(struct ctx * ctx, struct object * obj, uint32_t uid);
-struct yaafc_size_result accounts_store_count(struct ctx * ctx, struct object * obj);
+struct yaafc_int_result accounts_store_register(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t uid);
+struct yaafc_int_result accounts_store_exists(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t uid);
+struct yaafc_int_result accounts_store_set_balance(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t uid, int64_t n);
+struct yaafc_int64_result accounts_store_balance(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t uid);
+struct yaafc_size_result accounts_store_count(struct ctx * ctx, struct object * obj, struct yheaders * hdrs);
 
 #endif

@@ -48,23 +48,17 @@
 struct object;
 struct class;
 struct slot_table;
-struct rpc_session;
+struct peer_channel;
+struct yheaders; /* request-header bag — 3rd arg of every method; see yheaders.h */
 
-/* Request-scoped context flowing through every method call. `session`
- * is local-only — set non-NULL when this end of the call wants to
- * RPC. `uid` and `sid` ARE serialised across the wire by the codegen-
- * emitted pack/unpack helpers so that server skeletons see the
- * caller's identity (gh#2: propagate request/auth context).
- *
- * TODO: replace the hard-coded uid/sid fields with a generic
- * `struct ctx_headers` bag — see follow-up. The codegen should pack
- * an arbitrary key/value header list, not know about specific
- * fields. The current shape is the path of least resistance until
- * the codegen + every call site migrate. */
+/* Framework dispatch context — nothing more. `session` is local-only:
+ * NULL → dispatch the call in-process; non-NULL → forward it to that
+ * remote. Request metadata (uid, sid, trace_id, anything) does NOT live
+ * here — it travels as an explicit `struct yheaders *` argument
+ * (the 3rd parameter of every method), serialized by the framework, not
+ * mixed into this struct. See <yaafc/yclass/yheaders.h>. */
 struct ctx {
-    struct rpc_session *session; /* NULL → local; set → remote */
-    uint32_t uid;                /* caller's authenticated user id */
-    uint32_t sid;                /* caller's session id */
+    struct peer_channel *peer; /* NULL → local; set → remote */
 };
 
 enum class_type {

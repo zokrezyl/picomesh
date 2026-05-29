@@ -10,6 +10,7 @@
 struct yaafc_int_result;
 struct yaafc_size_result;
 struct yaafc_uint32_result;
+struct yheaders;
 struct object_ptr_result;
 struct class_ptr_result;
 
@@ -20,10 +21,10 @@ struct class_ptr_result token_issuer_store_class_get(void);
 struct object_ptr_result token_issuer_store_create(struct ctx *ctx);
 
 /* ---- methods ---- */
-struct yaafc_uint32_result token_issuer_store_login(struct ctx * ctx, struct object * obj, uint32_t user_id, uint32_t provider_id);
-struct yaafc_uint32_result token_issuer_store_validate(struct ctx * ctx, struct object * obj, uint32_t token_id);
-struct yaafc_uint32_result token_issuer_store_refresh(struct ctx * ctx, struct object * obj, uint32_t token_id);
-struct yaafc_int_result token_issuer_store_revoke(struct ctx * ctx, struct object * obj, uint32_t token_id);
-struct yaafc_size_result token_issuer_store_count_active(struct ctx * ctx, struct object * obj);
+struct yaafc_uint32_result token_issuer_store_login(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t user_id, uint32_t provider_id);
+struct yaafc_uint32_result token_issuer_store_validate(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t token_id);
+struct yaafc_uint32_result token_issuer_store_refresh(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t token_id);
+struct yaafc_int_result token_issuer_store_revoke(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t token_id);
+struct yaafc_size_result token_issuer_store_count_active(struct ctx * ctx, struct object * obj, struct yheaders * hdrs);
 
 #endif

@@ -8,6 +8,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: key_id
         type: uint32_t
       - name: value
@@ -21,6 +23,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: key_id
         type: uint32_t
   - slot: kv_count
@@ -32,6 +36,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
   - slot: set
     domain: storage
     owning_class: db
@@ -41,6 +47,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: context
         type: "const char *"
       - name: key
@@ -56,6 +64,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: context
         type: "const char *"
       - name: key
@@ -69,6 +79,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: context
         type: "const char *"
       - name: key
@@ -82,6 +94,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: context
         type: "const char *"
       - name: key
@@ -95,6 +109,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: context
         type: "const char *"
 classes:

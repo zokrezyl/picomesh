@@ -2,11 +2,13 @@
 #include "session.internal.h"
 #include <yaafc/ycore/result.h>
 #include <yaafc/ycore/ytrace.h>
+#include <yaafc/ycore/yspan.h>
 #include <yaafc/yclass/rpc.h>
+#include <yaafc/yclass/yheaders.h>
 #include <stdint.h>
 #include <string.h>
 
-struct yaafc_uint32_result session_store_start(struct ctx * ctx, struct object * obj, uint32_t user_id, uint32_t provider_id)
+struct yaafc_uint32_result session_store_start(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t user_id, uint32_t provider_id)
 {
     static method_slot _slot = METHOD_SLOT_UNDEFINED;
     if (_slot == METHOD_SLOT_UNDEFINED) {
@@ -20,28 +22,23 @@ struct yaafc_uint32_result session_store_start(struct ctx * ctx, struct object *
     if (!obj) return YAAFC_ERR(yaafc_uint32, "session_store_start: NULL object");
 
     struct ctx *_s = ctx;
-    if (_s && _s->session) {
-        uint32_t _rid = rpc_session_ensure_remote_id(_s->session, _slot);
+    if (_s && _s->peer) {
+        uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return YAAFC_ERR(yaafc_uint32, "session_store_start: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
-        /* Caller-auth prefix: every backend yrpc body starts with the
-         * (uid, sid) of the gateway-resolved caller. The skel pops
-         * these into its local ctx before unpacking args. (For the
-         * HTTP /_rpc shim, the gateway translates Cookie/Bearer to
-         * (uid, sid) and emits the exact same yrpc body downstream.) */
+        /* Headers section: the FRAMEWORK serializes the request-header
+         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * of the packed business args. The skel parses it straight back
+         * into the `hdrs` argument. The codegen never inspects the
+         * contents — it just lets the framework (de)serialize the bag. */
         {
-            uint32_t _u = _s->uid, _i = _s->sid;
-            if (_off + 8 > sizeof(_a))
-                return YAAFC_ERR(yaafc_uint32, "session_store_start: pack overflow");
-            memcpy(_a + _off, &_u, 4); _off += 4;
-            memcpy(_a + _off, &_i, 4); _off += 4;
+            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            if (_hn == 0)
+                return YAAFC_ERR(yaafc_uint32, "session_store_start: header serialize overflow");
+            _off = _hn;
         }
-        /* Also stamp the session in case it's HTTP-mode (the gateway's
-         * outbound, if it ever needs to talk HTTP). Cheap no-op for
-         * TCP-mode sessions. */
-        rpc_session_set_auth(_s->session, _s->uid, _s->sid);
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -54,9 +51,15 @@ struct yaafc_uint32_result session_store_start(struct ctx * ctx, struct object *
         if (_off + sizeof(provider_id) > sizeof(_a))
             return YAAFC_ERR(yaafc_uint32, "session_store_start: pack overflow");
         memcpy(_a + _off, &provider_id, sizeof(provider_id)); _off += sizeof(provider_id);
+        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
+        if (!span_trace) span_trace = "-";
+        double span_start = yaafc_ytime_monotonic_sec();
         uint8_t _wbuf[1 + 4 + 256];
-        size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
+        size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
+        double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+        ydebug("span trace=%s op=rpc.session_store_start dur_us=%.0f", span_trace, span_us);
+        yspan_record("rpc.session_store_start", span_us);
         if (_wn < 1) return YAAFC_ERR(yaafc_uint32, "session_store_start: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -74,11 +77,11 @@ struct yaafc_uint32_result session_store_start(struct ctx * ctx, struct object *
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return YAAFC_ERR(yaafc_uint32, "session_store_start: no impl on this class");
-        return ((session_store_start_fn)fn)(ctx, obj, user_id, provider_id);
+        return ((session_store_start_fn)fn)(ctx, obj, hdrs, user_id, provider_id);
     }
 }
 
-struct yaafc_uint32_result session_store_lookup(struct ctx * ctx, struct object * obj, uint32_t sid)
+struct yaafc_uint32_result session_store_lookup(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t sid)
 {
     static method_slot _slot = METHOD_SLOT_UNDEFINED;
     if (_slot == METHOD_SLOT_UNDEFINED) {
@@ -92,28 +95,23 @@ struct yaafc_uint32_result session_store_lookup(struct ctx * ctx, struct object 
     if (!obj) return YAAFC_ERR(yaafc_uint32, "session_store_lookup: NULL object");
 
     struct ctx *_s = ctx;
-    if (_s && _s->session) {
-        uint32_t _rid = rpc_session_ensure_remote_id(_s->session, _slot);
+    if (_s && _s->peer) {
+        uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return YAAFC_ERR(yaafc_uint32, "session_store_lookup: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
-        /* Caller-auth prefix: every backend yrpc body starts with the
-         * (uid, sid) of the gateway-resolved caller. The skel pops
-         * these into its local ctx before unpacking args. (For the
-         * HTTP /_rpc shim, the gateway translates Cookie/Bearer to
-         * (uid, sid) and emits the exact same yrpc body downstream.) */
+        /* Headers section: the FRAMEWORK serializes the request-header
+         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * of the packed business args. The skel parses it straight back
+         * into the `hdrs` argument. The codegen never inspects the
+         * contents — it just lets the framework (de)serialize the bag. */
         {
-            uint32_t _u = _s->uid, _i = _s->sid;
-            if (_off + 8 > sizeof(_a))
-                return YAAFC_ERR(yaafc_uint32, "session_store_lookup: pack overflow");
-            memcpy(_a + _off, &_u, 4); _off += 4;
-            memcpy(_a + _off, &_i, 4); _off += 4;
+            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            if (_hn == 0)
+                return YAAFC_ERR(yaafc_uint32, "session_store_lookup: header serialize overflow");
+            _off = _hn;
         }
-        /* Also stamp the session in case it's HTTP-mode (the gateway's
-         * outbound, if it ever needs to talk HTTP). Cheap no-op for
-         * TCP-mode sessions. */
-        rpc_session_set_auth(_s->session, _s->uid, _s->sid);
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -123,9 +121,15 @@ struct yaafc_uint32_result session_store_lookup(struct ctx * ctx, struct object 
         if (_off + sizeof(sid) > sizeof(_a))
             return YAAFC_ERR(yaafc_uint32, "session_store_lookup: pack overflow");
         memcpy(_a + _off, &sid, sizeof(sid)); _off += sizeof(sid);
+        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
+        if (!span_trace) span_trace = "-";
+        double span_start = yaafc_ytime_monotonic_sec();
         uint8_t _wbuf[1 + 4 + 256];
-        size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
+        size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
+        double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+        ydebug("span trace=%s op=rpc.session_store_lookup dur_us=%.0f", span_trace, span_us);
+        yspan_record("rpc.session_store_lookup", span_us);
         if (_wn < 1) return YAAFC_ERR(yaafc_uint32, "session_store_lookup: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -143,11 +147,11 @@ struct yaafc_uint32_result session_store_lookup(struct ctx * ctx, struct object 
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return YAAFC_ERR(yaafc_uint32, "session_store_lookup: no impl on this class");
-        return ((session_store_lookup_fn)fn)(ctx, obj, sid);
+        return ((session_store_lookup_fn)fn)(ctx, obj, hdrs, sid);
     }
 }
 
-struct yaafc_int_result session_store_destroy(struct ctx * ctx, struct object * obj, uint32_t sid)
+struct yaafc_int_result session_store_destroy(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t sid)
 {
     static method_slot _slot = METHOD_SLOT_UNDEFINED;
     if (_slot == METHOD_SLOT_UNDEFINED) {
@@ -161,28 +165,23 @@ struct yaafc_int_result session_store_destroy(struct ctx * ctx, struct object * 
     if (!obj) return YAAFC_ERR(yaafc_int, "session_store_destroy: NULL object");
 
     struct ctx *_s = ctx;
-    if (_s && _s->session) {
-        uint32_t _rid = rpc_session_ensure_remote_id(_s->session, _slot);
+    if (_s && _s->peer) {
+        uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return YAAFC_ERR(yaafc_int, "session_store_destroy: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
-        /* Caller-auth prefix: every backend yrpc body starts with the
-         * (uid, sid) of the gateway-resolved caller. The skel pops
-         * these into its local ctx before unpacking args. (For the
-         * HTTP /_rpc shim, the gateway translates Cookie/Bearer to
-         * (uid, sid) and emits the exact same yrpc body downstream.) */
+        /* Headers section: the FRAMEWORK serializes the request-header
+         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * of the packed business args. The skel parses it straight back
+         * into the `hdrs` argument. The codegen never inspects the
+         * contents — it just lets the framework (de)serialize the bag. */
         {
-            uint32_t _u = _s->uid, _i = _s->sid;
-            if (_off + 8 > sizeof(_a))
-                return YAAFC_ERR(yaafc_int, "session_store_destroy: pack overflow");
-            memcpy(_a + _off, &_u, 4); _off += 4;
-            memcpy(_a + _off, &_i, 4); _off += 4;
+            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            if (_hn == 0)
+                return YAAFC_ERR(yaafc_int, "session_store_destroy: header serialize overflow");
+            _off = _hn;
         }
-        /* Also stamp the session in case it's HTTP-mode (the gateway's
-         * outbound, if it ever needs to talk HTTP). Cheap no-op for
-         * TCP-mode sessions. */
-        rpc_session_set_auth(_s->session, _s->uid, _s->sid);
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
@@ -192,9 +191,15 @@ struct yaafc_int_result session_store_destroy(struct ctx * ctx, struct object * 
         if (_off + sizeof(sid) > sizeof(_a))
             return YAAFC_ERR(yaafc_int, "session_store_destroy: pack overflow");
         memcpy(_a + _off, &sid, sizeof(sid)); _off += sizeof(sid);
+        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
+        if (!span_trace) span_trace = "-";
+        double span_start = yaafc_ytime_monotonic_sec();
         uint8_t _wbuf[1 + 4 + 256];
-        size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
+        size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
+        double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+        ydebug("span trace=%s op=rpc.session_store_destroy dur_us=%.0f", span_trace, span_us);
+        yspan_record("rpc.session_store_destroy", span_us);
         if (_wn < 1) return YAAFC_ERR(yaafc_int, "session_store_destroy: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -212,11 +217,11 @@ struct yaafc_int_result session_store_destroy(struct ctx * ctx, struct object * 
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return YAAFC_ERR(yaafc_int, "session_store_destroy: no impl on this class");
-        return ((session_store_destroy_fn)fn)(ctx, obj, sid);
+        return ((session_store_destroy_fn)fn)(ctx, obj, hdrs, sid);
     }
 }
 
-struct yaafc_size_result session_store_count_active(struct ctx * ctx, struct object * obj)
+struct yaafc_size_result session_store_count_active(struct ctx * ctx, struct object * obj, struct yheaders * hdrs)
 {
     static method_slot _slot = METHOD_SLOT_UNDEFINED;
     if (_slot == METHOD_SLOT_UNDEFINED) {
@@ -230,37 +235,38 @@ struct yaafc_size_result session_store_count_active(struct ctx * ctx, struct obj
     if (!obj) return YAAFC_ERR(yaafc_size, "session_store_count_active: NULL object");
 
     struct ctx *_s = ctx;
-    if (_s && _s->session) {
-        uint32_t _rid = rpc_session_ensure_remote_id(_s->session, _slot);
+    if (_s && _s->peer) {
+        uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return YAAFC_ERR(yaafc_size, "session_store_count_active: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
-        /* Caller-auth prefix: every backend yrpc body starts with the
-         * (uid, sid) of the gateway-resolved caller. The skel pops
-         * these into its local ctx before unpacking args. (For the
-         * HTTP /_rpc shim, the gateway translates Cookie/Bearer to
-         * (uid, sid) and emits the exact same yrpc body downstream.) */
+        /* Headers section: the FRAMEWORK serializes the request-header
+         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * of the packed business args. The skel parses it straight back
+         * into the `hdrs` argument. The codegen never inspects the
+         * contents — it just lets the framework (de)serialize the bag. */
         {
-            uint32_t _u = _s->uid, _i = _s->sid;
-            if (_off + 8 > sizeof(_a))
-                return YAAFC_ERR(yaafc_size, "session_store_count_active: pack overflow");
-            memcpy(_a + _off, &_u, 4); _off += 4;
-            memcpy(_a + _off, &_i, 4); _off += 4;
+            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            if (_hn == 0)
+                return YAAFC_ERR(yaafc_size, "session_store_count_active: header serialize overflow");
+            _off = _hn;
         }
-        /* Also stamp the session in case it's HTTP-mode (the gateway's
-         * outbound, if it ever needs to talk HTTP). Cheap no-op for
-         * TCP-mode sessions. */
-        rpc_session_set_auth(_s->session, _s->uid, _s->sid);
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
                 return YAAFC_ERR(yaafc_size, "session_store_count_active: pack overflow");
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
+        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
+        if (!span_trace) span_trace = "-";
+        double span_start = yaafc_ytime_monotonic_sec();
         uint8_t _wbuf[1 + 4 + 256];
-        size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
+        size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
+        double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+        ydebug("span trace=%s op=rpc.session_store_count_active dur_us=%.0f", span_trace, span_us);
+        yspan_record("rpc.session_store_count_active", span_us);
         if (_wn < 1) return YAAFC_ERR(yaafc_size, "session_store_count_active: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -278,7 +284,7 @@ struct yaafc_size_result session_store_count_active(struct ctx * ctx, struct obj
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return YAAFC_ERR(yaafc_size, "session_store_count_active: no impl on this class");
-        return ((session_store_count_active_fn)fn)(ctx, obj);
+        return ((session_store_count_active_fn)fn)(ctx, obj, hdrs);
     }
 }
 

@@ -3,7 +3,7 @@
  * Each route handler:
  *   - parses cookies + form-urlencoded bodies
  *   - calls backend services via the engine's `remote()` sessions
- *     (codegen-emitted public stubs route through `ctx.session`)
+ *     (codegen-emitted public stubs route through `ctx.peer`)
  *   - renders HTML inline (no template engine — sprintf into a buffer)
  *
  * The yhttp serve loop calls `yhttp_frontend_try` BEFORE static-file

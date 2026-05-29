@@ -6,9 +6,9 @@
 
 #include <yaafc/plugin/session/session.h>
 
-typedef struct yaafc_uint32_result (*session_store_start_fn)(struct ctx *, struct object *, uint32_t, uint32_t);
-typedef struct yaafc_uint32_result (*session_store_lookup_fn)(struct ctx *, struct object *, uint32_t);
-typedef struct yaafc_int_result (*session_store_destroy_fn)(struct ctx *, struct object *, uint32_t);
-typedef struct yaafc_size_result (*session_store_count_active_fn)(struct ctx *, struct object *);
+typedef struct yaafc_uint32_result (*session_store_start_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t, uint32_t);
+typedef struct yaafc_uint32_result (*session_store_lookup_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
+typedef struct yaafc_int_result (*session_store_destroy_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
+typedef struct yaafc_size_result (*session_store_count_active_fn)(struct ctx *, struct object *, struct yheaders *);
 
 #endif

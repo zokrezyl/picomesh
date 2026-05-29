@@ -19,8 +19,16 @@ extern "C" {
 
 struct yloop;
 struct yloop_stream;
+struct yaafc_coro;
 
 YAAFC_RESULT_DECLARE(yloop_ptr, struct yloop *);
+
+/* Queue a coroutine whose entry has returned for deferred destruction.
+ * A coro can't free its own stack while running on it, so a handler
+ * coro's last act is to hand itself here; the loop destroys it on the
+ * next iteration once it observes the coro as finished. Safe to call
+ * from inside the coro being reaped. */
+void yloop_reap_coro(struct yloop *l, struct yaafc_coro *coro);
 
 typedef void (*yloop_serve_fn)(struct yloop *l, struct yloop_stream *s, void *ud);
 
@@ -31,6 +39,13 @@ void yloop_destroy(struct yloop *l);
 
 /* Run the loop until yloop_stop() is called or there's nothing left. */
 struct yaafc_void_result yloop_run(struct yloop *l);
+
+/* Run `work(arg)` on libuv's worker thread pool, suspending the calling
+ * coroutine until it completes (asyncio `run_in_executor` shape). Keeps
+ * blocking work — DB queries, libgit2, filesystem — off the loop thread
+ * so other coroutines keep running. `work` runs on another thread: it
+ * must touch only `arg`. Outside a coroutine it runs inline. */
+struct yaafc_void_result yloop_run_blocking(struct yloop *l, void (*work)(void *), void *arg);
 
 /* Drain pending work, then exit yloop_run. Safe to call from a serve coro. */
 void yloop_stop(struct yloop *l);

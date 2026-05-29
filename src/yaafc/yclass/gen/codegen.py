@@ -24,7 +24,7 @@ Reads annotated .c sources, builds an in-memory model, emits:
 Method signature contract:
   RetT slot(struct ctx *ctx, struct object *obj, <rest...>);
 
-  ctx is *not* on the wire. Public stub branches on ctx->session:
+  ctx is *not* on the wire. Public stub branches on ctx->peer:
     NULL → local: vtable dispatch via obj->klass.
     set  → remote: look up remote_id via xlat, then rpc_call(RPC_OP_CALL).
 
@@ -416,34 +416,44 @@ def default_return_for(ret: str) -> str:
 
 def validate_method(m: dict):
     args = m["args"]
-    if len(args) < 2:
+    if len(args) < 3:
         sys.stderr.write(
-            f"error: method {m['slot']} needs (ctx*, obj*, ...). got {len(args)}\n")
+            f"error: method {m['slot']} needs (ctx*, obj*, yheaders*, ...). "
+            f"got {len(args)}\n")
         sys.exit(1)
     if not is_specific_struct_ptr(args[0]["type"], "ctx"):
         sys.stderr.write(
-            f"error: method {m['slot']}: first arg must be 'struct ctx *' "
+            f"error: method {m['slot']}: 1st arg must be 'struct ctx *' "
             f"(got '{args[0]['type']}')\n")
         sys.exit(1)
     if not is_specific_struct_ptr(args[1]["type"], "object"):
         sys.stderr.write(
-            f"error: method {m['slot']}: second arg must be 'struct object *' "
+            f"error: method {m['slot']}: 2nd arg must be 'struct object *' "
             f"(got '{args[1]['type']}')\n")
         sys.exit(1)
-    for a in args[2:]:
+    if not is_specific_struct_ptr(args[2]["type"], "yheaders"):
+        sys.stderr.write(
+            f"error: method {m['slot']}: 3rd arg must be 'struct yheaders *' "
+            f"(got '{args[2]['type']}')\n")
+        sys.exit(1)
+    for a in args[3:]:
         t = a["type"]
         if is_string_arg(t):
             continue
         if is_struct_ptr(t):
             sys.stderr.write(
                 f"error: method {m['slot']}: arg '{a['name']}' is a struct "
-                f"pointer ({a['type']}). Only the obj at arg[1] and "
-                f"`const char *` strings are supported on the wire.\n")
+                f"pointer ({a['type']}). Only the obj at arg[1], the headers "
+                f"at arg[2], and `const char *` strings are supported.\n")
             sys.exit(1)
 
 
+# Args packed onto the wire as business args: the object handle (arg[1])
+# plus the trailing scalar/string args (arg[3:]). The framework ctx
+# (arg[0]) is never on the wire; the headers (arg[2]) ride a separate
+# framework-serialized section, not the packed-args region.
 def wire_args(m: dict) -> list:
-    return m["args"][1:]
+    return [m["args"][1]] + m["args"][3:]
 
 
 def args_struct_body(args: list, indent: str) -> str:
@@ -588,6 +598,7 @@ def emit_dispatch_body(m: dict) -> str:
     slot_fn = f"{qualified_slot(m)}_fn"
     ctx_name = args[0]["name"]
     obj_name = args[1]["name"]
+    hdrs_name = args[2]["name"]
     call_args = ", ".join(a["name"] for a in args)
     slot_qname = qualified_slot(m)
 
@@ -597,28 +608,24 @@ def emit_dispatch_body(m: dict) -> str:
     # Wire response: u8 status; status==0 → value_bytes; status==1 →
     # u32 msg_len + msg_bytes (gh#2: preserve structured remote errors).
     # The buffer is sized to hold the bigger of value or error payload.
-    if vt is None:
-        remote_call = f"""\
+    # The outbound call, wrapped in a tracing span: the trace id comes
+    # from the header bag, so `ydebug` (gated — zero IO when tracing is
+    # off) emits `trace=<id> op=rpc.<slot> dur_us=<n>`, and grepping a
+    # trace id reconstructs the end-to-end latency timeline. This span
+    # measures the full round trip (transport + remote execution); the
+    # skel emits a matching `op=skel.<slot>` span for the remote half.
+    timed_rpc = f"""\
+        const char *span_trace = {hdrs_name} ? yheaders_get({hdrs_name}, "trace_id") : "-";
+        if (!span_trace) span_trace = "-";
+        double span_start = yaafc_ytime_monotonic_sec();
         uint8_t _wbuf[1 + 4 + 256];
-        size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
+        size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
-        if (_wn < 1) return YAAFC_ERR({rid}, "{slot_qname}: short RPC response");
-        if (_wbuf[0] != 0) {{
-            uint32_t _msg_len = 0;
-            if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
-            char _msg[260];
-            size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
-            if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
-            _msg[_copy] = 0;
-            return YAAFC_ERR({rid}, _msg[0] ? strdup(_msg) : "{slot_qname}: remote error (no msg)");
-        }}
-        return YAAFC_OK_VOID();
+        double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+        ydebug("span trace=%s op=rpc.{slot_qname} dur_us=%.0f", span_trace, span_us);
+        yspan_record("rpc.{slot_qname}", span_us);
 """
-    else:
-        remote_call = f"""\
-        uint8_t _wbuf[1 + 4 + 256];
-        size_t _wn = rpc_call(_s->session, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+    err_parse = f"""\
         if (_wn < 1) return YAAFC_ERR({rid}, "{slot_qname}: short RPC response");
         if (_wbuf[0] != 0) {{
             uint32_t _msg_len = 0;
@@ -629,6 +636,11 @@ def emit_dispatch_body(m: dict) -> str:
             _msg[_copy] = 0;
             return YAAFC_ERR({rid}, _msg[0] ? strdup(_msg) : "{slot_qname}: remote error (no msg)");
         }}
+"""
+    if vt is None:
+        remote_call = timed_rpc + err_parse + "        return YAAFC_OK_VOID();\n"
+    else:
+        remote_call = timed_rpc + err_parse + f"""\
         if (_wn != 1 + sizeof({vt})) return YAAFC_ERR({rid}, "{slot_qname}: truncated RPC payload");
         {vt} _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
@@ -648,28 +660,23 @@ def emit_dispatch_body(m: dict) -> str:
     if (!{obj_name}) return YAAFC_ERR({rid}, "{slot_qname}: NULL object");
 
     struct ctx *_s = {ctx_name};
-    if (_s && _s->session) {{
-        uint32_t _rid = rpc_session_ensure_remote_id(_s->session, _slot);
+    if (_s && _s->peer) {{
+        uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return YAAFC_ERR({rid}, "{slot_qname}: remote id unresolved");
         uint8_t _a[{WIRE_ARG_BUFFER_BYTES}];
         size_t _off = 0;
-        /* Caller-auth prefix: every backend yrpc body starts with the
-         * (uid, sid) of the gateway-resolved caller. The skel pops
-         * these into its local ctx before unpacking args. (For the
-         * HTTP /_rpc shim, the gateway translates Cookie/Bearer to
-         * (uid, sid) and emits the exact same yrpc body downstream.) */
+        /* Headers section: the FRAMEWORK serializes the request-header
+         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * of the packed business args. The skel parses it straight back
+         * into the `hdrs` argument. The codegen never inspects the
+         * contents — it just lets the framework (de)serialize the bag. */
         {{
-            uint32_t _u = _s->uid, _i = _s->sid;
-            if (_off + 8 > sizeof(_a))
-                return YAAFC_ERR({rid}, "{slot_qname}: pack overflow");
-            memcpy(_a + _off, &_u, 4); _off += 4;
-            memcpy(_a + _off, &_i, 4); _off += 4;
+            size_t _hn = yheaders_serialize({hdrs_name}, _a, sizeof(_a));
+            if (_hn == 0)
+                return YAAFC_ERR({rid}, "{slot_qname}: header serialize overflow");
+            _off = _hn;
         }}
-        /* Also stamp the session in case it's HTTP-mode (the gateway's
-         * outbound, if it ever needs to talk HTTP). Cheap no-op for
-         * TCP-mode sessions. */
-        rpc_session_set_auth(_s->session, _s->uid, _s->sid);
 {pack_block}\
 {remote_call}\
     }} else {{
@@ -685,7 +692,9 @@ def emit_methods_c(model: dict, module: str, out_path: Path):
              f'#include "{module}.internal.h"\n',
              '#include <yaafc/ycore/result.h>\n',
              '#include <yaafc/ycore/ytrace.h>\n',
+             '#include <yaafc/ycore/yspan.h>\n',
              '#include <yaafc/yclass/rpc.h>\n',
+             '#include <yaafc/yclass/yheaders.h>\n',
              '#include <stdint.h>\n#include <string.h>\n\n']
     for m in model["methods"]:
         params = ", ".join(f"{a['type']} {a['name']}" for a in m["args"])
@@ -897,6 +906,9 @@ def emit_skel(m: dict) -> str:
         decl_parts.append(decl)
         call_parts.append(expr)
     decls = "".join(decl_parts)
+    # Impl signature is (ctx, obj, hdrs, business...). call_parts holds
+    # [&_local, obj, business...]; splice the parsed headers after obj.
+    call_parts.insert(2, "_hdrs")
     call = ", ".join(call_parts)
 
     rt = f"struct {rid}_result"
@@ -919,9 +931,24 @@ def emit_skel(m: dict) -> str:
         yaafc_error_destroy(_r.error);
         return 1 + 4 + _ml;
 """
-    if vt is None:
-        body = f"""\
+    # Server-half tracing span: time the impl execution and emit
+    # `trace=<id> op=skel.<slot> dur_us=<n>` (gated ydebug). Paired with
+    # the caller's `op=rpc.<slot>` span, the difference is transport +
+    # queueing time. The trace id is read after the call (still before
+    # the bag is freed) so it reflects whatever the impl saw/injected.
+    invoke_and_span = f"""\
+    double span_start = yaafc_ytime_monotonic_sec();
     {rt} _r = {slot}({call});
+    {{
+        double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
+        ydebug("span trace=%s op=skel.{slot} dur_us=%.0f", span_trace ? span_trace : "-", span_us);
+        yspan_record("skel.{slot}", span_us);
+    }}
+    yheaders_free(_hdrs); _hdrs = NULL;
+"""
+    if vt is None:
+        body = invoke_and_span + f"""\
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {{
 {err_pack}    }}
@@ -929,8 +956,7 @@ def emit_skel(m: dict) -> str:
     return 1;
 """
     else:
-        body = f"""\
-    {rt} _r = {slot}({call});
+        body = invoke_and_span + f"""\
     if (_resp_max < 1) return 0;
     if (YAAFC_IS_ERR(_r)) {{
 {err_pack}    }}
@@ -945,15 +971,20 @@ static size_t {slot}_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {{
     size_t _off = 0;
-    /* Caller-auth prefix (uid, sid) is the first 8 bytes of every
-     * yrpc CALL body — set by the public stub on the way out. */
     struct ctx _local = {{0}};
-    if (_off + 8 > _body_len) goto _short_body;
-    memcpy(&_local.uid, (const uint8_t *)_body + _off, 4); _off += 4;
-    memcpy(&_local.sid, (const uint8_t *)_body + _off, 4); _off += 4;
+    /* The framework header section is first on every CALL body — parse
+     * it back into the `hdrs` argument before the packed business args. */
+    struct yheaders *_hdrs = NULL;
+    {{
+        size_t _hconsumed = 0;
+        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
+        if (!_hdrs) goto _short_body;
+        _off = _hconsumed;
+    }}
 {decls}\
 {body}\
 _short_body:
+    yheaders_free(_hdrs);
     if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
     return _resp_max >= 1 ? 1 : 0;
 }}
@@ -972,14 +1003,14 @@ struct object_ptr_result {qname}_create(struct ctx *ctx)
         return YAAFC_ERR(object_ptr, "{qname}_create: class accessor failed", _kr);
     const struct class *_klass = _kr.value;
 
-    if (!ctx || !ctx->session)
+    if (!ctx || !ctx->peer)
         return object_alloc(_klass);
 
-    rpc_session_translate_class(ctx->session, "{qname}");
+    peer_channel_translate_class(ctx->peer, "{qname}");
 
     uint64_t _h = 0;
     const char *_name = "{qname}";
-    if (rpc_call(ctx->session, RPC_OP_CREATE, 0, _name, strlen(_name),
+    if (rpc_call(ctx->peer, RPC_OP_CREATE, 0, _name, strlen(_name),
                  &_h, sizeof(_h)) != sizeof(_h) || !_h)
         return YAAFC_ERR(object_ptr, "{qname}_create: remote create failed");
 
@@ -1082,12 +1113,12 @@ def emit_jinvoke(m: dict) -> str:
     slot = qualified_slot(m)
     rid = result_type_id(m["return_type"])
     vt = ret_value_type(rid)
-    # The first two args (ctx, obj) are supplied by the dispatcher —
-    # only the tail goes into the JSON args array.
-    args = m["args"][2:]
+    # ctx, obj, hdrs (args[0:3]) are supplied by the dispatcher — only
+    # the business tail (args[3:]) goes into the JSON args array.
+    args = m["args"][3:]
 
     arg_reads = []
-    call_parts = ["call_ctx", "obj"]
+    call_parts = ["call_ctx", "obj", "hdrs"]
     for i, a in enumerate(args):
         t = a["type"].strip()
         var = f"arg{i}"
@@ -1134,7 +1165,7 @@ def emit_jinvoke(m: dict) -> str:
                         "/* return type not yet supported in JSON */\n")
 
     return f"""\
-static int {slot}_jinvoke(struct ctx *ctx, struct object *obj,
+static int {slot}_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
 {{
@@ -1187,9 +1218,11 @@ def emit_rpc_c(model: dict, module: str, out_path: Path):
     parts = [HEADER,
              '#include <yaafc/yclass/rpc.h>\n',
              '#include <yaafc/yclass/jinvoke.h>\n',
+             '#include <yaafc/yclass/yheaders.h>\n',
              '#include <yaafc/yjson/yjson.h>\n',
              '#include <yaafc/ycore/result.h>\n',
              '#include <yaafc/ycore/ytrace.h>\n',
+             '#include <yaafc/ycore/yspan.h>\n',
              '#include <yaafc/yclass/class.h>\n',
              f'#include "{module}.internal.h"\n',
              '#include <stdint.h>\n#include <stdio.h>\n#include <stdlib.h>\n'

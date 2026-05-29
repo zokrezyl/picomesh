@@ -1,39 +1,151 @@
-/* yrpc — binary RPC frontend.
+/* yrpc — binary RPC frontend with per-request multiplexing.
  *
- * The frontend itself is stateless: the listen call is fire-and-forget
- * on the engine's yloop, and the serve coroutine drives
- * `rpc_server_run_io` against the stream until the peer closes. The
- * returned `struct yrpc_frontend` is a tiny handle so callers can stop
- * the listener cleanly. */
+ * The serve coroutine is a pure reader: it pulls request frames off the
+ * connection and, for each one, spawns a handler coroutine that
+ * dispatches the call and writes the response (tagged with the request's
+ * req_id) back. Because each handler runs in its own coro, a request that
+ * blocks — a DB query, a downstream RPC — no longer stalls the requests
+ * behind it on the same connection; responses may complete out of order
+ * and the req_id lets the client demultiplex them.
+ *
+ * The returned `struct yrpc_frontend` is a tiny handle so callers can
+ * stop the listener cleanly. */
 
 #include <yaafc/frontends/yrpc/yrpc.h>
 #include <yaafc/yengine/engine.h>
 #include <yaafc/yloop/yloop.h>
+#include <yaafc/yco/coro.h>
 #include <yaafc/yclass/rpc.h>
 #include <yaafc/ycore/result.h>
 #include <yaafc/ycore/ytrace.h>
 
+#include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
+
+#define YRPC_FRAME_MAX 65536
 
 struct yrpc_frontend {
     struct yaafc_engine *engine;
 };
 
-static size_t stream_read_cb(void *ud, void *buf, size_t n)
-{
-    return yloop_read((struct yloop_stream *)ud, buf, n);
-}
+/* Per-connection state, owned by (and living on the stack of) the reader
+ * coroutine. Handler coros borrow it while they run and reference it only
+ * up to their last write; the reader does not tear it down until every
+ * handler has finished (inflight == 0), so the borrow is always valid. */
+struct yrpc_conn {
+    struct yloop *loop;
+    struct yloop_stream *stream;
+    struct yaafc_coro *reader;
+    int inflight;       /* handler coros not yet finished */
+    int draining;       /* reader saw EOF, waiting for handlers to drain */
+    int reader_parked;  /* reader yielded in the drain loop */
+};
 
-static size_t stream_write_cb(void *ud, const void *buf, size_t n)
+/* One in-flight request handed from the reader to its handler coro. */
+struct yrpc_req {
+    struct yrpc_conn *conn;
+    uint32_t header;
+    uint32_t req_id;
+    uint8_t *body;     /* owned; freed by the handler */
+    uint32_t body_len;
+};
+
+static void yrpc_handler_entry(void *arg)
 {
-    return yloop_write((struct yloop_stream *)ud, buf, n);
+    struct yrpc_req *r = arg;
+    struct yrpc_conn *conn = r->conn;
+
+    uint8_t *resp = malloc(YRPC_FRAME_MAX);
+    size_t resp_len = 0;
+    if (resp)
+        resp_len = rpc_dispatch_one(r->header, r->body, r->body_len, resp, YRPC_FRAME_MAX);
+
+    /* Frame the reply as req_id | resp_len | resp and write it in one
+     * shot — libuv keeps a single write contiguous, so concurrent
+     * handlers' responses never interleave on the wire. */
+    size_t frame_len = 8 + resp_len;
+    uint8_t *frame = malloc(frame_len);
+    if (frame) {
+        uint32_t rl = (uint32_t)resp_len;
+        memcpy(frame, &r->req_id, 4);
+        memcpy(frame + 4, &rl, 4);
+        if (resp_len) memcpy(frame + 8, resp, resp_len);
+        yloop_write(conn->stream, frame, frame_len);
+        free(frame);
+    }
+    free(resp);
+    free(r->body);
+    free(r);
+
+    conn->inflight--;
+    int wake_reader = conn->draining && conn->reader_parked && conn->inflight == 0;
+    struct yaafc_coro *reader = conn->reader;
+    struct yloop *loop = conn->loop;
+
+    /* Queue self for destruction (can't free our own stack) and, if the
+     * reader is draining and we were the last handler, hand control back
+     * so it can finish teardown. Touch nothing on `conn` after this. */
+    yloop_reap_coro(loop, yaafc_coro_current());
+    if (wake_reader) {
+        conn->reader_parked = 0;
+        yaafc_coro_resume(reader);
+    }
 }
 
 static void serve_one(struct yloop *l, struct yloop_stream *s, void *ud)
 {
-    (void)l; (void)ud;
+    (void)ud;
     yinfo("yrpc: peer connected");
-    rpc_server_run_io(s, stream_read_cb, stream_write_cb);
+
+    struct yrpc_conn conn = {0};
+    conn.loop = l;
+    conn.stream = s;
+    conn.reader = yaafc_coro_current();
+
+    for (;;) {
+        uint32_t header = 0, req_id = 0, body_len = 0;
+        if (yloop_read(s, &header, 4) != 4) break;
+        if (yloop_read(s, &req_id, 4) != 4) break;
+        if (yloop_read(s, &body_len, 4) != 4) break;
+        if (body_len > YRPC_FRAME_MAX) break;
+
+        uint8_t *body = NULL;
+        if (body_len) {
+            body = malloc(body_len);
+            if (!body) break;
+            if (yloop_read(s, body, body_len) != body_len) { free(body); break; }
+        }
+
+        struct yrpc_req *r = calloc(1, sizeof(*r));
+        if (!r) { free(body); break; }
+        r->conn = &conn;
+        r->header = header;
+        r->req_id = req_id;
+        r->body = body;
+        r->body_len = body_len;
+
+        struct yaafc_coro_ptr_result hr =
+            yaafc_coro_spawn(yrpc_handler_entry, r, 0, "yrpc-handler");
+        if (YAAFC_IS_ERR(hr)) {
+            yaafc_error_destroy(hr.error);
+            free(body);
+            free(r);
+            break;
+        }
+        conn.inflight++;
+        yaafc_coro_resume(hr.value); /* runs until its first yield (or completion) */
+    }
+
+    /* Peer hung up. In-flight handlers still reference this stream and
+     * conn (on our stack), so wait for them to finish before returning —
+     * which closes the stream and lets yloop reap this serve coro. */
+    conn.draining = 1;
+    while (conn.inflight > 0) {
+        conn.reader_parked = 1;
+        yaafc_coro_yield();
+    }
+
     yinfo("yrpc: peer disconnected");
 }
 

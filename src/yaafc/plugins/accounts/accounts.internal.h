@@ -6,10 +6,10 @@
 
 #include <yaafc/plugin/accounts/accounts.h>
 
-typedef struct yaafc_int_result (*accounts_store_register_fn)(struct ctx *, struct object *, uint32_t);
-typedef struct yaafc_int_result (*accounts_store_exists_fn)(struct ctx *, struct object *, uint32_t);
-typedef struct yaafc_int_result (*accounts_store_set_balance_fn)(struct ctx *, struct object *, uint32_t, int64_t);
-typedef struct yaafc_int64_result (*accounts_store_balance_fn)(struct ctx *, struct object *, uint32_t);
-typedef struct yaafc_size_result (*accounts_store_count_fn)(struct ctx *, struct object *);
+typedef struct yaafc_int_result (*accounts_store_register_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
+typedef struct yaafc_int_result (*accounts_store_exists_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
+typedef struct yaafc_int_result (*accounts_store_set_balance_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t, int64_t);
+typedef struct yaafc_int64_result (*accounts_store_balance_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
+typedef struct yaafc_size_result (*accounts_store_count_fn)(struct ctx *, struct object *, struct yheaders *);
 
 #endif

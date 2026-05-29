@@ -6,10 +6,10 @@
 
 #include <yaafc/plugin/personal_access_tokens/personal_access_tokens.h>
 
-typedef struct yaafc_uint32_result (*personal_access_tokens_store_mint_fn)(struct ctx *, struct object *, uint32_t);
-typedef struct yaafc_uint32_result (*personal_access_tokens_store_lookup_fn)(struct ctx *, struct object *, uint32_t);
-typedef struct yaafc_int_result (*personal_access_tokens_store_revoke_fn)(struct ctx *, struct object *, uint32_t);
-typedef struct yaafc_size_result (*personal_access_tokens_store_list_for_user_fn)(struct ctx *, struct object *, uint32_t);
-typedef struct yaafc_size_result (*personal_access_tokens_store_count_active_fn)(struct ctx *, struct object *);
+typedef struct yaafc_uint32_result (*personal_access_tokens_store_mint_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
+typedef struct yaafc_uint32_result (*personal_access_tokens_store_lookup_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
+typedef struct yaafc_int_result (*personal_access_tokens_store_revoke_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
+typedef struct yaafc_size_result (*personal_access_tokens_store_list_for_user_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
+typedef struct yaafc_size_result (*personal_access_tokens_store_count_active_fn)(struct ctx *, struct object *, struct yheaders *);
 
 #endif

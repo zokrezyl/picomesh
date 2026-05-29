@@ -8,6 +8,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: repo_id
         type: uint32_t
   - slot: store_lease
@@ -19,6 +21,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: runner_id
         type: uint32_t
   - slot: store_complete
@@ -30,6 +34,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
       - name: job_id
         type: uint32_t
       - name: status
@@ -43,6 +49,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
   - slot: store_count_running
     domain: git_pipeline
     owning_class: store
@@ -52,6 +60,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
   - slot: store_count_done
     domain: git_pipeline
     owning_class: store
@@ -61,6 +71,8 @@ methods:
         type: "struct ctx *"
       - name: obj
         type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
 classes:
   - name: store
     domain: git_pipeline

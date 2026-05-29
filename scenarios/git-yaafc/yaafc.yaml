@@ -32,24 +32,25 @@ mesh:
         portalloc:
           port_range: "8201-8299"
 
-    storage:
-      port: 8202
-      plugins: [storage]
+    # Storage = write-parallel sharded KV store (N mdbx shard envs keyed
+    # by hash(ns·key); one writer + fsync stream per shard). The plain
+    # single-env `storage` plugin still exists in the tree but is no
+    # longer run as a mesh service — every backend uses this.
+    sharded_storage:
+      port: 8212
+      plugins: [sharded_storage]
       config:
-        storage:
-          # backend: sqlite (default) | mdbx
-          # sqlite uses `db_path`; mdbx uses `mdbx_path` (a directory).
-          backend: sqlite
-          db_path: /tmp/git-yaafc/central.db
-          mdbx_path: /tmp/git-yaafc/mdbx
+        sharded_storage:
+          shards: 8
+          path: /tmp/git-yaafc/sharded
 
     session:
       port: 8203
       plugins: [session]
       config:
         remotes:
-          - service: storage
-            port: 8202
+          - service: sharded_storage
+            port: 8212
           - service: token_issuer
             port: 8207
 
@@ -58,16 +59,16 @@ mesh:
       plugins: [accounts]
       config:
         remotes:
-          - service: storage
-            port: 8202
+          - service: sharded_storage
+            port: 8212
 
     password_authn:
       port: 8205
       plugins: [password_authn]
       config:
         remotes:
-          - service: storage
-            port: 8202
+          - service: sharded_storage
+            port: 8212
           - service: accounts
             port: 8204
 
@@ -76,16 +77,16 @@ mesh:
       plugins: [github_authn]
       config:
         remotes:
-          - service: storage
-            port: 8202
+          - service: sharded_storage
+            port: 8212
 
     token_issuer:
       port: 8207
       plugins: [token_issuer]
       config:
         remotes:
-          - service: storage
-            port: 8202
+          - service: sharded_storage
+            port: 8212
           - service: accounts
             port: 8204
 
@@ -94,8 +95,8 @@ mesh:
       plugins: [issues]
       config:
         remotes:
-          - service: storage
-            port: 8202
+          - service: sharded_storage
+            port: 8212
 
     git_repo:
       port: 8209
@@ -107,24 +108,24 @@ mesh:
           # Defaults to /tmp/git-yaafc/repos if omitted.
           repos_dir: /tmp/git-yaafc/repos
         remotes:
-          - service: storage
-            port: 8202
+          - service: sharded_storage
+            port: 8212
 
     git_pipeline:
       port: 8210
       plugins: [git_pipeline]
       config:
         remotes:
-          - service: storage
-            port: 8202
+          - service: sharded_storage
+            port: 8212
 
     personal_access_tokens:
       port: 8211
       plugins: [personal_access_tokens]
       config:
         remotes:
-          - service: storage
-            port: 8202
+          - service: sharded_storage
+            port: 8212
 
     # The gateway. Per CLAUDE.md: this is the ONE service that
     # listens yhttp — it's the auth boundary. External clients
@@ -167,8 +168,8 @@ mesh:
         yhttp:
           static_dir: scenarios/git-yaafc/frontend/static
         remotes:
-          - service: storage
-            port: 8202
+          - service: sharded_storage
+            port: 8212
           - service: session
             port: 8203
           - service: accounts

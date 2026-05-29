@@ -29,8 +29,19 @@
 
 #define RING_INIT_CAP 4096
 
+/* Coroutines whose entry function has returned can't free their own
+ * stack while running on it. They queue themselves here; the reaper
+ * uv_check runs once per loop iteration on the loop stack and destroys
+ * every queued coro that has actually finished. */
+struct coro_zombie {
+    struct yaafc_coro *coro;
+    struct coro_zombie *next;
+};
+
 struct yloop {
     uv_loop_t loop;
+    uv_check_t reaper;
+    struct coro_zombie *zombies;
 };
 
 struct yloop_listener {
@@ -59,16 +70,48 @@ struct yloop_stream {
     size_t rlen;
     int eof;
 
-    /* read-wait state */
+    /* read-wait state. Only the read path uses `coro`; writes track
+     * their own waiter per-request (see struct write_req), so multiple
+     * coroutines may write the same stream concurrently while one coro
+     * is parked in yloop_read. */
     size_t want;        /* bytes the suspended coro wants */
     int read_blocked;   /* coro suspended in yloop_read? */
 
-    /* write-wait state */
-    int write_blocked;
-    int write_result;   /* libuv status of last write */
-
     int closing;
 };
+
+static void on_reaper_check(uv_check_t *h)
+{
+    struct yloop *l = h->data;
+    struct coro_zombie *z = l->zombies;
+    l->zombies = NULL;
+    while (z) {
+        struct coro_zombie *next = z->next;
+        if (yaafc_coro_is_finished(z->coro)) {
+            yaafc_coro_destroy(z->coro);
+            free(z);
+        } else {
+            /* Not finished yet — keep it for the next iteration. */
+            z->next = l->zombies;
+            l->zombies = z;
+        }
+        z = next;
+    }
+}
+
+void yloop_reap_coro(struct yloop *l, struct yaafc_coro *coro)
+{
+    if (!l || !coro) return;
+    struct coro_zombie *z = calloc(1, sizeof(*z));
+    if (!z) {
+        ywarn("yloop_reap_coro: calloc failed — coro id=%u leaked",
+              yaafc_coro_id(coro));
+        return;
+    }
+    z->coro = coro;
+    z->next = l->zombies;
+    l->zombies = z;
+}
 
 static void on_alloc(uv_handle_t *h, size_t suggested, uv_buf_t *out)
 {
@@ -117,6 +160,11 @@ static void on_read(uv_stream_t *st, ssize_t nread, const uv_buf_t *buf)
 size_t yloop_read_some(struct yloop_stream *s, void *buf, size_t cap)
 {
     if (!s || !buf || cap == 0) return 0;
+    /* Resume whoever is calling now — a stream may be driven by
+     * different coroutines over its lifetime (e.g. a pooled/cached
+     * outbound RPC connection). Callers must serialise access to one
+     * stream; this just makes the wakeup target correct. */
+    s->coro = yaafc_coro_current();
     while (s->rlen == 0 && !s->eof) {
         s->want = 1;
         s->read_blocked = 1;
@@ -135,6 +183,7 @@ size_t yloop_read_some(struct yloop_stream *s, void *buf, size_t cap)
 size_t yloop_read(struct yloop_stream *s, void *buf, size_t n)
 {
     if (!s || !buf || n == 0) return 0;
+    s->coro = yaafc_coro_current(); /* resume the current caller (see yloop_read_some) */
     while (s->rlen < n && !s->eof) {
         s->want = n;
         s->read_blocked = 1;
@@ -149,21 +198,27 @@ size_t yloop_read(struct yloop_stream *s, void *buf, size_t n)
     return take;
 }
 
+/* Each write carries its own waiter and result slot rather than parking
+ * on the shared stream, so concurrent writers (many handler coros
+ * responding on one multiplexed connection) don't clobber each other.
+ * libuv flushes queued uv_write requests FIFO and never interleaves the
+ * buffers of distinct requests — so a caller that emits a whole frame in
+ * ONE yloop_write is guaranteed contiguous on the wire. */
 struct write_req {
     uv_write_t req;
-    struct yloop_stream *s;
-    char *data; /* owned copy */
+    struct yaafc_coro *coro; /* the writer to resume on completion */
+    int *status_out;         /* points at the caller's stack slot */
+    char *data;              /* owned copy */
 };
 
 static void on_write(uv_write_t *req, int status)
 {
     struct write_req *wr = (struct write_req *)req;
-    struct yloop_stream *s = wr->s;
-    s->write_result = status;
-    s->write_blocked = 0;
+    struct yaafc_coro *coro = wr->coro;
+    if (wr->status_out) *wr->status_out = status;
     free(wr->data);
     free(wr);
-    yaafc_coro_resume(s->coro);
+    yaafc_coro_resume(coro);
 }
 
 size_t yloop_write(struct yloop_stream *s, const void *buf, size_t n)
@@ -171,21 +226,21 @@ size_t yloop_write(struct yloop_stream *s, const void *buf, size_t n)
     if (!s || !buf || n == 0) return 0;
     struct write_req *wr = calloc(1, sizeof(*wr));
     if (!wr) return 0;
-    wr->s = s;
+    int status = -1; /* lives on this coro's stack until on_write resumes us */
+    wr->coro = yaafc_coro_current();
+    wr->status_out = &status;
     wr->data = malloc(n);
     if (!wr->data) { free(wr); return 0; }
     memcpy(wr->data, buf, n);
     uv_buf_t b = uv_buf_init(wr->data, (unsigned)n);
-    s->write_blocked = 1;
     int rc = uv_write(&wr->req, (uv_stream_t *)&s->tcp, &b, 1, on_write);
     if (rc < 0) {
-        s->write_blocked = 0;
         free(wr->data);
         free(wr);
         return 0;
     }
     yaafc_coro_yield();
-    return s->write_result == 0 ? n : 0;
+    return status == 0 ? n : 0;
 }
 
 static void on_handle_close(uv_handle_t *h)
@@ -293,12 +348,27 @@ struct yloop_ptr_result yloop_create(void)
         free(l);
         return YAAFC_ERR(yloop_ptr, "yloop_create: uv_loop_init failed");
     }
+    /* Zombie-coro reaper: runs at the tail of every loop iteration but
+     * is unref'd so it never by itself keeps uv_run alive. */
+    uv_check_init(&l->loop, &l->reaper);
+    l->reaper.data = l;
+    uv_check_start(&l->reaper, on_reaper_check);
+    uv_unref((uv_handle_t *)&l->reaper);
     return YAAFC_OK(yloop_ptr, l);
 }
 
 void yloop_destroy(struct yloop *l)
 {
     if (!l) return;
+    /* Final sweep: destroy any coro still queued for reaping. */
+    on_reaper_check(&l->reaper);
+    struct coro_zombie *z = l->zombies;
+    while (z) {
+        struct coro_zombie *next = z->next;
+        free(z);
+        z = next;
+    }
+    uv_check_stop(&l->reaper);
     uv_loop_close(&l->loop);
     free(l);
 }
@@ -532,6 +602,63 @@ struct yloop_stream_ptr_result yloop_connect_tcp(struct yloop *l,
         return YAAFC_ERR(yloop_stream_ptr, "yloop_connect_tcp: uv_read_start failed");
     }
     return YAAFC_OK(yloop_stream_ptr, s);
+}
+
+/* ---- blocking-work executor (libuv thread pool) --------------------
+ *
+ * Run a blocking function on libuv's worker pool and suspend the
+ * calling coroutine until it finishes — the loop thread stays free to
+ * service other coroutines meanwhile. This is asyncio's
+ * `run_in_executor` shape (offload → await → resume), the mechanism for
+ * keeping blocking work (sqlite/mdbx queries, libgit2, filesystem) off
+ * the event-loop hot path.
+ *
+ * `work` runs on a POOL thread: it must touch only its own `arg` and no
+ * loop-thread state. The completion callback resumes the coro on the
+ * loop thread. Called outside a coroutine (bootstrap / tests), it runs
+ * inline. */
+struct blocking_work {
+    uv_work_t req;
+    struct yaafc_coro *coro;
+    void (*work)(void *);
+    void *arg;
+};
+
+static void on_blocking_work(uv_work_t *req)
+{
+    struct blocking_work *bw = req->data;
+    bw->work(bw->arg);
+}
+
+static void on_blocking_done(uv_work_t *req, int status)
+{
+    (void)status;
+    struct blocking_work *bw = req->data;
+    yaafc_coro_resume(bw->coro);
+}
+
+struct yaafc_void_result yloop_run_blocking(struct yloop *l, void (*work)(void *), void *arg)
+{
+    if (!l || !work)
+        return YAAFC_ERR(yaafc_void, "yloop_run_blocking: bad args");
+
+    struct yaafc_coro *self = yaafc_coro_current();
+    if (!self) {
+        /* Nothing to suspend (mesh parent, unit tests): run it here. */
+        work(arg);
+        return YAAFC_OK_VOID();
+    }
+
+    struct blocking_work bw = {.coro = self, .work = work, .arg = arg};
+    bw.req.data = &bw; /* lives on the suspended coro's stack until resume */
+    int rc = uv_queue_work(&l->loop, &bw.req, on_blocking_work, on_blocking_done);
+    if (rc < 0) {
+        /* Pool refused the job — fall back to inline rather than fail. */
+        work(arg);
+        return YAAFC_OK_VOID();
+    }
+    yaafc_coro_yield();
+    return YAAFC_OK_VOID();
 }
 
 struct yaafc_void_result yloop_listen_tcp(struct yloop *l, const char *host, int port,

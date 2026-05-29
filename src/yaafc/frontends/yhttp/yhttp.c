@@ -266,8 +266,8 @@ static void route_invoke(struct yloop_stream *s, const char *body, size_t blen,
     yjson_w_key(w, "result");
     char err[256] = {0};
     /* Legacy /invoke is the bootstrap control plane (mesh parent):
-     * the object is local to this process, so dispatch locally. */
-    int rc = fn(NULL, (struct object *)obj, args, w, err, sizeof(err));
+     * the object is local to this process — NULL ctx, NULL headers. */
+    int rc = fn(NULL, (struct object *)obj, NULL, args, w, err, sizeof(err));
     if (rc != 0) {
         yjson_writer_free(w);
         yjson_doc_free(doc);

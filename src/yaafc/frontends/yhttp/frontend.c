@@ -44,13 +44,15 @@
 #include <yaafc/yclass/class.h>
 #include <yaafc/yclass/rpc.h>
 #include <yaafc/yclass/jinvoke.h>
+#include <yaafc/yclass/yheaders.h>
 #include <yaafc/yjson/yjson.h>
 #include <yaafc/yconfig/yconfig.h>
 #include <yaafc/ycore/result.h>
 #include <yaafc/ycore/ytrace.h>
+#include <yaafc/ycore/yspan.h>
 
 /* Each service header brings in its create() + method stubs. */
-#include <yaafc/plugin/storage/storage.h>
+#include <yaafc/plugin/sharded_storage/sharded_storage.h>
 #include <yaafc/plugin/accounts/accounts.h>
 #include <yaafc/plugin/password_authn/password_authn.h>
 #include <yaafc/plugin/token_issuer/token_issuer.h>
@@ -66,6 +68,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/random.h>
+#include <time.h>
+#include <unistd.h>
 
 /* ---------- tiny growable buffer for response bodies ---------- */
 
@@ -390,10 +395,10 @@ static uint32_t resolve_uid(const char *headers_raw, size_t headers_raw_len)
     if (!sid) return 0;
 
     struct ctx c = yaafc_engine_service_ctx(e, "session");
-    if (!c.session) return 0;
+    if (!c.peer) return 0;
     struct object_ptr_result o = session_store_create(&c);
     if (YAAFC_IS_ERR(o)) { yaafc_error_destroy(o.error); return 0; }
-    struct yaafc_uint32_result lr = session_store_lookup(&c, o.value, sid);
+    struct yaafc_uint32_result lr = session_store_lookup(&c, o.value, NULL, sid);
     free(o.value);
     if (YAAFC_IS_ERR(lr)) { yaafc_error_destroy(lr.error); return 0; }
     return lr.value;
@@ -415,7 +420,7 @@ struct svc_ctx {
         struct yaafc_engine *_e = yaafc_active_engine();                           \
         if (!_e) break;                                                            \
         VAR.c = yaafc_engine_service_ctx(_e, SVC);                                 \
-        if (!VAR.c.session) break;                                                 \
+        if (!VAR.c.peer) break;                                                 \
         struct object_ptr_result _o = CREATE_FN(&VAR.c);                           \
         if (YAAFC_IS_ERR(_o)) { yaafc_error_destroy(_o.error); break; }            \
         VAR.obj = _o.value;                                                        \
@@ -428,11 +433,11 @@ struct svc_ctx {
 static inline void svc_close_impl(struct svc_ctx *v)
 {
     if (!v || !v->obj) return;
-    if (v->c.session) {
+    if (v->c.peer) {
         uint64_t h;
         memcpy(&h, (char *)v->obj + sizeof(struct object), sizeof(h));
         uint8_t r;
-        rpc_call(v->c.session, RPC_OP_DESTROY, 0, &h, sizeof(h), &r, 1);
+        rpc_call(v->c.peer, RPC_OP_DESTROY, 0, &h, sizeof(h), &r, 1);
     }
     free(v->obj);
     v->obj = NULL;
@@ -557,7 +562,7 @@ static uint32_t auth_and_start_session(uint32_t uid, int64_t pw,
     SVC_OPEN(pw_sv, "password_authn", password_authn_store_create);
     if (!pw_sv.ok) { *err = "password_authn unreachable"; return 0; }
     struct yaafc_int_result auth =
-        password_authn_store_authenticate(&pw_sv.c, pw_sv.obj, uid, pw);
+        password_authn_store_authenticate(&pw_sv.c, pw_sv.obj, NULL, uid, pw);
     SVC_CLOSE(pw_sv);
     if (YAAFC_IS_ERR(auth) || auth.value != 1) {
         if (YAAFC_IS_ERR(auth)) yaafc_error_destroy(auth.error);
@@ -567,13 +572,13 @@ static uint32_t auth_and_start_session(uint32_t uid, int64_t pw,
 
     SVC_OPEN(ti, "token_issuer", token_issuer_store_create);
     if (!ti.ok) { *err = "token_issuer unreachable"; return 0; }
-    token_issuer_store_login(&ti.c, ti.obj, uid, /*provider*/1);
+    token_issuer_store_login(&ti.c, ti.obj, NULL, uid, /*provider*/1);
     SVC_CLOSE(ti);
 
     SVC_OPEN(ses, "session", session_store_create);
     if (!ses.ok) { *err = "session unreachable"; return 0; }
     struct yaafc_uint32_result sid_r =
-        session_store_start(&ses.c, ses.obj, uid, /*provider*/1);
+        session_store_start(&ses.c, ses.obj, NULL, uid, /*provider*/1);
     SVC_CLOSE(ses);
     if (YAAFC_IS_ERR(sid_r)) {
         yaafc_error_destroy(sid_r.error);
@@ -603,7 +608,7 @@ static void route_login_post(struct yloop_stream *s, const char *body,
      * what differentiates /login from /register. */
     SVC_OPEN(acc, "accounts", accounts_store_create);
     if (!acc.ok) { render_login(s, "accounts service unreachable", keep_alive); return; }
-    struct yaafc_int_result ex = accounts_store_exists(&acc.c, acc.obj, uid);
+    struct yaafc_int_result ex = accounts_store_exists(&acc.c, acc.obj, NULL, uid);
     SVC_CLOSE(acc);
     int exists = YAAFC_IS_OK(ex) && ex.value;
     if (YAAFC_IS_ERR(ex)) yaafc_error_destroy(ex.error);
@@ -644,7 +649,7 @@ static void route_register_post(struct yloop_stream *s, const char *body,
 
     SVC_OPEN(acc, "accounts", accounts_store_create);
     if (!acc.ok) { render_register(s, "accounts service unreachable", keep_alive); return; }
-    struct yaafc_int_result reg = accounts_store_register(&acc.c, acc.obj, uid);
+    struct yaafc_int_result reg = accounts_store_register(&acc.c, acc.obj, NULL, uid);
     SVC_CLOSE(acc);
     int was_new = YAAFC_IS_OK(reg) && reg.value == 1;
     if (YAAFC_IS_ERR(reg)) yaafc_error_destroy(reg.error);
@@ -655,7 +660,7 @@ static void route_register_post(struct yloop_stream *s, const char *body,
 
     SVC_OPEN(pw_sv, "password_authn", password_authn_store_create);
     if (!pw_sv.ok) { render_register(s, "password_authn unreachable", keep_alive); return; }
-    password_authn_store_register(&pw_sv.c, pw_sv.obj, uid, pw);
+    password_authn_store_register(&pw_sv.c, pw_sv.obj, NULL, uid, pw);
     SVC_CLOSE(pw_sv);
 
     /* Bootstrap: the very first user becomes site-owner. After
@@ -663,7 +668,7 @@ static void route_register_post(struct yloop_stream *s, const char *body,
      * uid is the only registered account → promote it. */
     SVC_OPEN(acc2, "accounts", accounts_store_create);
     if (acc2.ok) {
-        struct yaafc_size_result cr = accounts_store_count(&acc2.c, acc2.obj);
+        struct yaafc_size_result cr = accounts_store_count(&acc2.c, acc2.obj, NULL);
         if (YAAFC_IS_OK(cr) && cr.value == 1) {
             promote_to_site_admin(uid);
         } else if (YAAFC_IS_ERR(cr)) {
@@ -699,7 +704,7 @@ static void route_logout(struct yloop_stream *s,
         if (sid) {
             SVC_OPEN(ses, "session", session_store_create);
             if (ses.ok) {
-                struct yaafc_int_result r = session_store_destroy(&ses.c, ses.obj, sid);
+                struct yaafc_int_result r = session_store_destroy(&ses.c, ses.obj, NULL, sid);
                 if (YAAFC_IS_ERR(r)) yaafc_error_destroy(r.error);
                 SVC_CLOSE(ses);
             }
@@ -795,9 +800,9 @@ static int repo_storage_open(struct svc_ctx *out)
 {
     struct yaafc_engine *e = yaafc_active_engine();
     if (!e) return 0;
-    out->c = yaafc_engine_service_ctx(e, "storage");
-    if (!out->c.session) return 0;
-    struct object_ptr_result o = storage_db_create(&out->c);
+    out->c = yaafc_engine_service_ctx(e, "sharded_storage");
+    if (!out->c.peer) return 0;
+    struct object_ptr_result o = sharded_storage_db_create(&out->c);
     if (YAAFC_IS_ERR(o)) { yaafc_error_destroy(o.error); return 0; }
     out->obj = o.value;
     out->ok = 1;
@@ -824,7 +829,7 @@ static int is_site_admin(uint32_t uid)
     if (!repo_storage_open(&st)) return 0;
     char k[64];
     snprintf(k, sizeof(k), "role:%u", uid);
-    struct yaafc_int64_result r = storage_get(&st.c, st.obj, "accounts", k);
+    struct yaafc_int64_result r = sharded_storage_db_get(&st.c, st.obj, NULL, "accounts", k);
     int admin = YAAFC_IS_OK(r) && r.value >= 1;
     if (YAAFC_IS_ERR(r)) yaafc_error_destroy(r.error);
     SVC_CLOSE(st);
@@ -841,7 +846,7 @@ static void promote_to_site_admin(uint32_t uid)
     if (!repo_storage_open(&st)) return;
     char k[64];
     snprintf(k, sizeof(k), "role:%u", uid);
-    storage_set(&st.c, st.obj, "accounts", k, 1);
+    sharded_storage_db_set(&st.c, st.obj, NULL, "accounts", k, 1);
     SVC_CLOSE(st);
     yinfo("authz: uid=%u bootstrapped as site-owner", uid);
 }
@@ -858,12 +863,12 @@ static uint32_t repo_register(const char *account, const char *name, uint32_t ow
     if (!repo_storage_open(&st)) return 0;
     char k[96];
     snprintf(k, sizeof(k), "by_id:%u", rid);
-    storage_set(&st.c, st.obj, "repos", k, 1);
+    sharded_storage_db_set(&st.c, st.obj, NULL, "repos", k, 1);
     snprintf(k, sizeof(k), "owner:%u:count", owner_uid);
-    struct yaafc_int64_result cur = storage_get(&st.c, st.obj, "repos", k);
+    struct yaafc_int64_result cur = sharded_storage_db_get(&st.c, st.obj, NULL, "repos", k);
     int64_t count = (YAAFC_IS_OK(cur) ? cur.value : 0) + 1;
     if (YAAFC_IS_ERR(cur)) yaafc_error_destroy(cur.error);
-    storage_set(&st.c, st.obj, "repos", k, count);
+    sharded_storage_db_set(&st.c, st.obj, NULL, "repos", k, count);
     SVC_CLOSE(st);
     return rid;
 }
@@ -874,7 +879,7 @@ static int repo_exists(uint32_t repo_id)
     if (!repo_storage_open(&st)) return 0;
     char k[64];
     snprintf(k, sizeof(k), "by_id:%u", repo_id);
-    struct yaafc_int_result r = storage_exists(&st.c, st.obj, "repos", k);
+    struct yaafc_int_result r = sharded_storage_db_exists(&st.c, st.obj, NULL, "repos", k);
     int present = YAAFC_IS_OK(r) && r.value;
     if (YAAFC_IS_ERR(r)) yaafc_error_destroy(r.error);
     SVC_CLOSE(st);
@@ -887,7 +892,7 @@ static int64_t repo_count_for_owner(uint32_t owner_uid)
     if (!repo_storage_open(&st)) return -1;
     char k[64];
     snprintf(k, sizeof(k), "owner:%u:count", owner_uid);
-    struct yaafc_int64_result r = storage_get(&st.c, st.obj, "repos", k);
+    struct yaafc_int64_result r = sharded_storage_db_get(&st.c, st.obj, NULL, "repos", k);
     int64_t v = YAAFC_IS_OK(r) ? r.value : 0;
     if (YAAFC_IS_ERR(r)) yaafc_error_destroy(r.error);
     SVC_CLOSE(st);
@@ -922,7 +927,7 @@ static void render_repos(struct yloop_stream *s, uint32_t uid,
     int64_t total = -1;
     SVC_OPEN(repo, "git_repo", git_repo_store_create);
     if (repo.ok) {
-        struct yaafc_size_result r = git_repo_store_count_total(&repo.c, repo.obj);
+        struct yaafc_size_result r = git_repo_store_count_total(&repo.c, repo.obj, NULL);
         if (YAAFC_IS_OK(r)) total = (int64_t)r.value;
         else yaafc_error_destroy(r.error);
         SVC_CLOSE(repo);
@@ -982,7 +987,7 @@ static void route_repos_new_post(struct yloop_stream *s, uint32_t uid,
      * parent dir (<repos_dir>/<uname>/<name>.git). */
     SVC_OPEN(repo, "git_repo", git_repo_store_create);
     if (repo.ok) {
-        git_repo_store_make(&repo.c, repo.obj, uid, uname, name);
+        git_repo_store_make(&repo.c, repo.obj, NULL, uid, uname, name);
         SVC_CLOSE(repo);
     }
 
@@ -1091,7 +1096,7 @@ static void render_repo_show(struct yloop_stream *s, uint32_t uid,
     uint32_t owner = 0;
     SVC_OPEN(rep, "git_repo", git_repo_store_create);
     if (rep.ok) {
-        struct yaafc_uint32_result r = git_repo_store_owner_of(&rep.c, rep.obj, repo_id);
+        struct yaafc_uint32_result r = git_repo_store_owner_of(&rep.c, rep.obj, NULL, repo_id);
         if (YAAFC_IS_OK(r)) owner = r.value;
         else yaafc_error_destroy(r.error);
         SVC_CLOSE(rep);
@@ -1100,15 +1105,15 @@ static void render_repo_show(struct yloop_stream *s, uint32_t uid,
     int64_t open_issues = -1, queued = -1, running = -1, done = -1;
     SVC_OPEN(iss, "issues", issues_store_create);
     if (iss.ok) {
-        struct yaafc_size_result o = issues_store_count_open_in_repo(&iss.c, iss.obj, repo_id);
+        struct yaafc_size_result o = issues_store_count_open_in_repo(&iss.c, iss.obj, NULL, repo_id);
         if (YAAFC_IS_OK(o)) open_issues = (int64_t)o.value; else yaafc_error_destroy(o.error);
         SVC_CLOSE(iss);
     }
     SVC_OPEN(gp, "git_pipeline", git_pipeline_store_create);
     if (gp.ok) {
-        struct yaafc_size_result p = git_pipeline_store_count_pending(&gp.c, gp.obj);
-        struct yaafc_size_result r = git_pipeline_store_count_running(&gp.c, gp.obj);
-        struct yaafc_size_result d = git_pipeline_store_count_done(&gp.c, gp.obj);
+        struct yaafc_size_result p = git_pipeline_store_count_pending(&gp.c, gp.obj, NULL);
+        struct yaafc_size_result r = git_pipeline_store_count_running(&gp.c, gp.obj, NULL);
+        struct yaafc_size_result d = git_pipeline_store_count_done(&gp.c, gp.obj, NULL);
         if (YAAFC_IS_OK(p)) queued = (int64_t)p.value; else yaafc_error_destroy(p.error);
         if (YAAFC_IS_OK(r)) running = (int64_t)r.value; else yaafc_error_destroy(r.error);
         if (YAAFC_IS_OK(d)) done = (int64_t)d.value; else yaafc_error_destroy(d.error);
@@ -1185,7 +1190,7 @@ static void render_repo_issues(struct yloop_stream *s, uint32_t uid,
     int64_t open_in_repo = -1;
     SVC_OPEN(iss, "issues", issues_store_create);
     if (iss.ok) {
-        struct yaafc_size_result o = issues_store_count_open_in_repo(&iss.c, iss.obj, repo_id);
+        struct yaafc_size_result o = issues_store_count_open_in_repo(&iss.c, iss.obj, NULL, repo_id);
         if (YAAFC_IS_OK(o)) open_in_repo = (int64_t)o.value; else yaafc_error_destroy(o.error);
         SVC_CLOSE(iss);
     }
@@ -1246,7 +1251,7 @@ static void route_repo_issues_new_post(struct yloop_stream *s, uint32_t uid,
     if (!repo_exists(repo_id)) { send_html(s, 404, "<p>no such repo</p>", 19, keep_alive, NULL); return; }
     SVC_OPEN(iss, "issues", issues_store_create);
     if (iss.ok) {
-        issues_store_open(&iss.c, iss.obj, repo_id, uid ? uid : 1);
+        issues_store_open(&iss.c, iss.obj, NULL, repo_id, uid ? uid : 1);
         SVC_CLOSE(iss);
     }
     char where[160];
@@ -1268,7 +1273,7 @@ static void route_repo_issues_close_post(struct yloop_stream *s, uint32_t uid,
         if (iid) {
             SVC_OPEN(iss, "issues", issues_store_create);
             if (iss.ok) {
-                issues_store_close(&iss.c, iss.obj, iid);
+                issues_store_close(&iss.c, iss.obj, NULL, iid);
                 SVC_CLOSE(iss);
             }
         }
@@ -1297,9 +1302,9 @@ static void render_repo_runs(struct yloop_stream *s, uint32_t uid,
     int64_t q = -1, r = -1, d = -1;
     SVC_OPEN(gp, "git_pipeline", git_pipeline_store_create);
     if (gp.ok) {
-        struct yaafc_size_result a = git_pipeline_store_count_pending(&gp.c, gp.obj);
-        struct yaafc_size_result b2 = git_pipeline_store_count_running(&gp.c, gp.obj);
-        struct yaafc_size_result c = git_pipeline_store_count_done(&gp.c, gp.obj);
+        struct yaafc_size_result a = git_pipeline_store_count_pending(&gp.c, gp.obj, NULL);
+        struct yaafc_size_result b2 = git_pipeline_store_count_running(&gp.c, gp.obj, NULL);
+        struct yaafc_size_result c = git_pipeline_store_count_done(&gp.c, gp.obj, NULL);
         if (YAAFC_IS_OK(a)) q = (int64_t)a.value;  else yaafc_error_destroy(a.error);
         if (YAAFC_IS_OK(b2)) r = (int64_t)b2.value; else yaafc_error_destroy(b2.error);
         if (YAAFC_IS_OK(c)) d = (int64_t)c.value;  else yaafc_error_destroy(c.error);
@@ -1349,7 +1354,7 @@ static void route_repo_runs_new_post(struct yloop_stream *s, uint32_t uid,
     if (!repo_exists(repo_id)) { send_html(s, 404, "<p>no such repo</p>", 19, keep_alive, NULL); return; }
     SVC_OPEN(gp, "git_pipeline", git_pipeline_store_create);
     if (gp.ok) {
-        git_pipeline_store_enqueue(&gp.c, gp.obj, repo_id);
+        git_pipeline_store_enqueue(&gp.c, gp.obj, NULL, repo_id);
         SVC_CLOSE(gp);
     }
     char where[160];
@@ -1370,7 +1375,7 @@ static void route_repo_runs_lease_post(struct yloop_stream *s, uint32_t uid,
         if (!runner) runner = 1;
         SVC_OPEN(gp, "git_pipeline", git_pipeline_store_create);
         if (gp.ok) {
-            git_pipeline_store_lease(&gp.c, gp.obj, runner);
+            git_pipeline_store_lease(&gp.c, gp.obj, NULL, runner);
             SVC_CLOSE(gp);
         }
     }
@@ -1390,7 +1395,7 @@ static void render_admin_users(struct yloop_stream *s, uint32_t uid,
     int64_t total = -1;
     SVC_OPEN(acc, "accounts", accounts_store_create);
     if (acc.ok) {
-        struct yaafc_size_result r = accounts_store_count(&acc.c, acc.obj);
+        struct yaafc_size_result r = accounts_store_count(&acc.c, acc.obj, NULL);
         if (YAAFC_IS_OK(r)) total = (int64_t)r.value;
         else yaafc_error_destroy(r.error);
         SVC_CLOSE(acc);
@@ -1399,7 +1404,7 @@ static void render_admin_users(struct yloop_stream *s, uint32_t uid,
     int64_t patc = -1;
     SVC_OPEN(pat, "personal_access_tokens", personal_access_tokens_store_create);
     if (pat.ok) {
-        struct yaafc_size_result r = personal_access_tokens_store_count_active(&pat.c, pat.obj);
+        struct yaafc_size_result r = personal_access_tokens_store_count_active(&pat.c, pat.obj, NULL);
         if (YAAFC_IS_OK(r)) patc = (int64_t)r.value;
         else yaafc_error_destroy(r.error);
         SVC_CLOSE(pat);
@@ -1436,7 +1441,7 @@ static void route_admin_users_register(struct yloop_stream *s,
         uint32_t uid = (uint32_t)strtoul(uid_s, NULL, 10);
         SVC_OPEN(acc, "accounts", accounts_store_create);
         if (acc.ok && uid) {
-            accounts_store_register(&acc.c, acc.obj, uid);
+            accounts_store_register(&acc.c, acc.obj, NULL, uid);
             SVC_CLOSE(acc);
         }
     }
@@ -1451,7 +1456,7 @@ static void route_admin_users_mint_pat(struct yloop_stream *s,
         uint32_t uid = (uint32_t)strtoul(uid_s, NULL, 10);
         SVC_OPEN(pat, "personal_access_tokens", personal_access_tokens_store_create);
         if (pat.ok && uid) {
-            personal_access_tokens_store_mint(&pat.c, pat.obj, uid);
+            personal_access_tokens_store_mint(&pat.c, pat.obj, NULL, uid);
             SVC_CLOSE(pat);
         }
     }
@@ -1600,10 +1605,10 @@ static uint32_t uid_for_sid(uint32_t sid)
     struct yaafc_engine *e = yaafc_active_engine();
     if (!e) return 0;
     struct ctx c = yaafc_engine_service_ctx(e, "session");
-    if (!c.session) return 0;
+    if (!c.peer) return 0;
     struct object_ptr_result o = session_store_create(&c);
     if (YAAFC_IS_ERR(o)) { yaafc_error_destroy(o.error); return 0; }
-    struct yaafc_uint32_result lr = session_store_lookup(&c, o.value, sid);
+    struct yaafc_uint32_result lr = session_store_lookup(&c, o.value, NULL, sid);
     object_release_in_ctx(&c, o.value);
     if (YAAFC_IS_ERR(lr)) { yaafc_error_destroy(lr.error); return 0; }
     return lr.value;
@@ -1654,6 +1659,20 @@ static int path_to_qnames(const char *path,
     return 1;
 }
 
+/* Mint a fresh 64-bit correlation id. getrandom() needs no process
+ * state (so no file-scope counter); the rare failure path falls back to
+ * a clock/pid mix so an id is always produced. */
+static uint64_t mint_trace_id(void)
+{
+    uint64_t id = 0;
+    if (getrandom(&id, sizeof(id), 0) == (ssize_t)sizeof(id) && id)
+        return id;
+    struct timespec ts = {0};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    id = ((uint64_t)ts.tv_sec << 32) ^ (uint64_t)ts.tv_nsec ^ ((uint64_t)getpid() << 16);
+    return id ? id : 1;
+}
+
 /* POST /_rpc — yaapp-style public gateway dispatch. Body:
  *   {"path":"service.class.method","args":[...],"kwargs":{...}}
  * Resolves the opaque session token to a uid, builds a REMOTE ctx for
@@ -1696,9 +1715,7 @@ static void route_json_rpc(struct yloop_stream *s,
     }
 
     struct ctx c = yaafc_engine_service_ctx(e, service);
-    c.uid = uid;
-    c.sid = sid;
-    if (!c.session) {
+    if (!c.peer) {
         yjson_doc_free(doc);
         send_json_error(s, 502, "_rpc: unknown service", keep_alive);
         return;
@@ -1722,11 +1739,46 @@ static void route_json_rpc(struct yloop_stream *s,
         return;
     }
 
+    /* Build the request-header bag the gateway hands to the backend:
+     * the resolved auth identity (uid/sid) as well-known keys. trace_id
+     * and anything else slot in here later — the framework serializes
+     * the whole bag onto the wire. */
+    /* Correlation id: honour an inbound X-Trace-Id, else mint one. The
+     * entry component (this gateway) generates it when absent; every
+     * downstream hop propagates it via the header bag. Hoisted to the
+     * function scope so the dispatch span below can report it. */
+    uint64_t trace_id = 0;
+    struct yheaders *hdrs = yheaders_new();
+    if (hdrs) {
+        yheaders_set_u32(hdrs, "uid", uid);
+        yheaders_set_u32(hdrs, "sid", sid);
+        char tbuf[24] = {0};
+        if (header_value(headers_raw, headers_raw_len, "x-trace-id", tbuf, sizeof(tbuf)))
+            trace_id = strtoull(tbuf, NULL, 10);
+        if (!trace_id) trace_id = mint_trace_id();
+        yheaders_set_u64(hdrs, "trace_id", trace_id);
+        yinfo("[gateway] _rpc trace=%llu path=%s uid=%u",
+              (unsigned long long)trace_id, path, uid);
+    }
+
     struct yjson_writer *w = yjson_writer_new();
     yjson_w_begin_object(w);
     yjson_w_key(w, "result");
     char err[256] = {0};
-    int rc = fn(&c, obj_r.value, args, w, err, sizeof(err));
+    /* Top-level span for the whole gateway dispatch — the root of the
+     * trace. Subtract the rpc.* / skel.* / db.* child spans (same trace
+     * id) to see where the time actually went. */
+    double span_start = yaafc_ytime_monotonic_sec();
+    int rc = fn(&c, obj_r.value, hdrs, args, w, err, sizeof(err));
+    double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;
+    ydebug("span trace=%llu op=gateway.%s dur_us=%.0f", (unsigned long long)trace_id,
+           path, span_us);
+    {
+        char span_op[96];
+        snprintf(span_op, sizeof(span_op), "gateway.%s", path);
+        yspan_record(span_op, span_us);
+    }
+    yheaders_free(hdrs);
     object_release_in_ctx(&c, obj_r.value);
     if (rc != 0) {
         yjson_writer_free(w);
@@ -1880,7 +1932,7 @@ int yhttp_frontend_try(struct yloop_stream *s,
      * yhttp child — leave it alone and let it serve JSON only. */
     struct yaafc_engine *e = yaafc_active_engine();
     if (!e) return 0;
-    if (!yaafc_engine_service_ctx(e, "session").session) return 0;
+    if (!yaafc_engine_service_ctx(e, "session").peer) return 0;
 
     uint32_t uid = resolve_uid(headers_raw, headers_raw_len);
     /* Cookie username is decided up front so route_root can route
@@ -1912,6 +1964,17 @@ int yhttp_frontend_try(struct yloop_stream *s,
             if (path_eq(path, "/_describe"))      { route_describe(s, NULL, 0, keep_alive); return 1; }
             if (path_eq(path, "/_describe_tree")) { route_describe(s, NULL, 1, keep_alive); return 1; }
             if (try_hierarchical_describe(s, path, keep_alive)) return 1;
+        }
+
+        /* GET /_trace — dump the in-memory span collector (this
+         * process's spans aggregated by op: count + p50/p90/p99/max us).
+         * `?reset` clears the ring first so you can measure a window. */
+        if (is_get && path_eq(path, "/_trace")) {
+            if (strstr(path, "reset")) yspan_reset();
+            char dump[32768];
+            size_t n = yspan_dump(dump, sizeof(dump));
+            send_html(s, 200, dump, n, keep_alive, NULL);
+            return 1;
         }
 
         /* Retire the legacy public surface ON THE GATEWAY. The mesh

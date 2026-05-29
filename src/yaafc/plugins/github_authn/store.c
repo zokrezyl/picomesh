@@ -43,6 +43,7 @@ static struct github_authn_store_data *gh(struct object *obj)
 YAAFC_CLASS_ANNOTATE("override@github_authn:store:store_set_credentials")
 struct yaafc_int_result github_authn_store_set_credentials_impl(struct ctx *ctx,
                                                                 struct object *obj,
+                                                                struct yheaders *hdrs,
                                                                 uint32_t client_id,
                                                                 uint32_t secret_id)
 {
@@ -57,6 +58,7 @@ struct yaafc_int_result github_authn_store_set_credentials_impl(struct ctx *ctx,
 YAAFC_CLASS_ANNOTATE("override@github_authn:store:store_register_code")
 struct yaafc_int_result github_authn_store_register_code_impl(struct ctx *ctx,
                                                               struct object *obj,
+                                                              struct yheaders *hdrs,
                                                               uint32_t code, uint32_t user_id)
 {
     (void)ctx;
@@ -74,7 +76,7 @@ struct yaafc_int_result github_authn_store_register_code_impl(struct ctx *ctx,
 }
 
 YAAFC_CLASS_ANNOTATE("override@github_authn:store:store_resolve")
-struct yaafc_uint32_result github_authn_store_resolve_impl(struct ctx *ctx, struct object *obj,
+struct yaafc_uint32_result github_authn_store_resolve_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                            uint32_t code)
 {
     (void)ctx;
@@ -88,7 +90,7 @@ struct yaafc_uint32_result github_authn_store_resolve_impl(struct ctx *ctx, stru
 }
 
 YAAFC_CLASS_ANNOTATE("override@github_authn:store:store_count_codes")
-struct yaafc_size_result github_authn_store_count_codes_impl(struct ctx *ctx, struct object *obj)
+struct yaafc_size_result github_authn_store_count_codes_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
     (void)ctx;
     return YAAFC_OK(yaafc_size, gh(obj)->count);

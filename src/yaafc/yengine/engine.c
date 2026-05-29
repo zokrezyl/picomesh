@@ -9,11 +9,15 @@
 #include <yaafc/yclass/class.h>
 #include <yaafc/yclass/rpc.h>
 #include <yaafc/yloop/yloop.h>
+#include <yaafc/yco/coro.h>
 #include <yaafc/yconfig/yconfig.h>
 #include <yaafc/yargv/yargv.h>
 #include <yaafc/ycore/ytrace.h>
 #include <yaafc/ycore/result.h>
 
+#include <uthash.h>
+
+#include <signal.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -29,7 +33,7 @@
  * for the handful of remotes a typical plugin holds. */
 struct remote_entry {
     char *name;
-    struct rpc_session *session;
+    struct peer_channel *peer;
     struct remote_entry *next;
 };
 
@@ -66,6 +70,14 @@ struct yaafc_engine_ptr_result yaafc_engine_create(const struct yaafc_engine_arg
 {
     ytrace_init();
     rpc_init();
+
+    /* Ignore SIGPIPE process-wide. A write to a peer that has closed its
+     * end must surface as EPIPE on the syscall, not kill the process.
+     * libuv guards its own I/O with MSG_NOSIGNAL, but the blocking-fd
+     * write paths (and any other raw write) do not — under load with
+     * many short-lived peer connections, one such write to a freshly
+     * closed socket would otherwise terminate the whole service. */
+    signal(SIGPIPE, SIG_IGN);
 
     struct yaafc_engine *e = calloc(1, sizeof(*e));
     if (!e) return YAAFC_ERR(yaafc_engine_ptr, "yaafc_engine_create: calloc failed");
@@ -139,7 +151,7 @@ void yaafc_engine_destroy(struct yaafc_engine *e)
     struct remote_entry *r = e->remotes;
     while (r) {
         struct remote_entry *next = r->next;
-        rpc_session_destroy(r->session);
+        peer_channel_destroy(r->peer);
         free(r->name);
         free(r);
         r = next;
@@ -152,27 +164,299 @@ void yaafc_engine_destroy(struct yaafc_engine *e)
 
 /* ---- remote sessions ---------------------------------------------- */
 
-static int dial_tcp(const char *host, int port)
+/* Async, yloop-backed outbound RPC transport with request multiplexing.
+ *
+ * The connection is a yloop_stream, so read/write yield the calling
+ * coroutine instead of freezing the event loop. Connect is lazy —
+ * deferred to the first call, which always runs inside a serve coroutine
+ * (where yloop_connect_tcp is legal).
+ *
+ * One session is shared by every coroutine talking to a given backend.
+ * Rather than serialise calls behind a single-in-flight lock, every
+ * request carries a unique req_id and many calls fly concurrently on the
+ * one connection. A dedicated reader coroutine owns all reads: it pulls
+ * each response frame, looks the req_id up in the pending map, copies the
+ * payload into that caller's buffer, and resumes it. Writers each emit a
+ * whole request frame in one yloop_write (libuv keeps the bytes of a
+ * single write contiguous, so frames never interleave on the wire). No
+ * cooperative lock, no head-of-line blocking. */
+struct coro_waiter {
+    struct yaafc_coro *coro;
+    struct coro_waiter *next;
+};
+
+struct pending_call {
+    uint32_t req_id;
+    struct yaafc_coro *coro; /* caller parked waiting for this response */
+    void *resp;              /* caller's output buffer */
+    size_t resp_max;
+    size_t resp_len;         /* set by the deliverer before resuming */
+    int done;                /* delivered (success or failure) */
+    int waiting;             /* caller is parked on the response yield */
+    struct pending_call *next_dead; /* transient list link during fail-all */
+    UT_hash_handle hh;
+};
+
+struct rpc_async_client {
+    struct yloop *loop;
+    char *host;
+    int port;
+    struct yloop_stream *stream;  /* NULL until connected / after a drop */
+    uint32_t next_req_id;
+    struct pending_call *pending; /* uthash by req_id */
+    struct yaafc_coro *reader;    /* per-connection demux reader coro */
+    int connecting;               /* a connect is in flight */
+    struct coro_waiter *connect_wq_head, *connect_wq_tail; /* parked on connect */
+};
+
+/* Drain `n` bytes off the stream into a scratch buffer. Returns 1 on
+ * success, 0 if the stream broke mid-drain. */
+static int rpc_async_drain(struct yloop_stream *stream, uint32_t n)
 {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
-    /* Disable Nagle: yrpc traffic is request/response with small
-     * (header+body_len+body) frames; the default 40 ms delayed-ACK +
-     * Nagle interaction kills loopback latency. */
-    int one = 1;
-    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
-    struct sockaddr_in addr = {0};
-    addr.sin_family = AF_INET;
-    if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) {
-        close(fd);
-        return -1;
+    uint8_t scratch[512];
+    while (n) {
+        size_t chunk = n > sizeof(scratch) ? sizeof(scratch) : n;
+        if (yloop_read(stream, scratch, chunk) != chunk) return 0;
+        n -= (uint32_t)chunk;
     }
-    addr.sin_port = htons((uint16_t)port);
-    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        close(fd);
-        return -1;
+    return 1;
+}
+
+/* Hand a completed (or failed) response to its waiter: record the length,
+ * unlink from the map, and resume IFF the caller has actually parked on
+ * the response yield. A response can race ahead of the caller's own write
+ * completion (loopback is fast); resuming then would wake the caller while
+ * it is still inside yloop_write. Instead we stash the result and let the
+ * caller observe `done` once its write completes and it reaches the await
+ * loop. The caller owns `p` and frees it. */
+static void rpc_async_deliver(struct rpc_async_client *c, struct pending_call *p,
+                              size_t resp_len)
+{
+    p->resp_len = resp_len;
+    p->done = 1;
+    HASH_DEL(c->pending, p);
+    if (p->waiting) yaafc_coro_resume(p->coro);
+}
+
+/* Fail every outstanding call — used when the reader sees EOF. Detach the
+ * whole map first so callers resumed here can register fresh requests on a
+ * reconnected stream without us iterating a mutating table. Callers parked
+ * on the response yield are resumed; callers still inside yloop_write are
+ * left for their (now-cancelled) write completion to unwind. */
+static void rpc_async_fail_all(struct rpc_async_client *c)
+{
+    struct pending_call *p, *tmp, *dead = NULL;
+    HASH_ITER(hh, c->pending, p, tmp) {
+        HASH_DEL(c->pending, p);
+        p->resp_len = 0;
+        p->done = 1;
+        if (p->waiting) {
+            p->next_dead = dead;
+            dead = p;
+        }
     }
-    return fd;
+    while (dead) {
+        struct pending_call *next = dead->next_dead; /* capture before resume frees it */
+        yaafc_coro_resume(dead->coro);
+        dead = next;
+    }
+}
+
+static void rpc_async_reader_entry(void *arg)
+{
+    struct rpc_async_client *c = arg;
+    struct yloop_stream *stream = c->stream;
+
+    for (;;) {
+        uint32_t req_id = 0, resp_len = 0;
+        if (yloop_read(stream, &req_id, 4) != 4) break;
+        if (yloop_read(stream, &resp_len, 4) != 4) break;
+
+        struct pending_call *p = NULL;
+        HASH_FIND(hh, c->pending, &req_id, sizeof(req_id), p);
+        if (!p) {
+            /* No waiter (e.g. a caller that already gave up) — drop it. */
+            ywarn("yrpc-reader: response for unknown req_id=%u, draining %u", req_id, resp_len);
+            if (!rpc_async_drain(stream, resp_len)) break;
+            continue;
+        }
+        if (resp_len > p->resp_max) {
+            /* Caller's buffer too small — same as the legacy "return 0". */
+            if (!rpc_async_drain(stream, resp_len)) break;
+            rpc_async_deliver(c, p, 0);
+            continue;
+        }
+        if (resp_len && yloop_read(stream, p->resp, resp_len) != resp_len) break;
+        rpc_async_deliver(c, p, resp_len);
+    }
+
+    /* Stream broke. Fail every outstanding call, tear the stream down so
+     * the next call reconnects, and finish — the reader coro is reaped
+     * lazily on the next connect. */
+    ydebug("mux: backend connection dropped, failing %u pending call(s)",
+           HASH_COUNT(c->pending));
+    rpc_async_fail_all(c);
+    if (c->stream == stream) {
+        yloop_close(c->stream);
+        c->stream = NULL;
+    }
+}
+
+/* Establish the connection (lazy) and start the reader. Concurrent
+ * callers that arrive mid-connect park until it completes. Returns 1 if
+ * the stream is ready, 0 on connect failure. */
+static int rpc_async_ensure_connected(struct rpc_async_client *c)
+{
+    if (c->stream) return 1;
+
+    if (c->connecting) {
+        struct coro_waiter w = {.coro = yaafc_coro_current(), .next = NULL};
+        if (c->connect_wq_tail) c->connect_wq_tail->next = &w;
+        else c->connect_wq_head = &w;
+        c->connect_wq_tail = &w;
+        yaafc_coro_yield();
+        return c->stream != NULL;
+    }
+
+    c->connecting = 1;
+
+    /* Reap a reader coro left finished by a previous connection drop. */
+    if (c->reader && yaafc_coro_is_finished(c->reader)) {
+        yaafc_coro_destroy(c->reader);
+        c->reader = NULL;
+    }
+
+    int ok = 0;
+    struct yloop_stream_ptr_result sr = yloop_connect_tcp(c->loop, c->host, c->port);
+    if (YAAFC_IS_ERR(sr)) {
+        yaafc_error_destroy(sr.error);
+    } else {
+        c->stream = sr.value;
+        struct yaafc_coro_ptr_result rr =
+            yaafc_coro_spawn(rpc_async_reader_entry, c, 0, "yrpc-reader");
+        if (YAAFC_IS_ERR(rr)) {
+            yaafc_error_destroy(rr.error);
+            yloop_close(c->stream);
+            c->stream = NULL;
+        } else {
+            c->reader = rr.value;
+            ok = 1;
+        }
+    }
+
+    c->connecting = 0;
+
+    /* Start the reader (it runs to its first yloop_read and parks). */
+    if (ok) yaafc_coro_resume(c->reader);
+
+    /* Wake everyone who parked waiting for this connect. */
+    struct coro_waiter *wq = c->connect_wq_head;
+    c->connect_wq_head = c->connect_wq_tail = NULL;
+    while (wq) {
+        struct coro_waiter *next = wq->next;
+        yaafc_coro_resume(wq->coro);
+        wq = next;
+    }
+    return ok;
+}
+
+static size_t rpc_async_client_call(void *vc, enum rpc_op op, uint32_t id,
+                                    const void *body, size_t body_len,
+                                    void *resp, size_t resp_max)
+{
+    struct rpc_async_client *c = vc;
+
+    if (!rpc_async_ensure_connected(c)) return 0;
+
+    uint32_t req_id = ++c->next_req_id;
+    if (req_id == 0) req_id = ++c->next_req_id; /* keep 0 reserved */
+
+    struct pending_call *p = calloc(1, sizeof(*p));
+    if (!p) return 0;
+    p->req_id = req_id;
+    p->coro = yaafc_coro_current();
+    p->resp = resp;
+    p->resp_max = resp_max;
+    HASH_ADD(hh, c->pending, req_id, sizeof(req_id), p);
+
+    /* Frame: header | req_id | body_len | body — emitted in one write so
+     * libuv keeps it contiguous and it can't interleave with other
+     * writers on this connection. */
+    uint32_t header = RPC_HDR_MAKE(op, id);
+    uint32_t blen = (uint32_t)body_len;
+    size_t frame_len = 12 + body_len;
+    uint8_t *frame = malloc(frame_len);
+    if (!frame) { HASH_DEL(c->pending, p); free(p); return 0; }
+    memcpy(frame, &header, 4);
+    memcpy(frame + 4, &req_id, 4);
+    memcpy(frame + 8, &blen, 4);
+    if (body_len) memcpy(frame + 12, body, body_len);
+
+    size_t wrote = yloop_write(c->stream, frame, frame_len);
+    free(frame);
+    if (wrote != frame_len) {
+        /* Write failed: drop our own pending and bail. The broken socket
+         * will surface as EOF on the reader, which fails the rest and
+         * reconnects on the next call. (If a teardown already delivered
+         * `p`, it's off the map and done — we just free it.) */
+        if (!p->done) HASH_DEL(c->pending, p);
+        free(p);
+        return 0;
+    }
+
+    /* Park until the reader delivers our response. Set `waiting` so the
+     * reader knows it may resume us; the loop also covers the case where
+     * the response already landed during our write completion. */
+    while (!p->done) {
+        p->waiting = 1;
+        yaafc_coro_yield();
+    }
+
+    size_t result_len = p->resp_len;
+    free(p);
+    return result_len;
+}
+
+static void rpc_async_client_destroy(void *vc)
+{
+    struct rpc_async_client *c = vc;
+    if (!c) return;
+    /* Shutdown path: the loop has stopped, so don't resume anyone — just
+     * free outstanding state. */
+    struct pending_call *p, *tmp;
+    HASH_ITER(hh, c->pending, p, tmp) {
+        HASH_DEL(c->pending, p);
+        free(p);
+    }
+    if (c->reader && yaafc_coro_is_finished(c->reader)) yaafc_coro_destroy(c->reader);
+    if (c->stream) yloop_close(c->stream);
+    free(c->host);
+    free(c);
+}
+
+static struct rpc_async_client *rpc_async_client_create(struct yloop *loop,
+                                                        const char *host, int port)
+{
+    struct rpc_async_client *c = calloc(1, sizeof(*c));
+    if (!c) return NULL;
+    c->loop = loop;
+    c->port = port;
+    c->host = strdup(host);
+    if (!c->host) { free(c); return NULL; }
+    return c;
+}
+
+/* Build an async-backed session for a remote: a fd-less peer_channel
+ * whose calls are carried by the yloop client above. */
+static struct peer_channel *open_async_session(struct yloop *loop,
+                                              const char *host, int port)
+{
+    struct rpc_async_client *c = rpc_async_client_create(loop, host, port);
+    if (!c) return NULL;
+    struct peer_channel *s = peer_channel_create(-1); /* no fd; async carries IO */
+    if (!s) { rpc_async_client_destroy(c); return NULL; }
+    peer_channel_set_async(s, c, rpc_async_client_call, rpc_async_client_destroy);
+    return s;
 }
 
 struct yaafc_void_result yaafc_engine_add_remote(struct yaafc_engine *e,
@@ -182,50 +466,47 @@ struct yaafc_void_result yaafc_engine_add_remote(struct yaafc_engine *e,
     if (!e || !name) return YAAFC_ERR(yaafc_void, "add_remote: bad args");
     if (!host) host = "127.0.0.1";
 
-    /* Replace any previous registration with the same name. */
+    /* Replace any previous registration with the same name. The async
+     * session connects lazily on first use, so there's no dial here —
+     * just swap the session in. */
     for (struct remote_entry *r = e->remotes; r; r = r->next) {
         if (strcmp(r->name, name) == 0) {
-            rpc_session_destroy(r->session);
-            r->session = NULL;
-            int fd = dial_tcp(host, port);
-            if (fd < 0) return YAAFC_ERR(yaafc_void, "add_remote: dial failed");
-            r->session = rpc_session_create(fd);
-            if (!r->session) { close(fd); return YAAFC_ERR(yaafc_void, "add_remote: session_create"); }
-            yinfo("engine: reopened remote '%s' → %s:%d", name, host, port);
+            peer_channel_destroy(r->peer);
+            r->peer = open_async_session(e->loop, host, port);
+            if (!r->peer) return YAAFC_ERR(yaafc_void, "add_remote: session_create");
+            yinfo("engine: reopened remote '%s' → %s:%d (async)", name, host, port);
             return YAAFC_OK_VOID();
         }
     }
 
-    int fd = dial_tcp(host, port);
-    if (fd < 0) return YAAFC_ERR(yaafc_void, "add_remote: dial failed");
-    struct rpc_session *s = rpc_session_create(fd);
-    if (!s) { close(fd); return YAAFC_ERR(yaafc_void, "add_remote: session_create"); }
+    struct peer_channel *s = open_async_session(e->loop, host, port);
+    if (!s) return YAAFC_ERR(yaafc_void, "add_remote: session_create");
 
     struct remote_entry *node = calloc(1, sizeof(*node));
-    if (!node) { rpc_session_destroy(s); return YAAFC_ERR(yaafc_void, "add_remote: calloc"); }
+    if (!node) { peer_channel_destroy(s); return YAAFC_ERR(yaafc_void, "add_remote: calloc"); }
     node->name = strdup(name);
-    if (!node->name) { rpc_session_destroy(s); free(node); return YAAFC_ERR(yaafc_void, "add_remote: strdup"); }
-    node->session = s;
+    if (!node->name) { peer_channel_destroy(s); free(node); return YAAFC_ERR(yaafc_void, "add_remote: strdup"); }
+    node->peer = s;
     node->next = e->remotes;
     e->remotes = node;
     yinfo("engine: opened remote '%s' → %s:%d", name, host, port);
     return YAAFC_OK_VOID();
 }
 
-struct rpc_session *yaafc_engine_remote(struct yaafc_engine *e, const char *name)
+struct peer_channel *yaafc_engine_remote(struct yaafc_engine *e, const char *name)
 {
     if (!e || !name) return NULL;
     for (struct remote_entry *r = e->remotes; r; r = r->next) {
-        if (strcmp(r->name, name) == 0) return r->session;
+        if (strcmp(r->name, name) == 0) return r->peer;
     }
     return NULL;
 }
 
 struct ctx yaafc_engine_service_ctx(struct yaafc_engine *e, const char *service)
 {
-    struct ctx c = {.session = NULL};
+    struct ctx c = {.peer = NULL};
     if (!e || !service) return c;
-    c.session = yaafc_engine_remote(e, service);
+    c.peer = yaafc_engine_remote(e, service);
     return c;
 }
 
