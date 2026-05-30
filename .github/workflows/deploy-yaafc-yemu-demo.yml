@@ -8,8 +8,11 @@ name: Deploy yaafc-yemu browser demo to GitHub Pages
 # recipes, alpine minirootfs comes straight from dl-cdn.alpinelinux.org.
 #
 # Trigger: tag push `yaafc-<x.y.z>[-<pre>]`, plus manual dispatch.
-# First run takes ~15 minutes (linux kernel build); subsequent runs
-# reuse the cached 3rdparty tarballs (~3 minutes).
+# 3rdparty (the linked C libs plus the riscv64 kernel + opensbi firmware)
+# is pulled as prebuilt release assets published by the build-3rdparty-*
+# workflows — so a run is ~3 minutes with no from-source 3rdparty build,
+# unless a release is missing for the pinned version (then it falls back
+# to building that recipe locally).
 
 on:
   push:

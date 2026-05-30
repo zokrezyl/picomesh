@@ -38,6 +38,14 @@ mesh:
     # longer run as a mesh service — every backend uses this.
     sharded_storage:
       port: 8212
+      # gh#6: in-process multithreaded workers. Set `workers: N` to run
+      # this service as N worker threads in ONE process — each with its
+      # own libuv event loop AND its own libco coroutine scheduler, all
+      # accept()ing on the same port via SO_REUSEPORT. The RPC handle
+      # table is per-worker (a connection is pinned to one worker for its
+      # lifetime); the class registry is shared read-only. Omitted ⇒ 1
+      # (single-threaded). Requires libco built with -DLIBCO_MP.
+      #   workers: 4
       plugins: [sharded_storage]
       config:
         sharded_storage:
@@ -163,6 +171,14 @@ mesh:
       # external auth boundary; everything else is mesh-internal.
       host: 0.0.0.0
       frontend: yhttp
+      # gh#6: the gateway is the production hot path (the single auth
+      # boundary every external request crosses) and was the measured
+      # bottleneck — one process pegged at 100% of a single core. Set
+      # `workers: N` to run it as N worker threads in ONE process: each
+      # holds its own loop + coroutine scheduler and its own warm yrpc
+      # connection set to every backend, all sharing this port via
+      # SO_REUSEPORT. Omitted ⇒ 1. Requires libco built with -DLIBCO_MP.
+      #   workers: 4
       plugins: []
       config:
         yhttp:

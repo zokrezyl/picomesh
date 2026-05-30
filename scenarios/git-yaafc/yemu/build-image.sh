@@ -58,11 +58,17 @@ done
 mkdir -p "$BUILD" "$WORK" "$THIRD_PARTY_OUT" "$THIRD_PARTY_CACHE" "$USER_CACHE"
 
 #-----------------------------------------------------------------------
-# Local kernel + opensbi recipes — same pattern as yetty's 3rdparty
-# fetch: run _build.sh to produce a tarball under 3rdparty-cache/,
-# extract into 3rdparty/<lib>/, stamp with the version so we skip on
-# subsequent runs.
+# Kernel + opensbi (noarch RISC-V) — download the prebuilt tarball
+# published by .github/workflows/build-3rdparty-<name>.yml and attached to
+# the `lib-<name>-<version>` release, extract into 3rdparty/<name>/, and
+# stamp with the version so we skip on subsequent runs. Falls back to a
+# from-source _build.sh build only on a download miss — release not cut
+# yet, offline, or YAAFC_3RDPARTY_FORCE_BUILD set.
+#
+# URL base mirrors 3rdparty-fetch.cmake's YAAFC_3RDPARTY_URL_BASE.
 #-----------------------------------------------------------------------
+
+URL_BASE="${YAAFC_3RDPARTY_URL_BASE:-https://github.com/zokrezyl/yaafc/releases/download}"
 
 fetch_recipe() {
     local name="$1"
@@ -77,11 +83,23 @@ fetch_recipe() {
     fi
     local tarball="$THIRD_PARTY_CACHE/$name-$version.tar.gz"
     if [ ! -f "$tarball" ]; then
-        echo "==> building $name @${version}"
-        OUTPUT_DIR="$THIRD_PARTY_CACHE" \
-        CACHE_DIR="$USER_CACHE" \
-        WORK_DIR="$WORK/3rdparty-build-$name" \
-            bash "$recipe_dir/_build.sh"
+        # Prefer the prebuilt release asset; build from source only on a
+        # miss. --retry (without --retry-all-errors) rides out transient
+        # codeload 5xx blips but fails fast on a genuine 404, so the
+        # fallback kicks in promptly when no release exists.
+        local url="$URL_BASE/lib-$name-$version/$name-$version.tar.gz"
+        if [ -z "${YAAFC_3RDPARTY_FORCE_BUILD:-}" ] && \
+           curl -fL --retry 5 --retry-delay 3 -o "$tarball.part" "$url"; then
+            mv "$tarball.part" "$tarball"
+            echo "==> downloaded $name @${version}"
+        else
+            rm -f "$tarball.part"
+            echo "==> building $name @${version} (no prebuilt at $url)"
+            OUTPUT_DIR="$THIRD_PARTY_CACHE" \
+            CACHE_DIR="$USER_CACHE" \
+            WORK_DIR="$WORK/3rdparty-build-$name" \
+                bash "$recipe_dir/_build.sh"
+        fi
     fi
     rm -rf "$dest"
     mkdir -p "$dest"
