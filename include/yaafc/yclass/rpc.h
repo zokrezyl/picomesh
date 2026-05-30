@@ -185,4 +185,10 @@ void rpc_object_release(struct ctx *ctx, struct object *obj);
  * handles belong to the previous backend process. */
 void peer_channel_flush_proxy_cache(struct peer_channel *s);
 
+/* Free a worker's in-process default-instance cache (the no-peer side of
+ * rpc_object_acquire). `head` is the address of the worker's cache-head
+ * pointer (the same one handed to ctx.local_cache). Call on worker
+ * teardown. Safe on NULL. */
+void rpc_local_cache_destroy(void **head);
+
 #endif /* YAAFC_YCLASS_RPC_H */

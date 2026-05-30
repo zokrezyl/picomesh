@@ -59,6 +59,14 @@ struct yheaders; /* request-header bag — 3rd arg of every method; see yheaders
  * mixed into this struct. See <yaafc/yclass/yheaders.h>. */
 struct ctx {
     struct peer_channel *peer; /* NULL → local; set → remote */
+    /* For the local path (peer==NULL): the address of the owning worker's
+     * in-process default-instance cache head. It lets rpc_object_acquire
+     * reuse ONE instance per class across calls — so a collocated service
+     * that keeps state in memory (e.g. git_repo's repo table) survives
+     * between requests, mirroring how the remote path caches one proxy per
+     * (peer, class). NULL ⇒ no cache available, allocate a fresh instance
+     * (CLI / unit-test callers). Opaque here; rpc.c owns the element type. */
+    void **local_cache;
 };
 
 enum class_type {

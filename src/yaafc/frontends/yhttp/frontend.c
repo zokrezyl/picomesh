@@ -399,7 +399,7 @@ static uint32_t resolve_uid(const char *headers_raw, size_t headers_raw_len)
     if (!sid) return 0;
 
     struct ctx c = yaafc_engine_service_ctx(e, "session");
-    if (!c.peer) return 0;
+    /* peer==NULL ⇒ session collocated in-process; create resolves it locally. */
     struct object_ptr_result o = session_store_create(&c);
     if (YAAFC_IS_ERR(o)) { yaafc_error_destroy(o.error); return 0; }
     struct yaafc_uint32_result lr = session_store_lookup(&c, o.value, NULL, sid);
@@ -418,13 +418,17 @@ struct svc_ctx {
     int ok;
 };
 
+/* Open a backend service object. A NULL `.peer` is NOT an error: it means
+ * the service is collocated in THIS process, and CREATE_FN resolves it as a
+ * local in-process object (rpc_object_acquire's no-peer path). With a peer
+ * it's a remote yrpc proxy. Both paths go through the same CREATE_FN, so we
+ * don't bail on a missing peer — that's exactly the all-in-one mode. */
 #define SVC_OPEN(VAR, SVC, CREATE_FN)                                              \
     struct svc_ctx VAR = {0};                                                      \
     do {                                                                           \
         struct yaafc_engine *_e = yaafc_active_engine();                           \
         if (!_e) break;                                                            \
         VAR.c = yaafc_engine_service_ctx(_e, SVC);                                 \
-        if (!VAR.c.peer) break;                                                 \
         struct object_ptr_result _o = CREATE_FN(&VAR.c);                           \
         if (YAAFC_IS_ERR(_o)) { yaafc_error_destroy(_o.error); break; }            \
         VAR.obj = _o.value;                                                        \
@@ -813,7 +817,7 @@ static int repo_storage_open(struct svc_ctx *out)
     struct yaafc_engine *e = yaafc_active_engine();
     if (!e) return 0;
     out->c = yaafc_engine_service_ctx(e, "sharded_storage");
-    if (!out->c.peer) return 0;
+    /* peer==NULL ⇒ storage collocated in-process; create resolves it locally. */
     struct object_ptr_result o = sharded_storage_db_create(&out->c);
     if (YAAFC_IS_ERR(o)) { yaafc_error_destroy(o.error); return 0; }
     out->obj = o.value;
@@ -1680,7 +1684,7 @@ static uint32_t uid_for_sid(uint32_t sid)
     struct yaafc_engine *e = yaafc_active_engine();
     if (!e) return 0;
     struct ctx c = yaafc_engine_service_ctx(e, "session");
-    if (!c.peer) return 0;
+    /* peer==NULL ⇒ session collocated in-process; create resolves it locally. */
     struct object_ptr_result o = session_store_create(&c);
     if (YAAFC_IS_ERR(o)) { yaafc_error_destroy(o.error); return 0; }
     struct yaafc_uint32_result lr = session_store_lookup(&c, o.value, NULL, sid);
@@ -1790,12 +1794,9 @@ static void route_json_rpc(struct yloop_stream *s,
     }
 
     struct ctx c = yaafc_engine_service_ctx(e, service);
-    if (!c.peer) {
-        yjson_doc_free(doc);
-        send_json_error(s, 502, "_rpc: unknown service", keep_alive);
-        return;
-    }
-
+    /* peer==NULL ⇒ the service is collocated locally; object_create_in_ctx
+     * resolves it in-process (and still errors below if the class is truly
+     * unknown). A non-NULL peer is the remote-mesh path. */
     struct object_ptr_result obj_r = object_create_in_ctx(&c, class_qname);
     if (YAAFC_IS_ERR(obj_r)) {
         yaafc_error_destroy(obj_r.error);
@@ -1993,12 +1994,24 @@ int yhttp_frontend_try(struct yloop_stream *s,
                        const char *body, size_t body_len,
                        int keep_alive)
 {
-    /* Only run when a `frontend` engine context is wired. The simplest
-     * test: do we have a `session` remote? If not, this is a backend
-     * yhttp child — leave it alone and let it serve JSON only. */
+    /* Decide whether THIS process is the web-facing gateway (serve the
+     * HTML app + /_rpc) or just a backend that should answer JSON only.
+     * Two ways to be the gateway:
+     *   - `session` is wired as a REMOTE (classic split mesh: the gateway
+     *     process forwards to separate backend processes), or
+     *   - `yhttp.serve_app` is set in config (collocated / all-in-one mode:
+     *     gateway + every service live in ONE process, so `session` has no
+     *     remote peer — it's a local in-process object — yet we still serve
+     *     the app).
+     * A pure backend child has neither, so it falls through to JSON. */
     struct yaafc_engine *e = yaafc_active_engine();
     if (!e) return 0;
-    if (!yaafc_engine_service_ctx(e, "session").peer) return 0;
+    int has_session_remote = yaafc_engine_service_ctx(e, "session").peer != NULL;
+    struct yconfig_node_ptr_result serve_app_r =
+        yconfig_get(yaafc_engine_config(e), "yhttp.serve_app");
+    int serve_app = YAAFC_IS_OK(serve_app_r) && serve_app_r.value &&
+                    yconfig_node_as_bool(serve_app_r.value, 0);
+    if (!has_session_remote && !serve_app) return 0;
 
     uint32_t uid = resolve_uid(headers_raw, headers_raw_len);
     /* Cookie username is decided up front so route_root can route

@@ -31,6 +31,7 @@
 #include <yaafc/yclass/class.h>
 #include <yaafc/yengine/engine.h>
 #include <yaafc/yconfig/yconfig.h>
+#include <yaafc/yloop/yloop.h>
 
 #include <git2.h>
 
@@ -83,6 +84,25 @@ static const char *resolve_repos_dir(void)
         }
     }
     return "/tmp/git-yaafc/repos";
+}
+
+/* Whether to create the on-disk bare repo (libgit2 git_repository_init)
+ * at make time. Default ON. Set `git_repo.disk_init: false` to record
+ * only the metadata — the bare repo is needed for real git push/clone,
+ * but NOT for the HTML UI (listing/browsing), and `git_repository_init`
+ * does dozens of tiny file writes that are crippling slow on the
+ * in-browser wasm-emulated disk (it hangs create-repo). The demo turns
+ * it off; real deployments leave it on. */
+static int repo_disk_init_enabled(void)
+{
+    struct yaafc_engine *e = yaafc_active_engine();
+    if (e) {
+        struct yconfig_node_ptr_result r =
+            yconfig_get(yaafc_engine_config(e), "git_repo.disk_init");
+        if (YAAFC_IS_OK(r) && r.value)
+            return yconfig_node_as_int(r.value, 1) != 0;
+    }
+    return 1;
 }
 
 /* Initialise libgit2 once for the process. Subsequent callers reuse
@@ -170,6 +190,40 @@ static int rm_rf(const char *path)
     return nftw(path, rm_entry, 16, FTW_DEPTH | FTW_PHYS);
 }
 
+/* The on-disk half of make: create the per-user parent dir and run
+ * libgit2's bare init. Both are blocking filesystem calls — on the
+ * in-browser RISC-V emulator a single git_repository_init runs for tens
+ * of seconds — so this runs on the libuv worker pool (yloop_run_blocking),
+ * NOT the loop thread. It therefore touches ONLY its own `arg`: no
+ * object, no yconfig, no loop state. Results (rc + a snapshot of
+ * libgit2's thread-local error message) come back in the struct; the
+ * caller inspects them after the await resumes. */
+struct git_init_work {
+    char parent[1024];   /* <repos_dir>/<owner_name> — mkdir_p target */
+    char path[1024];     /* <repos_dir>/<owner_name>/<repo_name>.git  */
+    int  mkdir_errno;    /* 0 on success, else errno from mkdir_p     */
+    int  git_rc;         /* libgit2 return code (< 0 is failure)      */
+    char git_errmsg[256];/* libgit2 error snapshot (same pool thread) */
+};
+
+static void git_init_work_fn(void *arg)
+{
+    struct git_init_work *w = arg;
+    if (mkdir_p(w->parent) != 0) {
+        w->mkdir_errno = errno ? errno : -1;
+        return;
+    }
+    git_repository *repo = NULL;
+    w->git_rc = git_repository_init(&repo, w->path, /*is_bare*/ 1);
+    if (w->git_rc < 0) {
+        const git_error *e = git_error_last();
+        snprintf(w->git_errmsg, sizeof(w->git_errmsg), "%s",
+                 e && e->message ? e->message : "(no msg)");
+    } else {
+        git_repository_free(repo);
+    }
+}
+
 YAAFC_CLASS_ANNOTATE("override@git_repo:store:store_make")
 struct yaafc_uint32_result git_repo_store_make_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                       uint32_t owner_id,
@@ -178,9 +232,6 @@ struct yaafc_uint32_result git_repo_store_make_impl(struct ctx *ctx, struct obje
 {
     (void)ctx;
     struct git_repo_store_data *d = gr(obj);
-    if (!ensure_libgit2()) {
-        return YAAFC_ERR(yaafc_uint32, "git_repo_make: libgit2 init failed");
-    }
     if (!path_segment_ok(owner_name) || !path_segment_ok(repo_name)) {
         return YAAFC_ERR(yaafc_uint32, "git_repo_make: invalid owner_name/repo_name");
     }
@@ -212,37 +263,72 @@ struct yaafc_uint32_result git_repo_store_make_impl(struct ctx *ctx, struct obje
             d->entries[i].used = 1;
             d->count++;
 
-            char path[1024];
-            if (repo_dir_build(owner_name, repo_name, path, sizeof(path)) != 0) {
-                d->entries[i].used = 0; d->count--;
-                return YAAFC_ERR(yaafc_uint32, "git_repo_make: path too long");
-            }
+            /* On-disk bare repo (libgit2) — needed for real git
+             * push/clone, but NOT for the HTML UI, and crippling slow on
+             * the in-browser emulated disk. Gated by `git_repo.disk_init`
+             * so it can be turned off entirely; real deployments leave it
+             * on. The blocking work (mkdir_p + git_repository_init) runs
+             * on the libuv worker pool via yloop_run_blocking, so the
+             * event loop keeps serving other connections instead of
+             * freezing for the tens of seconds a git init costs under the
+             * in-browser emulator. */
+            if (repo_disk_init_enabled()) {
+                /* libgit2 runtime init stays on the loop thread (the work
+                 * fn must touch only its own arg). */
+                if (!ensure_libgit2()) {
+                    d->entries[i].used = 0; d->count--;
+                    return YAAFC_ERR(yaafc_uint32, "git_repo_make: libgit2 init failed");
+                }
+                struct git_init_work work = {0};
+                if (repo_dir_build(owner_name, repo_name, work.path, sizeof(work.path)) != 0) {
+                    d->entries[i].used = 0; d->count--;
+                    return YAAFC_ERR(yaafc_uint32, "git_repo_make: path too long");
+                }
+                /* `<repos_dir>/<owner_name>/` — the per-user parent the
+                 * pool thread mkdir_p's before libgit2 fills in the leaf. */
+                int pn = snprintf(work.parent, sizeof(work.parent), "%s/%s",
+                                  resolve_repos_dir(), owner_name);
+                if (pn <= 0 || (size_t)pn >= sizeof(work.parent)) {
+                    d->entries[i].used = 0; d->count--;
+                    return YAAFC_ERR(yaafc_uint32, "git_repo_make: path too long");
+                }
 
-            /* Create `<repos_dir>/<owner_name>/` (the per-user parent)
-             * before libgit2 fills in the leaf bare repo. */
-            char parent[1024];
-            int pn = snprintf(parent, sizeof(parent), "%s/%s",
-                              resolve_repos_dir(), owner_name);
-            if (pn <= 0 || (size_t)pn >= sizeof(parent) ||
-                mkdir_p(parent) != 0) {
-                d->entries[i].used = 0; d->count--;
-                ywarn("git_repo: cannot create per-user parent %s: %s",
-                      parent, strerror(errno));
-                return YAAFC_ERR(yaafc_uint32, "git_repo_make: mkdir parent failed");
-            }
-            git_repository *repo = NULL;
-            int rc = git_repository_init(&repo, path, /*is_bare*/ 1);
-            if (rc < 0) {
-                const git_error *e = git_error_last();
-                ywarn("git_repo: init(%s) failed: %s",
-                      path, e && e->message ? e->message : "(no msg)");
-                d->entries[i].used = 0; d->count--;
-                return YAAFC_ERR(yaafc_uint32, "git_repo_make: libgit2 init failed");
-            }
-            git_repository_free(repo);
+                /* Offload to the worker pool and park this coroutine until
+                 * it finishes. `work` lives on this (suspended) coro's
+                 * stack — stable while the pool thread writes to it. */
+                struct yaafc_engine *e = yaafc_active_engine();
+                struct yloop *loop = e ? yaafc_engine_loop(e) : NULL;
+                if (loop) {
+                    struct yaafc_void_result br =
+                        yloop_run_blocking(loop, git_init_work_fn, &work);
+                    if (YAAFC_IS_ERR(br)) {
+                        /* Couldn't even dispatch the work — run inline so
+                         * the repo still gets created (degraded, blocking). */
+                        yaafc_error_destroy(br.error);
+                        git_init_work_fn(&work);
+                    }
+                } else {
+                    /* No serve loop (bootstrap/tests): run inline. */
+                    git_init_work_fn(&work);
+                }
 
-            yinfo("git_repo: created repo=%u %s/%s at %s",
-                  repo_id, owner_name, repo_name, path);
+                if (work.mkdir_errno != 0) {
+                    d->entries[i].used = 0; d->count--;
+                    ywarn("git_repo: cannot create per-user parent %s: %s",
+                          work.parent, strerror(work.mkdir_errno));
+                    return YAAFC_ERR(yaafc_uint32, "git_repo_make: mkdir parent failed");
+                }
+                if (work.git_rc < 0) {
+                    ywarn("git_repo: init(%s) failed: %s", work.path, work.git_errmsg);
+                    d->entries[i].used = 0; d->count--;
+                    return YAAFC_ERR(yaafc_uint32, "git_repo_make: libgit2 init failed");
+                }
+                yinfo("git_repo: created repo=%u %s/%s at %s",
+                      repo_id, owner_name, repo_name, work.path);
+            } else {
+                yinfo("git_repo: recorded repo=%u %s/%s (disk_init off)",
+                      repo_id, owner_name, repo_name);
+            }
             return YAAFC_OK(yaafc_uint32, repo_id);
         }
     }

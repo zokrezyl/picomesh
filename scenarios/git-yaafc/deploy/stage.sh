@@ -28,7 +28,12 @@ REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 DEPLOY="$REPO_ROOT/build-deploy"
 
 YAAFC_HOST="$REPO_ROOT/build-desktop-release/yaafc"
-YAML_SRC="$REPO_ROOT/scenarios/git-yaafc/yaafc.yaml"
+# The deploy (qemu / wasm) runs the COLLOCATED all-in-one config: one
+# process hosts the gateway + every service + storage, calling each other
+# in-process. Inside the RISC-V emulator that beats the 12-process mesh,
+# where loopback-TCP between processes dominates. (The multi-process mesh
+# lives in yaafc.yaml and is exercised by mesh-up.sh on real hardware.)
+YAML_SRC="$REPO_ROOT/scenarios/git-yaafc/yaafc-webasm.yaml"
 STATIC_SRC="$REPO_ROOT/scenarios/git-yaafc/frontend/static"
 RUNSH_SRC="$REPO_ROOT/scenarios/git-yaafc/deploy/run.sh.tmpl"
 

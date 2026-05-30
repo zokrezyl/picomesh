@@ -486,6 +486,24 @@ void peer_channel_flush_proxy_cache(struct peer_channel *s)
     }
 }
 
+/* Free a worker's in-process default-instance cache (the no-peer side of
+ * rpc_object_acquire). `head` is &worker->local_instances. The cached
+ * objects are real local service instances, owned here for the worker's
+ * lifetime; release them on worker teardown. */
+void rpc_local_cache_destroy(void **head)
+{
+    if (!head) return;
+    struct cached_proxy **h = (struct cached_proxy **)head;
+    struct cached_proxy *cur, *tmp;
+    HASH_ITER(hh, *h, cur, tmp) {
+        HASH_DEL(*h, cur);
+        free(cur->qname);
+        object_free(cur->obj); /* the local service instance */
+        free(cur);
+    }
+    *h = NULL;
+}
+
 void peer_channel_destroy(struct peer_channel *s)
 {
     if (!s) return;
@@ -769,13 +787,31 @@ struct object_ptr_result rpc_object_acquire(struct ctx *ctx, const struct class 
     if (!klass)
         return YAAFC_ERR(object_ptr, "rpc_object_acquire: NULL class");
 
-    /* In-process dependency: a fresh instance the caller owns and frees
-     * (object_release_in_ctx). Cheap — no round-trip — and keeps the
-     * existing create/free contract that the CLI / yttp / all-in-one
-     * callers rely on. Only the REMOTE path needs caching, because that
-     * is where the per-call CREATE/DESTROY round-trips lived. */
-    if (!ctx || !ctx->peer)
+    /* In-process dependency (no peer). When the caller gave us a worker
+     * cache head (collocated / all-in-one mode), reuse ONE instance per
+     * class — exactly like the remote path caches one proxy per channel.
+     * This is what lets a collocated service that keeps state in memory
+     * (git_repo's repo table, etc.) persist across requests instead of
+     * getting a blank instance every call. Without a cache head (CLI /
+     * unit tests) fall back to a fresh instance the caller owns. */
+    if (!ctx || !ctx->peer) {
+        if (ctx && ctx->local_cache && class_qname) {
+            struct cached_proxy **head = (struct cached_proxy **)ctx->local_cache;
+            struct cached_proxy *li = NULL;
+            HASH_FIND_STR(*head, class_qname, li);
+            if (li) return YAAFC_OK(object_ptr, li->obj);
+            struct object_ptr_result lo = object_alloc(klass);
+            if (YAAFC_IS_ERR(lo)) return lo;
+            li = calloc(1, sizeof(*li));
+            if (li) {
+                li->qname = strdup(class_qname);
+                li->obj = lo.value;
+                HASH_ADD_KEYPTR(hh, *head, li->qname, strlen(li->qname), li);
+            } /* couldn't cache → caller still gets a usable instance */
+            return lo;
+        }
         return object_alloc(klass);
+    }
 
     struct peer_channel *p = ctx->peer;
     struct cached_proxy *e = NULL;
@@ -809,14 +845,17 @@ struct object_ptr_result rpc_object_acquire(struct ctx *ctx, const struct class 
 }
 
 /* Release a dependency acquired via rpc_object_acquire.
- *   - REMOTE: no-op. The proxy is owned by the per-peer cache and lives
- *     for the connection; destroying it per call would defeat the cache
- *     and bring back the CREATE/DESTROY round-trips.
- *   - IN-PROCESS: free the fresh instance, as before. */
+ *   - REMOTE (ctx->peer): no-op. The proxy is owned by the per-peer cache
+ *     and lives for the connection; destroying it per call would defeat
+ *     the cache and bring back the CREATE/DESTROY round-trips.
+ *   - IN-PROCESS, CACHED (ctx->local_cache): no-op. The instance is owned
+ *     by the worker's local-instance cache and lives for the worker;
+ *     freeing it here would dangle the cache (use-after-free next call).
+ *   - IN-PROCESS, UNCACHED (CLI / unit tests): free the fresh instance. */
 void rpc_object_release(struct ctx *ctx, struct object *obj)
 {
     if (!obj) return;
-    if (ctx && ctx->peer) return; /* remote: cached on the channel */
+    if (ctx && (ctx->peer || ctx->local_cache)) return; /* cached: owner frees */
     object_free(obj);
 }
 

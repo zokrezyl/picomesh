@@ -46,6 +46,12 @@ struct yaafc_worker {
     struct yaafc_engine *engine;
     struct yloop *loop;
     struct remote_entry *remotes;
+    /* In-process default-instance cache (collocated services). Head of a
+     * cached_proxy list owned by rpc.c; handed to ctx.local_cache so a
+     * locally-resolved service keeps ONE instance per class across calls.
+     * Per-worker: a connection is pinned to its worker, and coroutines on
+     * one worker are cooperative, so no locking is needed. */
+    void *local_instances;
     size_t index;
     pthread_t thread;             /* valid only when `started` */
     int started;                  /* pthread_create succeeded (index > 0) */
@@ -205,6 +211,7 @@ void yaafc_engine_destroy(struct yaafc_engine *e)
             free(r);
             r = next;
         }
+        rpc_local_cache_destroy(&e->workers[i].local_instances);
         yloop_destroy(e->workers[i].loop);
     }
     free(e->workers);
@@ -567,9 +574,16 @@ struct peer_channel *yaafc_engine_remote(struct yaafc_engine *e, const char *nam
 
 struct ctx yaafc_engine_service_ctx(struct yaafc_engine *e, const char *service)
 {
-    struct ctx c = {.peer = NULL};
+    struct ctx c = {.peer = NULL, .local_cache = NULL};
     if (!e || !service) return c;
     c.peer = yaafc_engine_remote(e, service);
+    if (!c.peer) {
+        /* Service isn't a remote ⇒ it's collocated in this process. Hand
+         * over the current worker's local-instance cache head so the
+         * acquired object is reused across calls (state persists). */
+        struct yaafc_worker *w = engine_current_worker(e);
+        if (w) c.local_cache = &w->local_instances;
+    }
     return c;
 }
 

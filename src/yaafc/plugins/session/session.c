@@ -51,8 +51,9 @@ static struct session_storage_handle_result open_storage(void)
     struct yaafc_engine *e = yaafc_active_engine();
     if (!e) return YAAFC_ERR(session_storage_handle, "session: no active engine");
     struct storage_handle h = {.c = yaafc_engine_service_ctx(e, "sharded_storage")};
-    if (!h.c.peer)
-        return YAAFC_ERR(session_storage_handle, "session: no 'storage' remote");
+    /* peer==NULL ⇒ storage is collocated in THIS process; create resolves it
+     * as a local in-process object. A non-NULL peer is the remote-mesh path.
+     * Both go through sharded_storage_db_create — don't bail on a missing peer. */
     struct object_ptr_result o = sharded_storage_db_create(&h.c);
     if (YAAFC_IS_ERR(o)) return YAAFC_ERR(session_storage_handle, "session: storage_db_create failed", o);
     h.obj = o.value;
