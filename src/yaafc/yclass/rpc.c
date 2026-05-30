@@ -383,6 +383,16 @@ struct remote_id_entry {
     UT_hash_handle hh;
 };
 
+/* One cached remote receiver object per (peer, class). A REMOTE service
+ * dependency is created ONCE (RPC_OP_CREATE) and reused for the lifetime
+ * of the connection — no per-call CREATE/DESTROY. Flushed on reconnect
+ * (the handle belongs to the old backend process). */
+struct cached_proxy {
+    char *qname;        /* key (class qname) */
+    struct object *obj; /* owned: proxy carrying the backend handle */
+    UT_hash_handle hh;
+};
+
 enum peer_channel_mode {
     RPC_MODE_TCP = 0,   /* legacy yrpc binary on the bare fd */
     RPC_MODE_HTTP = 1,  /* HTTP envelope, auth via headers */
@@ -397,6 +407,7 @@ struct peer_channel {
     uint32_t auth_sid;   /* X-Yaafc-Sid for HTTP requests */
     struct remote_id_entry *remote_ids;
     struct translated_class *translated;
+    struct cached_proxy *proxy_cache; /* per-class remote receiver objects */
     /* Optional async transport (installed by a yloop-aware layer). When
      * set, rpc_call delegates here instead of doing blocking fd I/O. */
     void *async_ctx;
@@ -437,10 +448,25 @@ void peer_channel_set_async(struct peer_channel *s, void *ctx,
     s->async_destroy = destroy;
 }
 
+/* Drop every cached remote proxy. Called on reconnect (the handles
+ * belong to the now-dead backend process) and at channel teardown. */
+void peer_channel_flush_proxy_cache(struct peer_channel *s)
+{
+    if (!s) return;
+    struct cached_proxy *cur, *tmp;
+    HASH_ITER(hh, s->proxy_cache, cur, tmp) {
+        HASH_DEL(s->proxy_cache, cur);
+        free(cur->qname);
+        free(cur->obj); /* proxy struct; the backend handle is gone with the conn */
+        free(cur);
+    }
+}
+
 void peer_channel_destroy(struct peer_channel *s)
 {
     if (!s) return;
     if (s->async_destroy && s->async_ctx) s->async_destroy(s->async_ctx);
+    peer_channel_flush_proxy_cache(s);
     struct translated_class *cur, *tmp;
     HASH_ITER(hh, s->translated, cur, tmp) {
         HASH_DEL(s->translated, cur);
@@ -702,57 +728,89 @@ int peer_channel_translate_class(struct peer_channel *s, const char *class_name)
     return 0;
 }
 
-/* Generic, class-name-keyed object construction — the runtime twin of
- * the codegen-emitted `<class>_create(struct ctx *)`. The gateway has
- * no typed `*_create` for the backend it forwards to (it links no
- * plugin object code for those services), so it builds the proxy here
- * by name. ctx with no session → a local instance; ctx with a session
- * → a remote create + a proxy object carrying the returned handle. */
+/* Acquire a service dependency's receiver object — the shared primitive
+ * behind both `object_create_in_ctx` and every codegen `<class>_create`.
+ *
+ * A service object is NOT created per call. It is a dependency you hold
+ * for your lifetime, exactly like yaapp's default-instance proxy:
+ *   - REMOTE  (ctx->peer set): one proxy per (peer, class), created once
+ *     via RPC_OP_CREATE and cached on the channel; reused for the whole
+ *     connection. Flushed only on reconnect.
+ *   - IN-PROCESS (no peer): one default instance per class, allocated
+ *     once and cached process-wide.
+ * Either way there is no per-call CREATE/DESTROY round-trip. */
+struct object_ptr_result rpc_object_acquire(struct ctx *ctx, const struct class *klass,
+                                            const char *class_qname)
+{
+    if (!klass)
+        return YAAFC_ERR(object_ptr, "rpc_object_acquire: NULL class");
+
+    /* In-process dependency: a fresh instance the caller owns and frees
+     * (object_release_in_ctx). Cheap — no round-trip — and keeps the
+     * existing create/free contract that the CLI / yttp / all-in-one
+     * callers rely on. Only the REMOTE path needs caching, because that
+     * is where the per-call CREATE/DESTROY round-trips lived. */
+    if (!ctx || !ctx->peer)
+        return object_alloc(klass);
+
+    struct peer_channel *p = ctx->peer;
+    struct cached_proxy *e = NULL;
+    if (class_qname) HASH_FIND_STR(p->proxy_cache, class_qname, e);
+    if (e) return YAAFC_OK(object_ptr, e->obj);
+    ydebug("rpc_object_acquire: caching new '%s' proxy on peer=%p",
+           class_qname ? class_qname : "?", (void *)p);
+
+    if (class_qname) peer_channel_translate_class(p, class_qname);
+    uint64_t handle = 0;
+    if (rpc_call(p, RPC_OP_CREATE, 0, class_qname, class_qname ? strlen(class_qname) : 0,
+                 &handle, sizeof(handle)) != sizeof(handle) || !handle)
+        return YAAFC_ERR(object_ptr, "rpc_object_acquire: remote create failed");
+
+    void *mem = calloc(1, sizeof(struct object) + sizeof(uint64_t));
+    if (!mem)
+        return YAAFC_ERR(object_ptr, "rpc_object_acquire: calloc(proxy) failed");
+    struct object *obj = mem;
+    *(const struct class **)obj = klass;
+    *(uint64_t *)((char *)obj + sizeof(*obj)) = handle;
+
+    e = calloc(1, sizeof(*e));
+    if (e && class_qname) {
+        e->qname = strdup(class_qname);
+        e->obj = obj;
+        HASH_ADD_KEYPTR(hh, p->proxy_cache, e->qname, strlen(e->qname), e);
+    } else {
+        free(e); /* couldn't cache — caller still gets a usable proxy */
+    }
+    return YAAFC_OK(object_ptr, obj);
+}
+
+/* Release a dependency acquired via rpc_object_acquire.
+ *   - REMOTE: no-op. The proxy is owned by the per-peer cache and lives
+ *     for the connection; destroying it per call would defeat the cache
+ *     and bring back the CREATE/DESTROY round-trips.
+ *   - IN-PROCESS: free the fresh instance, as before. */
+void rpc_object_release(struct ctx *ctx, struct object *obj)
+{
+    if (!obj) return;
+    if (ctx && ctx->peer) return; /* remote: cached on the channel */
+    object_free(obj);
+}
+
+/* Name-keyed twin of the codegen `<class>_create` — used by callers
+ * (the gateway) that link no typed `*_create` for the target class. */
 struct object_ptr_result object_create_in_ctx(struct ctx *ctx, const char *class_qname)
 {
     if (!class_qname)
         return YAAFC_ERR(object_ptr, "object_create_in_ctx: NULL class name");
-
     struct class_ptr_result class_r = class_by_name(class_qname);
     if (YAAFC_IS_ERR(class_r))
         return YAAFC_ERR(object_ptr, "object_create_in_ctx: unknown class", class_r);
-    const struct class *klass = class_r.value;
-    if (!klass)
+    if (!class_r.value)
         return YAAFC_ERR(object_ptr, "object_create_in_ctx: class not registered");
-
-    if (!ctx || !ctx->peer)
-        return object_alloc(klass);
-
-    peer_channel_translate_class(ctx->peer, class_qname);
-
-    uint64_t handle = 0;
-    if (rpc_call(ctx->peer, RPC_OP_CREATE, 0, class_qname, strlen(class_qname),
-                 &handle, sizeof(handle)) != sizeof(handle) || !handle)
-        return YAAFC_ERR(object_ptr, "object_create_in_ctx: remote create failed");
-
-    void *mem = calloc(1, sizeof(struct object) + sizeof(uint64_t));
-    if (!mem)
-        return YAAFC_ERR(object_ptr, "object_create_in_ctx: calloc(proxy) failed");
-    struct object *obj = mem;
-    *(const struct class **)obj = klass;
-    *(uint64_t *)((char *)obj + sizeof(*obj)) = handle;
-    return YAAFC_OK(object_ptr, obj);
+    return rpc_object_acquire(ctx, class_r.value, class_qname);
 }
 
-/* Release a value built by object_create_in_ctx. For a remote proxy it
- * first sends RPC_OP_DESTROY so the backend's handle table doesn't grow
- * without bound, then frees the local proxy; for a local instance it
- * defers to object_free. */
 void object_release_in_ctx(struct ctx *ctx, struct object *obj)
 {
-    if (!obj) return;
-    if (ctx && ctx->peer) {
-        uint64_t handle;
-        memcpy(&handle, (char *)obj + sizeof(struct object), sizeof(handle));
-        uint8_t removed;
-        rpc_call(ctx->peer, RPC_OP_DESTROY, 0, &handle, sizeof(handle), &removed, 1);
-        free(obj);
-        return;
-    }
-    object_free(obj);
+    rpc_object_release(ctx, obj);
 }

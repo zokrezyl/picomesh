@@ -116,6 +116,14 @@ struct peer_channel *yaafc_engine_remote(struct yaafc_engine *e, const char *nam
  * boilerplate at every call site (gh#2). */
 struct ctx yaafc_engine_service_ctx(struct yaafc_engine *e, const char *service);
 
+/* Resolve a backend service's bind address from config
+ * (mesh.services.<svc>.host/port). Returns 1 and fills host_out/port_out
+ * on success, 0 otherwise. Used to open a plain blocking connection to a
+ * backend from a worker-pool thread (where the loop-bound async mux can't
+ * be used). */
+int yaafc_engine_service_addr(struct yaafc_engine *e, const char *service,
+                              char *host_out, size_t host_cap, int *port_out);
+
 /* Walk the engine's yconfig for `<plugin>.remotes.<idx>.{service,host,port}`
  * entries and call `yaafc_engine_add_remote` for each. Returns the
  * number of remotes opened. Silently skips entries that have no

@@ -171,4 +171,18 @@ uint32_t peer_channel_ensure_remote_id(struct peer_channel *s, method_slot local
 struct object_ptr_result object_create_in_ctx(struct ctx *ctx, const char *class_qname);
 void object_release_in_ctx(struct ctx *ctx, struct object *obj);
 
+/* Acquire a service dependency's receiver object, cached for the
+ * connection (remote) or process (in-process) lifetime — NOT created per
+ * call. Both the gateway's `object_create_in_ctx` and every codegen
+ * `<class>_create` route through this, so a service holds each dependency
+ * once instead of doing a CREATE/DESTROY round-trip per request.
+ * `rpc_object_release` is the matching no-op. */
+struct object_ptr_result rpc_object_acquire(struct ctx *ctx, const struct class *klass,
+                                            const char *class_qname);
+void rpc_object_release(struct ctx *ctx, struct object *obj);
+
+/* Drop a channel's cached remote proxies. Call on reconnect: the cached
+ * handles belong to the previous backend process. */
+void peer_channel_flush_proxy_cache(struct peer_channel *s);
+
 #endif /* YAAFC_YCLASS_RPC_H */

@@ -26,6 +26,11 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <unistd.h>
+
+#ifndef SO_REUSEPORT
+#define SO_REUSEPORT 15 /* Linux value; header may hide it without _GNU_SOURCE */
+#endif
 
 #define RING_INIT_CAP 4096
 
@@ -685,9 +690,27 @@ struct yaafc_void_result yloop_listen_tcp(struct yloop *l, const char *host, int
     if (rc < 0) {
         return YAAFC_ERR(yaafc_void, "yloop_listen_tcp: uv_ip4_addr failed");
     }
-    rc = uv_tcp_bind(&L->tcp, (const struct sockaddr *)&addr, 0);
+
+    /* Bind the socket ourselves with SO_REUSEPORT so several workers
+     * (threads or processes) can listen on the SAME port — the kernel
+     * then load-balances incoming connections across them, no userspace
+     * proxy. SO_REUSEADDR also dodges TIME_WAIT bind failures on restart.
+     * The bound fd is handed to libuv via uv_tcp_open. */
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        return YAAFC_ERR(yaafc_void, "yloop_listen_tcp: socket() failed");
+    }
+    int on = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+    setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &on, sizeof(on));
+    if (bind(fd, (const struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        close(fd);
+        return YAAFC_ERR(yaafc_void, "yloop_listen_tcp: bind failed");
+    }
+    rc = uv_tcp_open(&L->tcp, fd);
     if (rc < 0) {
-        return YAAFC_ERR(yaafc_void, "yloop_listen_tcp: uv_tcp_bind failed");
+        close(fd);
+        return YAAFC_ERR(yaafc_void, "yloop_listen_tcp: uv_tcp_open failed");
     }
     rc = uv_listen((uv_stream_t *)&L->tcp, 128, on_connection);
     if (rc < 0) {

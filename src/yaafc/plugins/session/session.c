@@ -63,15 +63,9 @@ static struct session_storage_handle_result open_storage(void)
 
 static void close_storage(struct storage_handle *h)
 {
-    if (!h || !h->obj) return;
-    if (h->c.peer) {
-        uint64_t _h;
-        memcpy(&_h, (char *)h->obj + sizeof(struct object), sizeof(_h));
-        uint8_t _r;
-        rpc_call(h->c.peer, RPC_OP_DESTROY, 0, &_h, sizeof(_h), &_r, 1);
-    }
-    free(h->obj);
-    h->obj = NULL;
+    /* The storage object is a cached, service-lifetime dependency
+     * (rpc_object_acquire owns it); nothing to release per call. */
+    (void)h;
 }
 
 /* Read an int64 key from storage, treating any error as "missing → 0". */

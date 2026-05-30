@@ -2,6 +2,7 @@
 
 #include <yaafc/ycore/yspan.h>
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,30 +21,41 @@ struct yspan_state {
     int overflow;   /* set once we stop appending */
 };
 
-/* Process-global singleton — same pattern as rpc.c's server() and the
- * coro current-slot. Single loop thread records, so no lock is needed. */
+/* Process-global singleton. Spans are now recorded from the loop thread
+ * AND from worker-pool threads (the gateway offloads forwards there), so
+ * a small lock guards the ring. */
 static struct yspan_state *yspan_state(void)
 {
     static struct yspan_state s = {0};
     return &s;
 }
 
+static pthread_mutex_t *yspan_lock(void)
+{
+    static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+    return &mu;
+}
+
 void yspan_record(const char *op, double dur_us)
 {
     struct yspan_state *s = yspan_state();
-    if (s->n >= YSPAN_MAX) { s->overflow = 1; return; }
+    pthread_mutex_lock(yspan_lock());
+    if (s->n >= YSPAN_MAX) { s->overflow = 1; pthread_mutex_unlock(yspan_lock()); return; }
     struct yspan_entry *e = &s->e[s->n++];
     size_t i = 0;
     if (op) for (; op[i] && i < YSPAN_OP_MAX - 1; ++i) e->op[i] = op[i];
     e->op[i] = 0;
     e->dur_us = dur_us;
+    pthread_mutex_unlock(yspan_lock());
 }
 
 void yspan_reset(void)
 {
     struct yspan_state *s = yspan_state();
+    pthread_mutex_lock(yspan_lock());
     s->n = 0;
     s->overflow = 0;
+    pthread_mutex_unlock(yspan_lock());
 }
 
 static int cmp_double(const void *a, const void *b)
@@ -63,6 +75,7 @@ static double pctl(const double *sorted, size_t n, double p)
 size_t yspan_dump(char *buf, size_t cap)
 {
     struct yspan_state *s = yspan_state();
+    pthread_mutex_lock(yspan_lock());
     size_t off = 0;
     int w = snprintf(buf + off, cap - off,
         "%-34s %8s %9s %9s %9s %9s\n",
@@ -83,7 +96,7 @@ size_t yspan_dump(char *buf, size_t cap)
     }
 
     double *durs = malloc(s->n ? s->n * sizeof(double) : 1);
-    if (!durs) { if (off < cap) buf[off] = 0; return off; }
+    if (!durs) { if (off < cap) buf[off] = 0; pthread_mutex_unlock(yspan_lock()); return off; }
 
     for (size_t j = 0; j < op_count; ++j) {
         size_t k = 0;
@@ -105,5 +118,6 @@ size_t yspan_dump(char *buf, size_t cap)
                                 "(ring full at %d spans — older not shown)\n", YSPAN_MAX);
     if (off < cap) buf[off] = 0;
     else if (cap) buf[cap - 1] = 0;
+    pthread_mutex_unlock(yspan_lock());
     return off;
 }

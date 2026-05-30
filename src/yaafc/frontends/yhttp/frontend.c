@@ -63,12 +63,16 @@
 #include <yaafc/plugin/personal_access_tokens/personal_access_tokens.h>
 
 #include <ctype.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/random.h>
+#include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -399,7 +403,7 @@ static uint32_t resolve_uid(const char *headers_raw, size_t headers_raw_len)
     struct object_ptr_result o = session_store_create(&c);
     if (YAAFC_IS_ERR(o)) { yaafc_error_destroy(o.error); return 0; }
     struct yaafc_uint32_result lr = session_store_lookup(&c, o.value, NULL, sid);
-    free(o.value);
+    object_release_in_ctx(&c, o.value); /* cached, service-lifetime — no-op */
     if (YAAFC_IS_ERR(lr)) { yaafc_error_destroy(lr.error); return 0; }
     return lr.value;
 }
@@ -426,21 +430,14 @@ struct svc_ctx {
         VAR.obj = _o.value;                                                        \
         VAR.ok = 1;                                                                \
     } while (0)
-/* Release a proxy: send RPC_OP_DESTROY to the server so its handle
- * table doesn't grow without bound (gh#2), then free the local proxy
- * memory. The handle is in the trailing u64 the codegen-emitted
- * `*_create` writes after `struct object`. */
+/* The backend receiver object is a cached, connection-lifetime dependency
+ * (SVC_OPEN routes through the codegen `*_create` → rpc_object_acquire,
+ * which caches it on the peer channel). It is NOT created per request, so
+ * there is nothing to release here — destroying it would defeat the cache
+ * and bring back the per-request CREATE/DESTROY round-trips. */
 static inline void svc_close_impl(struct svc_ctx *v)
 {
-    if (!v || !v->obj) return;
-    if (v->c.peer) {
-        uint64_t h;
-        memcpy(&h, (char *)v->obj + sizeof(struct object), sizeof(h));
-        uint8_t r;
-        rpc_call(v->c.peer, RPC_OP_DESTROY, 0, &h, sizeof(h), &r, 1);
-    }
-    free(v->obj);
-    v->obj = NULL;
+    (void)v;
 }
 #define SVC_CLOSE(VAR) svc_close_impl(&(VAR))
 
@@ -1739,14 +1736,8 @@ static void route_json_rpc(struct yloop_stream *s,
         return;
     }
 
-    /* Build the request-header bag the gateway hands to the backend:
-     * the resolved auth identity (uid/sid) as well-known keys. trace_id
-     * and anything else slot in here later — the framework serializes
-     * the whole bag onto the wire. */
-    /* Correlation id: honour an inbound X-Trace-Id, else mint one. The
-     * entry component (this gateway) generates it when absent; every
-     * downstream hop propagates it via the header bag. Hoisted to the
-     * function scope so the dispatch span below can report it. */
+    /* Request-header bag handed to the backend: resolved auth identity
+     * (uid/sid) + correlation id (honour inbound X-Trace-Id, else mint). */
     uint64_t trace_id = 0;
     struct yheaders *hdrs = yheaders_new();
     if (hdrs) {
@@ -1765,9 +1756,6 @@ static void route_json_rpc(struct yloop_stream *s,
     yjson_w_begin_object(w);
     yjson_w_key(w, "result");
     char err[256] = {0};
-    /* Top-level span for the whole gateway dispatch — the root of the
-     * trace. Subtract the rpc.* / skel.* / db.* child spans (same trace
-     * id) to see where the time actually went. */
     double span_start = yaafc_ytime_monotonic_sec();
     int rc = fn(&c, obj_r.value, hdrs, args, w, err, sizeof(err));
     double span_us = (yaafc_ytime_monotonic_sec() - span_start) * 1e6;

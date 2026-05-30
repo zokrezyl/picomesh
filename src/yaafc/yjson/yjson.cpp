@@ -38,8 +38,13 @@ namespace sj = simdjson;
  * lazily NUL-terminate into our own arena when callers ask for a
  * C-string. */
 
+struct yjson_doc;
+
 struct yjson_value {
     sj::dom::element elem;
+    /* Owning doc — child handles (object_get / array_at) are allocated
+     * into doc->values so they're freed with the doc. */
+    yjson_doc *doc = nullptr;
     /* lazy NUL-terminated cache for as_string */
     mutable std::string str_cache;
     mutable bool str_cached = false;
@@ -64,6 +69,7 @@ static yjson_value *make_value(yjson_doc *doc, sj::dom::element e)
 {
     auto v = std::make_unique<yjson_value>();
     v->elem = e;
+    v->doc = doc;
     yjson_value *raw = v.get();
     doc->values.push_back(std::move(v));
     return raw;
@@ -202,22 +208,11 @@ extern "C" const struct yjson_value *yjson_array_at(const struct yjson_value *v,
     if (idx >= arr.size()) return nullptr;
     auto e = arr.at(idx);
     if (e.error()) return nullptr;
-    /* We need to allocate a stable yjson_value*. The const-cast
-     * mirrors the pattern in yjson_doc_root — borrowed values are
-     * owned by the doc we descend from. We trace back via the
-     * elem's parser doc pointer if available. For simplicity, just
-     * stash these allocations on a thread-local arena that mirrors
-     * the doc's lifetime. */
-    /* Practical workaround: stash on a thread-local list keyed
-     * "until next yjson_doc_free anywhere on this thread". yttp /
-     * cli call patterns parse one request, walk it, write a
-     * response, free the doc — single-doc-at-a-time. Good enough. */
-    static thread_local std::vector<std::unique_ptr<yjson_value>> tl_arena;
-    auto val = std::make_unique<yjson_value>();
-    val->elem = e.value();
-    auto *raw = val.get();
-    tl_arena.push_back(std::move(val));
-    return raw;
+    /* Child handle is owned by the same doc we descend from, so it is
+     * freed with yjson_doc_free — no thread-local arena (which used to
+     * grow without bound, one entry per call, and leaked). */
+    if (!v->doc) return nullptr;
+    return make_value(v->doc, e.value());
 }
 
 extern "C" const struct yjson_value *yjson_object_get(const struct yjson_value *v, const char *key)
@@ -227,12 +222,10 @@ extern "C" const struct yjson_value *yjson_object_get(const struct yjson_value *
     if (v->elem.get(obj) != sj::SUCCESS) return nullptr;
     auto e = obj[key];
     if (e.error()) return nullptr;
-    static thread_local std::vector<std::unique_ptr<yjson_value>> tl_arena;
-    auto val = std::make_unique<yjson_value>();
-    val->elem = e.value();
-    auto *raw = val.get();
-    tl_arena.push_back(std::move(val));
-    return raw;
+    /* Owned by the descending doc → freed with yjson_doc_free. (Was a
+     * never-cleared thread-local arena that leaked one handle per call.) */
+    if (!v->doc) return nullptr;
+    return make_value(v->doc, e.value());
 }
 
 /* ----------------------------------------------------------------- */

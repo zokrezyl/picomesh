@@ -224,7 +224,7 @@ static int cmd_client(struct yaafc_engine *e)
         if (YAAFC_IS_ERR(gr)) { peer_channel_destroy(s); return die_err("kv_get", gr.error); }
         yinfo("client: kv[%u] = %d", k, gr.value);
     }
-    free(kv);
+    object_release_in_ctx(&ctx, kv); /* remote proxy is cached on the channel */
 
     struct object_ptr_result cr = calculator_calc_create(&ctx);
     if (YAAFC_IS_ERR(cr)) { peer_channel_destroy(s); return die_err("calc_create", cr.error); }
@@ -235,7 +235,7 @@ static int cmd_client(struct yaafc_engine *e)
     struct yaafc_int64_result mr = calculator_calc_mul(&ctx, calc, NULL, 6, 7);
     if (YAAFC_IS_ERR(mr)) { peer_channel_destroy(s); return die_err("calc_mul", mr.error); }
     yinfo("client: 6 * 7 = %lld", (long long)mr.value);
-    free(calc);
+    object_release_in_ctx(&ctx, calc); /* remote proxy is cached on the channel */
 
     peer_channel_destroy(s);
     return 0;

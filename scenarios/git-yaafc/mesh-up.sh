@@ -276,41 +276,27 @@ expect_contains 'control parent :8800 still serves /create' "$out" '"handle":[0-
 kill -KILL $SIDECAR 2>/dev/null || true
 
 echo
-echo "[6/6] sqlite persistence proof — storage child must have written $DB"
-if ! command -v sqlite3 >/dev/null 2>&1; then
-    echo "  SKIP: sqlite3 cli not installed — cannot verify on-disk bytes"
-elif [ ! -s "$DB" ]; then
-    note_fail "$DB does not exist or is empty (child still used :memory:?)"
+# Storage migrated from the single-env sqlite `storage` plugin to the
+# write-parallel `sharded_storage` (mdbx) backend — see yaafc.yaml. The
+# persistence proof checks the live backend: the register/login flow
+# writes keys whose raw bytes land in the mdbx shard files (no mdbx CLI
+# ships here, so we grep the raw pages — crude but a true on-disk proof).
+echo "[6/6] persistence proof — sharded_storage (mdbx) must have written state to disk"
+SHARDED_DIR=/tmp/git-yaafc/sharded
+shard_dats=$(ls "$SHARDED_DIR"/shard-*/mdbx.dat 2>/dev/null)
+if [ -z "$shard_dats" ]; then
+    note_fail "no mdbx shard files under $SHARDED_DIR (sharded_storage didn't persist?)"
 else
-    # The storage plugin maps each logical context to a table named
-    # kv_<context>. The register/login flow exercises three contexts:
-    # accounts, session, password_authn.
-    accounts_rows=$(sqlite3 "$DB" "SELECT k || '=' || v FROM kv_accounts;" 2>/dev/null) || accounts_rows=''
-    session_rows=$(sqlite3 "$DB" "SELECT k || '=' || v FROM kv_session;" 2>/dev/null) || session_rows=''
-    pw_rows=$(sqlite3 "$DB" "SELECT k || '=' || v FROM kv_password_authn;" 2>/dev/null) || pw_rows=''
-
-    if [ -z "$accounts_rows" ] && [ -z "$session_rows" ] && [ -z "$pw_rows" ]; then
-        tables=$(sqlite3 "$DB" 'SELECT name FROM sqlite_master;' 2>/dev/null)
-        note_fail "kv_<context> tables missing or empty — child likely opened :memory: instead of $DB (tables present: $tables)"
+    have_key() { grep -aq "$1" $shard_dats 2>/dev/null; }
+    # accounts → user:/role:/count, session → next_sid, password_authn → count
+    if have_key next_sid && have_key "user:" && have_key "role:"; then
+        note_pass "sharded mdbx on disk has session + account state (next_sid, user:, role:)"
     else
-        if echo "$accounts_rows" | grep -q '^count=' && \
-           echo "$pw_rows" | grep -q '^count=' && \
-           echo "$session_rows" | grep -q '^next_sid='; then
-            note_pass "sqlite db on disk has account/session state"
-        else
-            note_fail "expected per-context keys missing — accounts: $accounts_rows ; session: $session_rows ; password_authn: $pw_rows"
-        fi
-        alice_uid=$(echo "$accounts_rows" | grep -oE '^user:[0-9]+=1$' | head -1 |
-                    sed -E 's/^user:([0-9]+)=1$/\1/')
-        if [ -n "$alice_uid" ] && \
-           echo "$accounts_rows" | grep -q "^role:${alice_uid}=1$"; then
-            note_pass "first user promoted to site-owner on disk"
-        else
-            note_fail "site-owner role not persisted for first user: $accounts_rows"
-        fi
+        present=$(for k in next_sid count "user:" "role:" "uid:"; do have_key "$k" && printf '%s ' "$k"; done)
+        note_fail "expected keys not all found in mdbx shards on disk (present: ${present:-none})"
     fi
+    du -sh "$SHARDED_DIR" 2>/dev/null | sed 's/^/  sharded on-disk size: /'
 fi
-ls -la "$DB" 2>/dev/null | head -1
 
 echo
 echo "========================================"

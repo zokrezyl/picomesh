@@ -207,6 +207,7 @@ struct rpc_async_client {
     struct yaafc_coro *reader;    /* per-connection demux reader coro */
     int connecting;               /* a connect is in flight */
     struct coro_waiter *connect_wq_head, *connect_wq_tail; /* parked on connect */
+    struct peer_channel *owner;   /* channel whose proxy cache we flush on reconnect */
 };
 
 /* Drain `n` bytes off the stream into a scratch buffer. Returns 1 on
@@ -346,6 +347,11 @@ static int rpc_async_ensure_connected(struct rpc_async_client *c)
 
     c->connecting = 0;
 
+    /* Fresh connection ⇒ any cached remote proxies belong to the previous
+     * (now-dead) backend process. Drop them so the next acquire re-creates
+     * against this connection. (First connect: cache is empty, no-op.) */
+    if (ok && c->owner) peer_channel_flush_proxy_cache(c->owner);
+
     /* Start the reader (it runs to its first yloop_read and parks). */
     if (ok) yaafc_coro_resume(c->reader);
 
@@ -455,6 +461,7 @@ static struct peer_channel *open_async_session(struct yloop *loop,
     if (!c) return NULL;
     struct peer_channel *s = peer_channel_create(-1); /* no fd; async carries IO */
     if (!s) { rpc_async_client_destroy(c); return NULL; }
+    c->owner = s; /* so reconnects can flush the channel's proxy cache */
     peer_channel_set_async(s, c, rpc_async_client_call, rpc_async_client_destroy);
     return s;
 }
@@ -533,6 +540,13 @@ static int resolve_service_bind(struct yaafc_engine *e, const char *service,
     snprintf(host_out, host_cap, "%s", h && *h ? h : "127.0.0.1");
     *port_out = (int)p;
     return 1;
+}
+
+int yaafc_engine_service_addr(struct yaafc_engine *e, const char *service,
+                              char *host_out, size_t host_cap, int *port_out)
+{
+    if (!e || !service || !host_out || !port_out) return 0;
+    return resolve_service_bind(e, service, host_out, host_cap, port_out);
 }
 
 /* A `remotes:` entry is `{service: <name>, host?: <str>, port?: <int>}`.

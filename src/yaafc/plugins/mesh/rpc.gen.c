@@ -715,26 +715,9 @@ struct object_ptr_result mesh_store_create(struct ctx *ctx)
     struct class_ptr_result _kr = mesh_store_class_get();
     if (YAAFC_IS_ERR(_kr))
         return YAAFC_ERR(object_ptr, "mesh_store_create: class accessor failed", _kr);
-    const struct class *_klass = _kr.value;
-
-    if (!ctx || !ctx->peer)
-        return object_alloc(_klass);
-
-    peer_channel_translate_class(ctx->peer, "mesh_store");
-
-    uint64_t _h = 0;
-    const char *_name = "mesh_store";
-    if (rpc_call(ctx->peer, RPC_OP_CREATE, 0, _name, strlen(_name),
-                 &_h, sizeof(_h)) != sizeof(_h) || !_h)
-        return YAAFC_ERR(object_ptr, "mesh_store_create: remote create failed");
-
-    void *_mem = calloc(1, sizeof(struct object) + sizeof(uint64_t));
-    if (!_mem)
-        return YAAFC_ERR(object_ptr, "mesh_store_create: calloc(proxy) failed");
-    struct object *_obj = _mem;
-    *(const struct class **)_obj = _klass;
-    *(uint64_t *)((char *)_obj + sizeof(*_obj)) = _h;
-    return YAAFC_OK(object_ptr, _obj);
+    /* A service dependency is acquired once and cached for the connection
+     * (remote) / process (in-process) lifetime — no per-call create. */
+    return rpc_object_acquire(ctx, _kr.value, "mesh_store");
 }
 
 
