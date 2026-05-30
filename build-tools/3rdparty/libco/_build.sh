@@ -55,7 +55,14 @@ fi
 rm -rf "$INSTALL_DIR" "$STAGE"
 mkdir -p "$INSTALL_DIR/lib" "$INSTALL_DIR/include" "$STAGE"
 
-CFLAGS_BASE="-O2 -fPIC -std=c99"
+# -DLIBCO_MP is REQUIRED: yaafc runs N worker threads, each driving its
+# own libco coroutine scheduler concurrently. Without LIBCO_MP, libco's
+# settings.h #defines `thread_local` to nothing, so its active-context
+# handles (co_active_handle / co_active_buffer) become process-global and
+# concurrent co_switch() across threads corrupts the shared context —
+# crashing inside co_swap. LIBCO_MP makes them real thread-locals
+# (__thread), giving each worker thread an independent active context.
+CFLAGS_BASE="-O2 -fPIC -std=c99 -DLIBCO_MP"
 CC=cc
 AR=ar
 CFLAGS_EXTRA=""

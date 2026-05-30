@@ -50,6 +50,7 @@ static const struct yargv_option_def YAAFC_OPTIONS[] = {
     {"--app-name",    NULL, "app_name",    "app name (drives XDG path)",      YARGV_VALUE,     0},
     {"--name",        NULL, "name",        "instance name",                   YARGV_VALUE,     0},
     {"--frontend",    NULL, "frontend",    "frontend: yrpc (default) or yttp",YARGV_VALUE,     0},
+    {"--workers",     NULL, "workers",     "in-process worker threads (default 1)", YARGV_VALUE, 0},
     {"--plugins",     NULL, "plugins",     "comma-sep plugin list (yaapp compat)", YARGV_VALUE, 0},
 };
 #define YAAFC_OPTION_COUNT (sizeof(YAAFC_OPTIONS) / sizeof(YAAFC_OPTIONS[0]))
@@ -128,64 +129,116 @@ static int resolve_port(struct yaafc_engine *e)
     return 7777;
 }
 
+/* Number of in-process worker threads (gh#6). Precedence, highest first:
+ *
+ *   1. --workers on the CLI
+ *   2. `mesh.services.<--name>.workers` in the YAML (a per-service run
+ *      knob, sibling of `port`/`frontend`)
+ *   3. top-level `workers` (standalone single-service / promoted config)
+ *   4. default 1 (single-threaded — identical to the pre-gh#6 behaviour)
+ *
+ * Clamped to [1, 256].
+ */
+static int resolve_workers(struct yaafc_engine *e)
+{
+    int64_t n = -1;
+    int64_t cli = yargv_get_int(yaafc_engine_cli(e), "workers", -1);
+    if (cli > 0) {
+        n = cli;
+    } else {
+        const char *name = yargv_get_string(yaafc_engine_cli(e), "name", NULL);
+        if (name && *name) {
+            char path[256];
+            snprintf(path, sizeof(path), "mesh.services.%s.workers", name);
+            struct yconfig_node_ptr_result r = yconfig_get(yaafc_engine_config(e), path);
+            if (YAAFC_IS_OK(r) && r.value) n = yconfig_node_as_int(r.value, -1);
+        }
+        if (n <= 0) {
+            struct yconfig_node_ptr_result r =
+                yconfig_get(yaafc_engine_config(e), "workers");
+            if (YAAFC_IS_OK(r) && r.value) n = yconfig_node_as_int(r.value, -1);
+        }
+    }
+    if (n < 1) n = 1;
+    if (n > 256) n = 256;
+    return (int)n;
+}
+
+/* Inputs the per-worker setup callback needs. Lives on cmd_serve's stack
+ * for the duration of yaafc_engine_run_workers (which blocks until every
+ * worker loop exits), so plain borrowed pointers are safe. */
+struct serve_setup {
+    const char *name;
+    const char *host;
+    int port;
+    const char *frontend;
+};
+
+/* Runs ON each worker thread (worker 0 = main thread). Opens the
+ * service's remotes on this worker's own loop, then installs the chosen
+ * frontend listener on it. All workers bind the same port via
+ * SO_REUSEPORT. The frontend handle is owned for the process lifetime —
+ * the loop owns the listener and the process is torn down by signal, so
+ * there is nothing to stop here. */
+static struct yaafc_void_result serve_worker_setup(struct yaafc_engine *e,
+                                                   int worker_index, void *ud)
+{
+    struct serve_setup *ss = ud;
+
+    if (ss->name && *ss->name) {
+        size_t n = yaafc_engine_open_remotes(e, ss->name);
+        yinfo("serve[%s w%d]: opened %zu remote(s) from mesh.services.%s.config.remotes",
+              ss->name, worker_index, n, ss->name);
+    }
+
+    if (strcmp(ss->frontend, "yhttp") == 0) {
+        struct yhttp_config cfg = {.host = ss->host, .port = ss->port};
+        struct yhttp_frontend_ptr_result fr = yhttp_start(e, &cfg);
+        YAAFC_RETURN_IF_ERR(yaafc_void, fr, "serve_worker_setup: yhttp_start failed");
+    } else if (strcmp(ss->frontend, "yttp") == 0) {
+        struct yttp_config cfg = {.host = ss->host, .port = ss->port};
+        struct yttp_frontend_ptr_result fr = yttp_start(e, &cfg);
+        YAAFC_RETURN_IF_ERR(yaafc_void, fr, "serve_worker_setup: yttp_start failed");
+    } else {
+        struct yrpc_config cfg = {.host = ss->host, .port = ss->port};
+        struct yrpc_frontend_ptr_result fr = yrpc_start(e, &cfg);
+        YAAFC_RETURN_IF_ERR(yaafc_void, fr, "serve_worker_setup: yrpc_start failed");
+    }
+    return YAAFC_OK_VOID();
+}
+
 static int cmd_serve(struct yaafc_engine *e)
 {
     yaafc_active_engine_set(e);
 
-    /* If --name picks a service in mesh.services.*, auto-open its
-     * declared remotes BEFORE the frontend starts accepting traffic.
-     * The engine stashes the sessions; plugin code reaches them via
-     * `yaafc_engine_service_ctx(e, "<upstream>")` — the local/remote
-     * auto-dispatch helper. No call site builds a `struct ctx`
-     * manually anymore. */
     const char *name = yargv_get_string(yaafc_engine_cli(e), "name", NULL);
-    if (name && *name) {
-        size_t n = yaafc_engine_open_remotes(e, name);
-        yinfo("serve[%s]: opened %zu remote(s) from mesh.services.%s.config.remotes",
-              name, n, name);
-    }
-
     const char *host = resolve_host(e);
     int port = resolve_port(e);
-
+    int workers = resolve_workers(e);
     const char *frontend = yargv_get_string(yaafc_engine_cli(e), "frontend", "yrpc");
-    /* yconfig fallback for the frontend choice. */
-    if (frontend && strcmp(frontend, "yrpc") == 0) {
-        /* default — leave it */
-    } else if (frontend && strcmp(frontend, "yttp") == 0) {
-        struct yttp_config cfg = {.host = host, .port = port};
-        struct yttp_frontend_ptr_result fr = yttp_start(e, &cfg);
-        if (YAAFC_IS_ERR(fr)) return die_err("yttp_start", fr.error);
-        yinfo("yaafc serve [yttp]: %s:%d", host, port);
-        struct yaafc_void_result rr = yaafc_engine_run(e);
-        if (YAAFC_IS_ERR(rr)) return die_err("engine_run", rr.error);
-        yttp_stop(fr.value);
-        return 0;
-    } else if (frontend && strcmp(frontend, "yhttp") == 0) {
-        struct yhttp_config cfg = {.host = host, .port = port};
-        struct yhttp_frontend_ptr_result fr = yhttp_start(e, &cfg);
-        if (YAAFC_IS_ERR(fr)) return die_err("yhttp_start", fr.error);
-        yinfo("yaafc serve [yhttp]: http://%s:%d", host, port);
-        struct yaafc_void_result rr = yaafc_engine_run(e);
-        if (YAAFC_IS_ERR(rr)) return die_err("engine_run", rr.error);
-        yhttp_stop(fr.value);
-        return 0;
-    } else {
-        fprintf(stderr, "unknown --frontend '%s' (try yrpc | yttp | yhttp)\n",
-                frontend ? frontend : "(null)");
+    if (!frontend) frontend = "yrpc";
+
+    /* Reject an unknown frontend up front, before spinning any worker. */
+    if (strcmp(frontend, "yrpc") != 0 && strcmp(frontend, "yttp") != 0 &&
+        strcmp(frontend, "yhttp") != 0) {
+        fprintf(stderr, "unknown --frontend '%s' (try yrpc | yttp | yhttp)\n", frontend);
         return 2;
     }
 
-    struct yrpc_config cfg = {.host = host, .port = port};
-    struct yrpc_frontend_ptr_result fr = yrpc_start(e, &cfg);
-    if (YAAFC_IS_ERR(fr)) return die_err("yrpc_start", fr.error);
+    yinfo("yaafc serve [%s]: %s:%d (%d worker%s)",
+          frontend, host, port, workers, workers == 1 ? "" : "s");
 
-    yinfo("yaafc serve [yrpc]: plugins=[storage, calculator, time, accounts] on %s:%d",
-          host, port);
-    struct yaafc_void_result rr = yaafc_engine_run(e);
-    if (YAAFC_IS_ERR(rr)) return die_err("engine_run", rr.error);
-
-    yrpc_stop(fr.value);
+    /* One process, N worker threads: each runs serve_worker_setup on its
+     * own loop (opening this service's remotes + installing the frontend
+     * listener), then runs that loop. With workers == 1 this is exactly
+     * the old single-threaded path (worker 0 on the main thread). The
+     * `--name` service resolution drives every per-service config lookup
+     * the workers do, exactly as before — only now it happens per worker
+     * so each holds its own backend connection set. */
+    struct serve_setup ss = {.name = name, .host = host, .port = port, .frontend = frontend};
+    struct yaafc_void_result rr =
+        yaafc_engine_run_workers(e, (size_t)workers, serve_worker_setup, &ss);
+    if (YAAFC_IS_ERR(rr)) return die_err("engine_run_workers", rr.error);
     return 0;
 }
 

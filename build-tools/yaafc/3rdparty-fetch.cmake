@@ -1,17 +1,24 @@
 # 3rdparty-fetch.cmake
 #
-# For yaafc the "fetch" is actually a *local build* — we invoke
-# build-tools/3rdparty/<lib>/_build.sh during cmake-configure, which
-# downloads upstream source, compiles, and produces a tarball under
-# ${CMAKE_BINARY_DIR}/3rdparty-cache/. We then extract it into
+# For yaafc the "fetch" downloads a prebuilt per-lib tarball published by
+# .github/workflows/build-3rdparty-<lib>.yml and attached to the
+# `lib-<lib>-<version>` GitHub release, then extracts it into
 # ${CMAKE_BINARY_DIR}/3rdparty/<lib>/ so the per-lib stubs (libs/*.cmake)
-# get the same lib/+include/ layout they would from a release tarball.
+# get the lib/+include/ layout they expect.
+#
+# On a download miss — release not published for this version/platform
+# yet, offline, or YAAFC_3RDPARTY_FORCE_BUILD set — it falls back to a
+# local from-source build via build-tools/3rdparty/<lib>/_build.sh, which
+# produces an identically-shaped tarball under
+# ${CMAKE_BINARY_DIR}/3rdparty-cache/.
 #
 # A `${CMAKE_BINARY_DIR}/3rdparty/<lib>/.fetched-<version>` stamp guards
-# repeat work — re-extraction happens only when the version pin moves.
+# repeat work — re-fetch/extract happens only when the version pin moves.
 #
-# Single env override:
-#   YAAFC_3RDPARTY_CACHE_DIR   default: ~/.cache/yaafc/3rdparty
+# Env overrides:
+#   YAAFC_3RDPARTY_CACHE_DIR    default: ~/.cache/yaafc/3rdparty
+#   YAAFC_3RDPARTY_URL_BASE     default: github.com/zokrezyl/yaafc releases
+#   YAAFC_3RDPARTY_FORCE_BUILD  set to skip the download, build from source
 #
 # Public helpers:
 #   yaafc_3rdparty_target_platform(OUT_VAR)
@@ -25,6 +32,23 @@ if(NOT DEFINED YAAFC_3RDPARTY_CACHE_DIR)
     else()
         set(YAAFC_3RDPARTY_CACHE_DIR "$ENV{HOME}/.cache/yaafc/3rdparty")
     endif()
+endif()
+
+# Release-asset download base. Prebuilt per-lib tarballs are published by
+# .github/workflows/build-3rdparty-<lib>.yml and attached to the
+# `lib-<lib>-<version>` GitHub release.
+if(NOT DEFINED YAAFC_3RDPARTY_URL_BASE)
+    if(DEFINED ENV{YAAFC_3RDPARTY_URL_BASE})
+        set(YAAFC_3RDPARTY_URL_BASE "$ENV{YAAFC_3RDPARTY_URL_BASE}")
+    else()
+        set(YAAFC_3RDPARTY_URL_BASE "https://github.com/zokrezyl/yaafc/releases/download")
+    endif()
+endif()
+
+# Force a from-source build, skipping the prebuilt download — useful when
+# iterating on a _build.sh recipe without bumping the version pin.
+if(NOT DEFINED YAAFC_3RDPARTY_FORCE_BUILD AND DEFINED ENV{YAAFC_3RDPARTY_FORCE_BUILD})
+    set(YAAFC_3RDPARTY_FORCE_BUILD "$ENV{YAAFC_3RDPARTY_FORCE_BUILD}")
 endif()
 
 set(YAAFC_3RDPARTY_OUTPUT_DIR "${CMAKE_BINARY_DIR}/3rdparty")
@@ -77,22 +101,50 @@ function(yaafc_3rdparty_fetch LIB_NAME)
     if(NOT EXISTS "${_STAMP}")
         file(MAKE_DIRECTORY "${_OUTPUT_DIR}")
         if(NOT EXISTS "${_TARBALL}")
-            message(STATUS "3rdparty: building ${LIB_NAME} @${_LIBVER} for ${_PLATFORM}")
-            execute_process(
-                COMMAND ${CMAKE_COMMAND} -E env
-                    "TARGET_PLATFORM=${_PLATFORM}"
-                    "OUTPUT_DIR=${_OUTPUT_DIR}"
-                    "CACHE_DIR=${YAAFC_3RDPARTY_CACHE_DIR}"
-                    bash "${_BUILD_SH}"
-                WORKING_DIRECTORY "${_LIB_DIR}"
-                RESULT_VARIABLE _BUILD_RC
-                OUTPUT_FILE "${_OUTPUT_DIR}/${LIB_NAME}-build.log"
-                ERROR_FILE  "${_OUTPUT_DIR}/${LIB_NAME}-build.err"
-            )
-            if(NOT _BUILD_RC EQUAL 0)
-                message(FATAL_ERROR
-                    "3rdparty(${LIB_NAME}): _build.sh failed (rc=${_BUILD_RC}). "
-                    "See ${_OUTPUT_DIR}/${LIB_NAME}-build.err")
+            set(_HAVE_TARBALL FALSE)
+
+            # Prefer the prebuilt release asset; build from source only on
+            # a miss (release not cut yet, unpublished platform, offline,
+            # or YAAFC_3RDPARTY_FORCE_BUILD set).
+            if(NOT YAAFC_3RDPARTY_FORCE_BUILD)
+                set(_TAG "lib-${LIB_NAME}-${_LIBVER}")
+                set(_URL "${YAAFC_3RDPARTY_URL_BASE}/${_TAG}/${_FILENAME}")
+                message(STATUS "3rdparty: fetching prebuilt ${_FILENAME}")
+                file(DOWNLOAD "${_URL}" "${_TARBALL}.part"
+                    STATUS _DL_STATUS TLS_VERIFY ON)
+                list(GET _DL_STATUS 0 _DL_CODE)
+                if(_DL_CODE EQUAL 0)
+                    file(RENAME "${_TARBALL}.part" "${_TARBALL}")
+                    set(_HAVE_TARBALL TRUE)
+                    message(STATUS
+                        "3rdparty: downloaded ${LIB_NAME} ${_LIBVER} (${_PLATFORM})")
+                else()
+                    file(REMOVE "${_TARBALL}.part")
+                    list(GET _DL_STATUS 1 _DL_MSG)
+                    message(STATUS
+                        "3rdparty: no prebuilt ${_FILENAME} (${_DL_MSG}) — "
+                        "building from source")
+                endif()
+            endif()
+
+            if(NOT _HAVE_TARBALL)
+                message(STATUS "3rdparty: building ${LIB_NAME} @${_LIBVER} for ${_PLATFORM}")
+                execute_process(
+                    COMMAND ${CMAKE_COMMAND} -E env
+                        "TARGET_PLATFORM=${_PLATFORM}"
+                        "OUTPUT_DIR=${_OUTPUT_DIR}"
+                        "CACHE_DIR=${YAAFC_3RDPARTY_CACHE_DIR}"
+                        bash "${_BUILD_SH}"
+                    WORKING_DIRECTORY "${_LIB_DIR}"
+                    RESULT_VARIABLE _BUILD_RC
+                    OUTPUT_FILE "${_OUTPUT_DIR}/${LIB_NAME}-build.log"
+                    ERROR_FILE  "${_OUTPUT_DIR}/${LIB_NAME}-build.err"
+                )
+                if(NOT _BUILD_RC EQUAL 0)
+                    message(FATAL_ERROR
+                        "3rdparty(${LIB_NAME}): _build.sh failed (rc=${_BUILD_RC}). "
+                        "See ${_OUTPUT_DIR}/${LIB_NAME}-build.err")
+                endif()
             endif()
         endif()
 

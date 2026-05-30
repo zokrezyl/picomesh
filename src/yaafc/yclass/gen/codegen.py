@@ -1060,6 +1060,21 @@ static rpc_skel_fn {module}_skel_lookup(method_slot slot)
 """
         skel_install = f"    rpc_add_skel_lookup({module}_skel_lookup);\n"
 
+    # Eagerly register every class right here in the constructor — on the
+    # single main thread, before main() and therefore before any worker
+    # thread is spawned. Each accessor lazily populates the shared class
+    # and method-slot registries on first call; doing it now makes those
+    # registries fully populated and strictly read-only by the time N
+    # worker threads start serving, so first-touch registration can never
+    # race across threads. Best-effort: a registration failure (OOM) is
+    # left for the accessor to resurface at call time.
+    prewarm_calls = "\n".join(
+        f"    {{ struct class_ptr_result reg = {c['accessor']}();\n"
+        f"      if (YAAFC_IS_ERR(reg)) yaafc_error_destroy(reg.error); }}"
+        for c in classes
+    )
+    prewarm_section = (prewarm_calls + "\n") if prewarm_calls else ""
+
     return f"""\
 {accessor_section}\
 {skel_section}\
@@ -1077,6 +1092,7 @@ static void {module}_install_hooks(void)
     }}
 {skel_install}\
 {jinvoke_install}\
+{prewarm_section}\
 }}
 """
 

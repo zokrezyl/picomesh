@@ -236,4 +236,6 @@ static void time_install_hooks(void)
     }
     rpc_add_skel_lookup(time_skel_lookup);
     jinvoke_add_lookup(time_jinvoke_lookup);
+    { struct class_ptr_result reg = time_clock_class_get();
+      if (YAAFC_IS_ERR(reg)) yaafc_error_destroy(reg.error); }
 }

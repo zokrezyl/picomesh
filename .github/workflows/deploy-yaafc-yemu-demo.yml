@@ -167,10 +167,38 @@ jobs:
       # ----- Pages deploy -----
       - uses: actions/configure-pages@v5
 
+      # Publish ONLY the web deliverables, not the whole build tree.
+      # Uploading build-webasm-yemu-release/ verbatim dragged the CMake
+      # intermediates (CMakeFiles/, *.o, libtinyemu.a, generated *.c, the
+      # tinyemu-include/ headers, Makefile, CMakeCache.txt) into the Pages
+      # artifact — bloating it and exposing build internals on a public
+      # site. Stage a clean _site/ with exactly what index.html and
+      # tinyemu-iframe.html load at runtime.
+      - name: stage Pages site
+        run: |
+          set -euo pipefail
+          SRC=build-webasm-yemu-release
+          DEST=_site
+          rm -rf "$DEST"
+          mkdir -p "$DEST/assets"
+          cp "$SRC/index.html" \
+             "$SRC/tinyemu-iframe.html" \
+             "$SRC/yaafc-yemu.js" \
+             "$SRC/yaafc-yemu.wasm" \
+             "$SRC/yaafc.cfg" \
+             "$DEST/"
+          cp "$SRC/assets/alpine-rootfs.img" \
+             "$SRC/assets/kernel-riscv64.bin" \
+             "$SRC/assets/opensbi-fw_jump.elf" \
+             "$DEST/assets/"
+          echo "staged Pages site:"
+          du -sh "$DEST"
+          find "$DEST" -type f -printf '%10s  %p\n'
+
       - name: upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: build-webasm-yemu-release
+          path: _site
 
   deploy:
     name: deploy

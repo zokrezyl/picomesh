@@ -56,15 +56,50 @@ struct yaafc_engine_ptr_result yaafc_engine_create(const struct yaafc_engine_arg
 void yaafc_engine_destroy(struct yaafc_engine *e);
 
 /* Run until something stops the loop (frontend's shutdown, signal,
- * yaafc_engine_stop). */
+ * yaafc_engine_stop). Runs the single worker-0 loop on the calling
+ * thread — used by the non-`serve` paths (mesh parent control, tests).
+ * For the multi-worker serve path use yaafc_engine_run_workers. */
 struct yaafc_void_result yaafc_engine_run(struct yaafc_engine *e);
 
-/* Ask the engine to wind down. Safe from any coroutine on the loop
- * thread. */
+/* ---- in-process multithreaded workers (gh#6) ---------------------- */
+
+/* Per-worker setup hook. Runs ON the worker's own thread, after the
+ * worker's loop has been created and registered as that thread's
+ * current worker — so yaafc_engine_loop()/_remote()/_add_remote() and
+ * yaafc_engine_open_remotes() all resolve to THIS worker. A typical
+ * setup opens the service's remotes and installs the frontend listener
+ * on yaafc_engine_loop(e) (which binds with SO_REUSEPORT, so all N
+ * workers share the same port). `worker_index` is 0 for the worker that
+ * runs on the calling thread, 1..N-1 for the spawned threads. */
+typedef struct yaafc_void_result (*yaafc_worker_setup_fn)(struct yaafc_engine *e,
+                                                          int worker_index, void *ud);
+
+/* Spin up `workers` worker threads (clamped to >= 1) in ONE process,
+ * each owning its own libuv event loop AND its own libco coroutine
+ * scheduler. Worker 0 runs on the calling thread; workers 1..N-1 each
+ * run on a spawned pthread. Every worker runs `setup` on its own thread,
+ * then runs its loop. All workers serve the same port via SO_REUSEPORT;
+ * the kernel load-balances connections across them, and each connection
+ * is pinned to one worker for its lifetime. Warm state is shared per
+ * process where it is read-only (class registry, skel lookup chain);
+ * mutable per-request state (coroutine scheduler, RPC handle table,
+ * dependency-proxy cache, backend connections) is per worker.
+ *
+ * Blocks until worker 0's loop exits, then joins the others. Worker 0's
+ * setup runs before any thread is spawned, so a worker-0 setup failure
+ * is reported directly; a failure in a spawned worker's setup is logged
+ * and that worker bows out while the rest keep serving. */
+struct yaafc_void_result yaafc_engine_run_workers(struct yaafc_engine *e,
+                                                  size_t workers,
+                                                  yaafc_worker_setup_fn setup,
+                                                  void *ud);
+
+/* Ask the engine to wind down — best effort across all worker loops. */
 void yaafc_engine_stop(struct yaafc_engine *e);
 
-/* Borrow the yloop for frontend code (yloop_listen_tcp etc.). The
- * engine retains ownership; do not destroy. */
+/* Borrow the yloop for frontend code (yloop_listen_tcp etc.). Returns
+ * the CURRENT worker thread's loop (worker 0 on the main/bootstrap
+ * thread). The engine retains ownership; do not destroy. */
 struct yloop *yaafc_engine_loop(struct yaafc_engine *e);
 
 /* Plugins reach the engine via a process-global accessor — the driver
@@ -88,8 +123,11 @@ struct yargv_chain *yaafc_engine_cli(struct yaafc_engine *e);
 /* ---- inter-plugin RPC clients (the "remotes:" config edge) -------- */
 
 /* Open a TCP RPC client connection to `host:port` and register it
- * under `name`. Subsequent `yaafc_engine_remote(e, name)` returns the
- * session. The engine owns the session and destroys it at engine
+ * under `name`, on the CURRENT worker thread. Each worker owns its own
+ * backend connection set (the async client is bound to the worker's
+ * loop), so this registers against the calling worker only. Subsequent
+ * `yaafc_engine_remote(e, name)` on that same worker returns the
+ * session. The engine owns every worker's sessions and destroys them at
  * shutdown. `host` defaults to 127.0.0.1 when NULL.
  *
  * Idempotent: a second call with the same name closes the previous
@@ -98,8 +136,8 @@ struct yaafc_void_result yaafc_engine_add_remote(struct yaafc_engine *e,
                                                   const char *name,
                                                   const char *host, int port);
 
-/* Borrow the registered session, or NULL if unknown. The session
- * stays owned by the engine. */
+/* Borrow the current worker's session registered under `name`, or NULL
+ * if unknown. The session stays owned by the engine. */
 struct peer_channel *yaafc_engine_remote(struct yaafc_engine *e, const char *name);
 
 /* Auto-dispatch helper: produce a `struct ctx` for talking to `service`.

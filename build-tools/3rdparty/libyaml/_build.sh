@@ -24,6 +24,7 @@ CACHE_DIR="${CACHE_DIR:-$HOME/.cache/yaafc-3rdparty}"
 NCPU="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 
 LIBYAML_URL="https://github.com/yaml/libyaml/archive/refs/tags/${VERSION}.tar.gz"
+LIBYAML_REPO="https://github.com/yaml/libyaml.git"
 LIBYAML_TARBALL="$CACHE_DIR/libyaml-${VERSION}.tar.gz"
 SRC_DIR="$WORK_DIR/libyaml-${VERSION}"
 BUILD_DIR="$WORK_DIR/build-${TARGET_PLATFORM}"
@@ -33,15 +34,29 @@ TARBALL="$OUTPUT_DIR/libyaml-${TARGET_PLATFORM}-${VERSION}.tar.gz"
 
 mkdir -p "$WORK_DIR" "$OUTPUT_DIR" "$CACHE_DIR"
 
-if [ ! -f "$LIBYAML_TARBALL" ]; then
-    echo "==> downloading libyaml ${VERSION}"
-    curl -fL --retry 8 --retry-delay 5 --retry-all-errors \
-        -o "$LIBYAML_TARBALL.part" "$LIBYAML_URL"
-    mv "$LIBYAML_TARBALL.part" "$LIBYAML_TARBALL"
-fi
+# Obtain the source tree at $SRC_DIR. Primary path is GitHub's generated
+# source archive (served by codeload.github.com) — that endpoint has its own
+# availability separate from the git data path and occasionally throttles or
+# times out, which is fatal even with retries. When it fails, fall back to a
+# shallow git clone of the same tag, which hits a different GitHub subsystem.
+# Both yield the full source tree (including cmake/config.h.in) the CMake
+# build below needs — unlike the autotools dist tarballs on release mirrors.
 if [ ! -d "$SRC_DIR" ]; then
-    echo "==> extracting -> $SRC_DIR"
-    tar -C "$WORK_DIR" -xzf "$LIBYAML_TARBALL"
+    if [ ! -f "$LIBYAML_TARBALL" ]; then
+        echo "==> downloading libyaml ${VERSION}"
+        if curl -fL --retry 8 --retry-delay 5 --retry-all-errors \
+                -o "$LIBYAML_TARBALL.part" "$LIBYAML_URL"; then
+            mv "$LIBYAML_TARBALL.part" "$LIBYAML_TARBALL"
+        else
+            rm -f "$LIBYAML_TARBALL.part"
+            echo "==> archive endpoint failed; cloning ${VERSION} via git" >&2
+            git clone --depth 1 --branch "$VERSION" "$LIBYAML_REPO" "$SRC_DIR"
+        fi
+    fi
+    if [ ! -d "$SRC_DIR" ]; then
+        echo "==> extracting -> $SRC_DIR"
+        tar -C "$WORK_DIR" -xzf "$LIBYAML_TARBALL"
+    fi
 fi
 rm -rf "$BUILD_DIR" "$INSTALL_DIR" "$STAGE"
 mkdir -p "$INSTALL_DIR" "$STAGE"

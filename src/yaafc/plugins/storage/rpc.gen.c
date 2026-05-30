@@ -818,4 +818,8 @@ static void storage_install_hooks(void)
     }
     rpc_add_skel_lookup(storage_skel_lookup);
     jinvoke_add_lookup(storage_jinvoke_lookup);
+    { struct class_ptr_result reg = storage_kv_class_get();
+      if (YAAFC_IS_ERR(reg)) yaafc_error_destroy(reg.error); }
+    { struct class_ptr_result reg = storage_db_class_get();
+      if (YAAFC_IS_ERR(reg)) yaafc_error_destroy(reg.error); }
 }

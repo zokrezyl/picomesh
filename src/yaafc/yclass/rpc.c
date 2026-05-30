@@ -35,24 +35,48 @@ struct skel_cache_entry {
     UT_hash_handle hh;
 };
 
-struct rpc_server_state {
+/* The skel lookup chain is registered exclusively by codegen
+ * __attribute__((constructor)) hooks, which run on the single main
+ * thread before main() — and therefore before any worker thread is
+ * spawned. Once the program is running it is strictly read-only, so
+ * every worker thread can walk it concurrently without a lock. It is
+ * the ONE piece of RPC server state that is shared process-wide. */
+static struct skel_lookup_node **skel_lookup_chain(void)
+{
+    static struct skel_lookup_node *head = NULL;
+    return &head;
+}
+
+/* Per-worker RPC server state. Each worker thread owns its own libuv
+ * loop and its own listening fd (SO_REUSEPORT), so the kernel pins every
+ * TCP connection — and thus every CREATE/CALL/DESTROY for the proxy
+ * objects that connection carries — to a single worker for its lifetime.
+ * That connection affinity means the handle table never needs to be
+ * shared across threads: each worker registers, resolves, and releases
+ * its own handles. Making it thread-local keeps the per-call resolve on
+ * the hot path lock-free. The skel cache is likewise per-worker (a tiny
+ * read-mostly memo of the shared lookup chain).
+ *
+ * Handles start at 1 (0 is the reserved "no handle" sentinel). A worker
+ * thread's thread-local state is zero-initialised, so next_handle is
+ * lazily bumped to 1 on first use. */
+struct rpc_worker_state {
     struct object_entry objects[MAX_OBJECTS];
     size_t object_count;
     uint64_t next_handle;
-
-    struct skel_lookup_node *lookup_chain;
     struct skel_cache_entry *skel_cache;
 };
 
-static struct rpc_server_state *server(void)
+static struct rpc_worker_state *worker_state(void)
 {
-    static struct rpc_server_state s = {0};
+    static _Thread_local struct rpc_worker_state s;
+    if (s.next_handle == 0) s.next_handle = 1;
     return &s;
 }
 
 void rpc_init(void)
 {
-    struct rpc_server_state *s = server();
+    struct rpc_worker_state *s = worker_state();
     s->object_count = 0;
     s->next_handle = 1;
 }
@@ -62,22 +86,22 @@ void rpc_add_skel_lookup(skel_lookup_fn fn)
     if (!fn) return;
     struct skel_lookup_node *node = calloc(1, sizeof(*node));
     if (!node) return;
-    struct rpc_server_state *s = server();
+    struct skel_lookup_node **head = skel_lookup_chain();
     node->fn = fn;
-    node->next = s->lookup_chain;
-    s->lookup_chain = node;
+    node->next = *head;
+    *head = node;
 }
 
 rpc_skel_fn rpc_skel_for(method_slot slot)
 {
-    struct rpc_server_state *s = server();
+    struct rpc_worker_state *s = worker_state();
     if (slot == METHOD_SLOT_UNDEFINED) return NULL;
     struct skel_cache_entry *e = NULL;
     HASH_FIND(hh, s->skel_cache, &slot, sizeof(slot), e);
     if (e) return e->fn;
 
     rpc_skel_fn fn = NULL;
-    for (struct skel_lookup_node *n = s->lookup_chain; n; n = n->next) {
+    for (struct skel_lookup_node *n = *skel_lookup_chain(); n; n = n->next) {
         fn = n->fn(slot);
         if (fn) break;
     }
@@ -93,7 +117,7 @@ rpc_skel_fn rpc_skel_for(method_slot slot)
 
 uint64_t rpc_register_object(void *obj)
 {
-    struct rpc_server_state *s = server();
+    struct rpc_worker_state *s = worker_state();
     if (s->object_count >= MAX_OBJECTS) return 0;
     uint64_t h = s->next_handle++;
     s->objects[s->object_count].handle = h;
@@ -105,7 +129,7 @@ uint64_t rpc_register_object(void *obj)
 void *rpc_handle_resolve(uint64_t h)
 {
     if (!h) return NULL;
-    struct rpc_server_state *s = server();
+    struct rpc_worker_state *s = worker_state();
     for (size_t i = 0; i < s->object_count; ++i) {
         if (s->objects[i].handle == h) return s->objects[i].ptr;
     }
@@ -137,7 +161,7 @@ void rpc_current_caller(uint32_t *out_uid, uint32_t *out_sid)
 static int rpc_handle_release(uint64_t h)
 {
     if (!h) return 0;
-    struct rpc_server_state *s = server();
+    struct rpc_worker_state *s = worker_state();
     for (size_t i = 0; i < s->object_count; ++i) {
         if (s->objects[i].handle == h) {
             free(s->objects[i].ptr);

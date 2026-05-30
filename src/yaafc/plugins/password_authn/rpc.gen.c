@@ -413,4 +413,6 @@ static void password_authn_install_hooks(void)
     }
     rpc_add_skel_lookup(password_authn_skel_lookup);
     jinvoke_add_lookup(password_authn_jinvoke_lookup);
+    { struct class_ptr_result reg = password_authn_store_class_get();
+      if (YAAFC_IS_ERR(reg)) yaafc_error_destroy(reg.error); }
 }

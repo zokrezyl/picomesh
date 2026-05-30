@@ -484,4 +484,6 @@ static void issues_install_hooks(void)
     }
     rpc_add_skel_lookup(issues_skel_lookup);
     jinvoke_add_lookup(issues_jinvoke_lookup);
+    { struct class_ptr_result reg = issues_store_class_get();
+      if (YAAFC_IS_ERR(reg)) yaafc_error_destroy(reg.error); }
 }

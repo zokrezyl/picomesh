@@ -9,6 +9,7 @@
 
 #include <libco.h>
 
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,17 +29,26 @@ struct yaafc_coro {
 
 /* The currently-running coroutine handle. The libco "active" thread is
  * the main stack when this is NULL, otherwise this object's thread.
- * Single-threaded on the loop side; no locking needed. */
+ *
+ * THREAD-LOCAL: each worker thread runs its own libuv loop and its own
+ * libco scheduler, so each needs an independent "current coroutine".
+ * libco itself tracks its active context per-thread (co_active_handle is
+ * thread_local in every backend), so this companion bookkeeping must be
+ * thread-local too — otherwise two worker threads switching coroutines
+ * concurrently would clobber each other's notion of who is running. */
 static struct yaafc_coro **current_slot(void)
 {
-    static struct yaafc_coro *cur = NULL;
+    static _Thread_local struct yaafc_coro *cur = NULL;
     return &cur;
 }
 
+/* Coroutine ids are purely for tracing/introspection. They're handed out
+ * across all worker threads, so the counter is atomic to stay race-free
+ * (and globally unique) without a lock. */
 static unsigned int next_id(void)
 {
-    static unsigned int n = 0;
-    return ++n;
+    static atomic_uint n = 0;
+    return atomic_fetch_add_explicit(&n, 1, memory_order_relaxed) + 1;
 }
 
 static void coro_trampoline(void)

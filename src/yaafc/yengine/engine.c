@@ -17,6 +17,7 @@
 
 #include <uthash.h>
 
+#include <pthread.h>
 #include <signal.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -28,21 +29,54 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Linked list of registered remote RPC sessions, keyed by name. The
- * engine owns every session; lookups are O(N names) which is fine
- * for the handful of remotes a typical plugin holds. */
+/* Linked list of registered remote RPC sessions, keyed by name. Each
+ * worker owns its own list; lookups are O(N names) which is fine for the
+ * handful of remotes a typical plugin holds. */
 struct remote_entry {
     char *name;
     struct peer_channel *peer;
     struct remote_entry *next;
 };
 
-struct yaafc_engine {
+/* One in-process worker: its own libuv loop, its own libco coroutine
+ * scheduler (the scheduler state is thread-local — see yco/coro.c), and
+ * its own backend connection set. Worker 0 runs on the main thread;
+ * workers 1..N-1 each run on a spawned pthread. */
+struct yaafc_worker {
+    struct yaafc_engine *engine;
     struct yloop *loop;
+    struct remote_entry *remotes;
+    size_t index;
+    pthread_t thread;             /* valid only when `started` */
+    int started;                  /* pthread_create succeeded (index > 0) */
+    /* Transient: handed to the spawned thread for its one-shot setup. */
+    yaafc_worker_setup_fn setup;
+    void *setup_ud;
+};
+
+struct yaafc_engine {
     struct yconfig *config;
     struct yargv_chain *cli; /* may be NULL */
-    struct remote_entry *remotes;
+    struct yaafc_worker *workers;
+    size_t worker_count;
 };
+
+/* The worker bound to the calling thread. Set at the top of each worker
+ * thread (and for worker 0 by run/run_workers); thread-local so every
+ * worker resolves its OWN loop and remotes. Unset on bootstrap/test/
+ * libuv-pool threads, where we fall back to worker 0. */
+static struct yaafc_worker **current_worker_slot(void)
+{
+    static _Thread_local struct yaafc_worker *w = NULL;
+    return &w;
+}
+
+static struct yaafc_worker *engine_current_worker(struct yaafc_engine *e)
+{
+    struct yaafc_worker *w = *current_worker_slot();
+    if (w) return w;
+    return e->workers; /* worker 0 — main/bootstrap/pool-thread fallback */
+}
 
 static void apply_cli_env(const struct yargv_chain *cli)
 {
@@ -133,13 +167,27 @@ struct yaafc_engine_ptr_result yaafc_engine_create(const struct yaafc_engine_arg
         }
     }
 
+    /* Worker 0: created here (the main-thread loop). Additional workers
+     * are spawned lazily by yaafc_engine_run_workers when a service opts
+     * into `workers: N`. */
+    e->workers = calloc(1, sizeof(struct yaafc_worker));
+    if (!e->workers) {
+        yconfig_destroy(e->config);
+        free(e);
+        return YAAFC_ERR(yaafc_engine_ptr, "yaafc_engine_create: calloc(workers) failed");
+    }
+    e->worker_count = 1;
+    e->workers[0].engine = e;
+    e->workers[0].index = 0;
+
     struct yloop_ptr_result lr = yloop_create();
     if (YAAFC_IS_ERR(lr)) {
+        free(e->workers);
         yconfig_destroy(e->config);
         free(e);
         return YAAFC_ERR(yaafc_engine_ptr, "yaafc_engine_create: yloop_create failed", lr);
     }
-    e->loop = lr.value;
+    e->workers[0].loop = lr.value;
     yinfo("yaafc_engine: ready (config=%s)",
           config_file ? config_file : "(defaults+search)");
     return YAAFC_OK(yaafc_engine_ptr, e);
@@ -148,15 +196,18 @@ struct yaafc_engine_ptr_result yaafc_engine_create(const struct yaafc_engine_arg
 void yaafc_engine_destroy(struct yaafc_engine *e)
 {
     if (!e) return;
-    struct remote_entry *r = e->remotes;
-    while (r) {
-        struct remote_entry *next = r->next;
-        peer_channel_destroy(r->peer);
-        free(r->name);
-        free(r);
-        r = next;
+    for (size_t i = 0; i < e->worker_count; ++i) {
+        struct remote_entry *r = e->workers[i].remotes;
+        while (r) {
+            struct remote_entry *next = r->next;
+            peer_channel_destroy(r->peer);
+            free(r->name);
+            free(r);
+            r = next;
+        }
+        yloop_destroy(e->workers[i].loop);
     }
-    yloop_destroy(e->loop);
+    free(e->workers);
     yconfig_destroy(e->config);
     yargv_chain_destroy(e->cli);
     free(e);
@@ -473,20 +524,24 @@ struct yaafc_void_result yaafc_engine_add_remote(struct yaafc_engine *e,
     if (!e || !name) return YAAFC_ERR(yaafc_void, "add_remote: bad args");
     if (!host) host = "127.0.0.1";
 
+    /* Per-worker: register against the calling worker's loop and list. */
+    struct yaafc_worker *w = engine_current_worker(e);
+
     /* Replace any previous registration with the same name. The async
      * session connects lazily on first use, so there's no dial here —
      * just swap the session in. */
-    for (struct remote_entry *r = e->remotes; r; r = r->next) {
+    for (struct remote_entry *r = w->remotes; r; r = r->next) {
         if (strcmp(r->name, name) == 0) {
             peer_channel_destroy(r->peer);
-            r->peer = open_async_session(e->loop, host, port);
+            r->peer = open_async_session(w->loop, host, port);
             if (!r->peer) return YAAFC_ERR(yaafc_void, "add_remote: session_create");
-            yinfo("engine: reopened remote '%s' → %s:%d (async)", name, host, port);
+            yinfo("engine[w%zu]: reopened remote '%s' → %s:%d (async)",
+                  w->index, name, host, port);
             return YAAFC_OK_VOID();
         }
     }
 
-    struct peer_channel *s = open_async_session(e->loop, host, port);
+    struct peer_channel *s = open_async_session(w->loop, host, port);
     if (!s) return YAAFC_ERR(yaafc_void, "add_remote: session_create");
 
     struct remote_entry *node = calloc(1, sizeof(*node));
@@ -494,16 +549,17 @@ struct yaafc_void_result yaafc_engine_add_remote(struct yaafc_engine *e,
     node->name = strdup(name);
     if (!node->name) { peer_channel_destroy(s); free(node); return YAAFC_ERR(yaafc_void, "add_remote: strdup"); }
     node->peer = s;
-    node->next = e->remotes;
-    e->remotes = node;
-    yinfo("engine: opened remote '%s' → %s:%d", name, host, port);
+    node->next = w->remotes;
+    w->remotes = node;
+    yinfo("engine[w%zu]: opened remote '%s' → %s:%d", w->index, name, host, port);
     return YAAFC_OK_VOID();
 }
 
 struct peer_channel *yaafc_engine_remote(struct yaafc_engine *e, const char *name)
 {
     if (!e || !name) return NULL;
-    for (struct remote_entry *r = e->remotes; r; r = r->next) {
+    struct yaafc_worker *w = engine_current_worker(e);
+    for (struct remote_entry *r = w->remotes; r; r = r->next) {
         if (strcmp(r->name, name) == 0) return r->peer;
     }
     return NULL;
@@ -624,20 +680,128 @@ size_t yaafc_engine_open_remotes(struct yaafc_engine *e, const char *plugin)
 struct yaafc_void_result yaafc_engine_run(struct yaafc_engine *e)
 {
     if (!e) return YAAFC_ERR(yaafc_void, "yaafc_engine_run: NULL engine");
-    struct yaafc_void_result r = yloop_run(e->loop);
+    *current_worker_slot() = &e->workers[0];
+    struct yaafc_void_result r = yloop_run(e->workers[0].loop);
     YAAFC_RETURN_IF_ERR(yaafc_void, r, "yaafc_engine_run: yloop_run failed");
+    return YAAFC_OK_VOID();
+}
+
+/* pthread start routine for workers 1..N-1. External-library signature
+ * (void *(void *)) — it can't return a Result, so it absorbs setup
+ * errors at this boundary (the worker bows out, the rest keep serving).
+ * The worker's loop runs until shutdown. */
+YAAFC_EXTERNAL_CALLBACK
+static void *worker_thread_main(void *arg)
+{
+    struct yaafc_worker *w = arg;
+    *current_worker_slot() = w;
+
+    struct yaafc_void_result sr = w->setup(w->engine, (int)w->index, w->setup_ud);
+    if (YAAFC_IS_ERR(sr)) {
+        yaafc_error_print(stderr, "yaafc_engine_run_workers: worker setup", sr.error);
+        yaafc_error_destroy(sr.error);
+        return NULL;
+    }
+    struct yaafc_void_result rr = yloop_run(w->loop);
+    if (YAAFC_IS_ERR(rr)) yaafc_error_destroy(rr.error);
+    return NULL;
+}
+
+struct yaafc_void_result yaafc_engine_run_workers(struct yaafc_engine *e,
+                                                  size_t workers,
+                                                  yaafc_worker_setup_fn setup,
+                                                  void *ud)
+{
+    if (!e) return YAAFC_ERR(yaafc_void, "run_workers: NULL engine");
+    if (!setup) return YAAFC_ERR(yaafc_void, "run_workers: NULL setup");
+    if (workers < 1) workers = 1;
+
+    /* Grow the worker array to N, creating a fresh loop per new worker.
+     * Worker 0 (loop created at engine create) is kept as-is. If a loop
+     * can't be created we cap the fleet at what we built. */
+    if (workers > e->worker_count) {
+        struct yaafc_worker *grown =
+            realloc(e->workers, workers * sizeof(struct yaafc_worker));
+        if (!grown) return YAAFC_ERR(yaafc_void, "run_workers: realloc(workers) failed");
+        e->workers = grown;
+        for (size_t i = e->worker_count; i < workers; ++i) {
+            memset(&e->workers[i], 0, sizeof(struct yaafc_worker));
+            e->workers[i].engine = e;
+            e->workers[i].index = i;
+            struct yloop_ptr_result lr = yloop_create();
+            if (YAAFC_IS_ERR(lr)) {
+                ywarn("run_workers: yloop_create for worker %zu failed — "
+                      "capping fleet at %zu", i, i);
+                yaafc_error_destroy(lr.error);
+                break;
+            }
+            e->workers[i].loop = lr.value;
+            e->worker_count = i + 1;
+        }
+    }
+
+    /* The libuv worker pool (used by yloop_run_blocking for DB / libgit2
+     * offload) is process-global, default size 4. With several worker
+     * loops all offloading, give the pool at least one thread per worker
+     * so blocking work doesn't serialise behind it. Only nudges the
+     * default up — an explicit env override always wins (overwrite=0). */
+    if (e->worker_count > 1) {
+        char pool[16];
+        snprintf(pool, sizeof(pool), "%zu", e->worker_count * 4);
+        setenv("UV_THREADPOOL_SIZE", pool, 0);
+    }
+
+    /* Worker 0 first, on THIS thread — its setup runs before any thread
+     * is spawned, so a worker-0 setup failure is reported directly with
+     * nothing to unwind. */
+    *current_worker_slot() = &e->workers[0];
+    struct yaafc_void_result sr0 = setup(e, 0, ud);
+    YAAFC_RETURN_IF_ERR(yaafc_void, sr0, "run_workers: worker 0 setup failed");
+
+    /* Spawn workers 1..N-1; each runs its own setup + loop. */
+    for (size_t i = 1; i < e->worker_count; ++i) {
+        e->workers[i].setup = setup;
+        e->workers[i].setup_ud = ud;
+        int rc = pthread_create(&e->workers[i].thread, NULL,
+                                worker_thread_main, &e->workers[i]);
+        if (rc != 0) {
+            ywarn("run_workers: pthread_create for worker %zu failed (rc=%d) — "
+                  "continuing with fewer workers", i, rc);
+            continue;
+        }
+        e->workers[i].started = 1;
+    }
+    yinfo("run_workers: %zu worker thread(s) serving", e->worker_count);
+
+    /* Worker 0 drives this thread's loop until shutdown. */
+    struct yaafc_void_result rr = yloop_run(e->workers[0].loop);
+
+    /* Loop exited (clean shutdown). Nudge the others to stop, then join.
+     * In practice serve shutdown is signal-driven (the process dies), so
+     * this path is mostly for tests / a clean yaafc_engine_stop. */
+    for (size_t i = 1; i < e->worker_count; ++i) {
+        if (e->workers[i].started && e->workers[i].loop) yloop_stop(e->workers[i].loop);
+    }
+    for (size_t i = 1; i < e->worker_count; ++i) {
+        if (e->workers[i].started) pthread_join(e->workers[i].thread, NULL);
+    }
+
+    YAAFC_RETURN_IF_ERR(yaafc_void, rr, "run_workers: worker 0 loop failed");
     return YAAFC_OK_VOID();
 }
 
 void yaafc_engine_stop(struct yaafc_engine *e)
 {
     if (!e) return;
-    yloop_stop(e->loop);
+    for (size_t i = 0; i < e->worker_count; ++i) {
+        if (e->workers[i].loop) yloop_stop(e->workers[i].loop);
+    }
 }
 
 struct yloop *yaafc_engine_loop(struct yaafc_engine *e)
 {
-    return e ? e->loop : NULL;
+    if (!e) return NULL;
+    return engine_current_worker(e)->loop;
 }
 
 const struct yconfig *yaafc_engine_config(struct yaafc_engine *e)
