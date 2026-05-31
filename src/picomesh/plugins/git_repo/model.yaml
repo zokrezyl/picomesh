@@ -1,0 +1,209 @@
+methods:
+  - slot: store_make
+    domain: git_repo
+    owning_class: store
+    return_type: struct picomesh_uint32_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: owner_id
+        type: uint32_t
+      - name: owner_name
+        type: "const char *"
+      - name: repo_name
+        type: "const char *"
+  - slot: store_delete
+    domain: git_repo
+    owning_class: store
+    return_type: struct picomesh_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: repo_id
+        type: uint32_t
+  - slot: store_owner_of
+    domain: git_repo
+    owning_class: store
+    return_type: struct picomesh_uint32_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: repo_id
+        type: uint32_t
+  - slot: store_count_for_owner
+    domain: git_repo
+    owning_class: store
+    return_type: struct picomesh_size_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: owner_id
+        type: uint32_t
+  - slot: store_count_total
+    domain: git_repo
+    owning_class: store
+    return_type: struct picomesh_size_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+  - slot: store_list_for_owner
+    domain: git_repo
+    owning_class: store
+    return_type: struct picomesh_string_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: owner_id
+        type: uint32_t
+  - slot: store_read_tree
+    domain: git_repo
+    owning_class: store
+    return_type: struct picomesh_string_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: repo_id
+        type: uint32_t
+      - name: ref
+        type: "const char *"
+      - name: path
+        type: "const char *"
+  - slot: store_read_file
+    domain: git_repo
+    owning_class: store
+    return_type: struct picomesh_string_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: repo_id
+        type: uint32_t
+      - name: ref
+        type: "const char *"
+      - name: path
+        type: "const char *"
+  - slot: store_put_file
+    domain: git_repo
+    owning_class: store
+    return_type: struct picomesh_string_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: repo_id
+        type: uint32_t
+      - name: path
+        type: "const char *"
+      - name: content
+        type: "const char *"
+      - name: message
+        type: "const char *"
+      - name: author_name
+        type: "const char *"
+      - name: author_email
+        type: "const char *"
+  - slot: store_is_public
+    domain: git_repo
+    owning_class: store
+    return_type: struct picomesh_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: repo_id
+        type: uint32_t
+  - slot: store_set_public
+    domain: git_repo
+    owning_class: store
+    return_type: struct picomesh_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: repo_id
+        type: uint32_t
+      - name: is_public
+        type: int
+classes:
+  - name: store
+    domain: git_repo
+    accessor: git_repo_store_class_get
+    type: regular
+    source_file: /home/misi/work/my/picomesh/src/picomesh/plugins/git_repo/store.c
+    parent: null
+    mixins: []
+    data: struct git_repo_store_data
+    ops:
+      - slot: store_make
+        slot_domain: git_repo
+        impl: git_repo_store_make_impl
+      - slot: store_delete
+        slot_domain: git_repo
+        impl: git_repo_store_delete_impl
+      - slot: store_owner_of
+        slot_domain: git_repo
+        impl: git_repo_store_owner_of_impl
+      - slot: store_count_for_owner
+        slot_domain: git_repo
+        impl: git_repo_store_count_for_owner_impl
+      - slot: store_count_total
+        slot_domain: git_repo
+        impl: git_repo_store_count_total_impl
+      - slot: store_list_for_owner
+        slot_domain: git_repo
+        impl: git_repo_store_list_for_owner_impl
+      - slot: store_read_tree
+        slot_domain: git_repo
+        impl: git_repo_store_read_tree_impl
+      - slot: store_read_file
+        slot_domain: git_repo
+        impl: git_repo_store_read_file_impl
+      - slot: store_put_file
+        slot_domain: git_repo
+        impl: git_repo_store_put_file_impl
+      - slot: store_is_public
+        slot_domain: git_repo
+        impl: git_repo_store_is_public_impl
+      - slot: store_set_public
+        slot_domain: git_repo
+        impl: git_repo_store_set_public_impl

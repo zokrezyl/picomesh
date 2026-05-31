@@ -1,0 +1,103 @@
+methods:
+  - slot: store_enqueue
+    domain: git_pipeline
+    owning_class: store
+    return_type: struct picomesh_uint32_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: repo_id
+        type: uint32_t
+  - slot: store_lease
+    domain: git_pipeline
+    owning_class: store
+    return_type: struct picomesh_uint32_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: runner_id
+        type: uint32_t
+  - slot: store_complete
+    domain: git_pipeline
+    owning_class: store
+    return_type: struct picomesh_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: job_id
+        type: uint32_t
+      - name: status
+        type: int32_t
+  - slot: store_count_pending
+    domain: git_pipeline
+    owning_class: store
+    return_type: struct picomesh_size_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+  - slot: store_count_running
+    domain: git_pipeline
+    owning_class: store
+    return_type: struct picomesh_size_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+  - slot: store_count_done
+    domain: git_pipeline
+    owning_class: store
+    return_type: struct picomesh_size_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+classes:
+  - name: store
+    domain: git_pipeline
+    accessor: git_pipeline_store_class_get
+    type: regular
+    source_file: /home/misi/work/my/picomesh/src/picomesh/plugins/git_pipeline/store.c
+    parent: null
+    mixins: []
+    data: struct git_pipeline_store_data
+    ops:
+      - slot: store_enqueue
+        slot_domain: git_pipeline
+        impl: git_pipeline_store_enqueue_impl
+      - slot: store_lease
+        slot_domain: git_pipeline
+        impl: git_pipeline_store_lease_impl
+      - slot: store_complete
+        slot_domain: git_pipeline
+        impl: git_pipeline_store_complete_impl
+      - slot: store_count_pending
+        slot_domain: git_pipeline
+        impl: git_pipeline_store_count_pending_impl
+      - slot: store_count_running
+        slot_domain: git_pipeline
+        impl: git_pipeline_store_count_running_impl
+      - slot: store_count_done
+        slot_domain: git_pipeline
+        impl: git_pipeline_store_count_done_impl

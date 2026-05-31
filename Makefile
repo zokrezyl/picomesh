@@ -1,4 +1,4 @@
-# yaafc — yet another application framework in C
+# picomesh — yet another application framework in C
 #
 # Top-level wrapper around CMake/Ninja. The build name format is
 # `build-<platform>-<config>` to match the yetty convention.
@@ -39,26 +39,26 @@ build-desktop-debug:
 	@ln -sfn $(BUILD_DIR_DEBUG)/compile_commands.json compile_commands.json
 	$(CMAKE) --build $(BUILD_DIR_DEBUG) --parallel $(JOBS)
 
-## build-deploy             stage build-deploy/ — host-runnable yaafc tree
+## build-deploy             stage build-deploy/ — host-runnable picomesh tree
 ##                          (binary + yaml + frontend + run.sh). Reused
 ##                          verbatim by build-yemu-release as the in-VM
-##                          /opt/git-yaafc payload.
+##                          /opt/picoforge payload.
 build-deploy: build-desktop-release
-	bash scenarios/git-yaafc/deploy/stage.sh
+	bash scenarios/picoforge/deploy/stage.sh
 
 ## build-yemu-release       bake the riscv64 VM rootfs at
 ##                          build-yemu-release/ (kernel + opensbi +
-##                          alpine-rootfs.img with /opt/git-yaafc/
+##                          alpine-rootfs.img with /opt/picoforge/
 ##                          injected from build-deploy/). Needs sudo
 ##                          for losetup/mount.
 ##
 ## Prereqs:
-##   - make build-linux-riscv64-release   (cross-compiled yaafc binary)
+##   - make build-linux-riscv64-release   (cross-compiled picomesh binary)
 ##   - make build-deploy                  (host deploy tree)
 build-yemu-release: build-linux-riscv64-release build-deploy
-	bash scenarios/git-yaafc/yemu/build-image.sh
+	bash scenarios/picoforge/yemu/build-image.sh
 
-## build-webasm-yemu-release  compile tinyemu to wasm (yaafc-yemu.{js,wasm})
+## build-webasm-yemu-release  compile tinyemu to wasm (picomesh-yemu.{js,wasm})
 ##                            for the in-browser demo at
 ##                            build-webasm-yemu-release/. Stages kernel +
 ##                            opensbi + alpine-rootfs from build-yemu-release/
@@ -68,9 +68,9 @@ build-yemu-release: build-linux-riscv64-release build-deploy
 ##   - make build-yemu-release          (VM rootfs + kernel)
 ##   - Emscripten SDK installed at $$HOME/.local/emsdk (or EMSDK=…)
 build-webasm-yemu-release:
-	bash scenarios/git-yaafc/yemu/web/build.sh
+	bash scenarios/picoforge/yemu/web/build.sh
 
-## build-linux-riscv64-release  cross-compile yaafc + yaafc-frontend for
+## build-linux-riscv64-release  cross-compile picomesh + picoforge-webapp for
 ##                              riscv64 (static, for the yemu demo VM
 ##                              or any riscv64 Linux target). Needs
 ##                              gcc-riscv64-linux-gnu / g++-riscv64-linux-gnu
@@ -78,9 +78,9 @@ build-webasm-yemu-release:
 ##                              gcc-riscv64-linux-gnu g++-riscv64-linux-gnu).
 build-linux-riscv64-release:
 	$(CMAKE) -S . -B $(BUILD_DIR_RISCV) -G Ninja -DCMAKE_BUILD_TYPE=Release \
-		-DCMAKE_TOOLCHAIN_FILE=$(CURDIR)/build-tools/yaafc/cross/linux-riscv64.cmake
+		-DCMAKE_TOOLCHAIN_FILE=$(CURDIR)/build-tools/picomesh/cross/linux-riscv64.cmake
 	$(CMAKE) --build $(BUILD_DIR_RISCV) --parallel $(JOBS)
-	@file $(BUILD_DIR_RISCV)/yaafc 2>/dev/null || true
+	@file $(BUILD_DIR_RISCV)/picomesh 2>/dev/null || true
 
 ## clean                  wipe every build-*/ artifact directory
 clean:

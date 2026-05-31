@@ -16,7 +16,7 @@
 #   TARGET_PLATFORM   linux-x86_64 | linux-aarch64 | macos-arm64 | macos-x86_64
 #   OUTPUT_DIR        where the tarball is written
 #
-# Tarball layout (consumed by build-tools/yaafc/libs/libgit2.cmake):
+# Tarball layout (consumed by build-tools/picomesh/libs/libgit2.cmake):
 #   lib/libgit2.a
 #   include/git2.h
 #   include/git2/...
@@ -31,8 +31,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/version")"
 
 URL="https://github.com/libgit2/libgit2/archive/refs/tags/v${VERSION}.tar.gz"
-TARBALL_CACHE="$HOME/.cache/yaafc-3rdparty/libgit2-${VERSION}.tar.gz"
-WORK_DIR="${WORK_DIR:-/tmp/yaafc-3rdparty-libgit2-$TARGET_PLATFORM}"
+TARBALL_CACHE="$HOME/.cache/picomesh-3rdparty/libgit2-${VERSION}.tar.gz"
+WORK_DIR="${WORK_DIR:-/tmp/picomesh-3rdparty-libgit2-$TARGET_PLATFORM}"
 SRC_DIR="$WORK_DIR/libgit2-${VERSION}"
 BUILD_DIR="$WORK_DIR/build-${TARGET_PLATFORM}"
 STAGE="$WORK_DIR/stage-${TARGET_PLATFORM}"
@@ -113,7 +113,7 @@ cmake --install "$BUILD_DIR"
 
 # Trim non-essential install artefacts so the tarball stays slim. The
 # CMake / pkgconfig modules aren't read by the consumer (libgit2.cmake
-# under build-tools/yaafc/libs/ wraps it as an IMPORTED target).
+# under build-tools/picomesh/libs/ wraps it as an IMPORTED target).
 rm -rf "$STAGE/lib/pkgconfig" "$STAGE/lib/cmake" "$STAGE/share"
 
 echo "==> packaging -> $TARBALL"

@@ -2,7 +2,7 @@ name: Build 3rdparty — libmdbx
 
 # Per-platform prebuilt static library for libmdbx, published as release
 # assets attached to the `lib-libmdbx-<version>` tag and consumed at
-# configure time by build-tools/yaafc/3rdparty-fetch.cmake (which
+# configure time by build-tools/picomesh/3rdparty-fetch.cmake (which
 # downloads the prebuilt tarball, falling back to a from-source build
 # only when the asset is missing). Version source of truth:
 # build-tools/3rdparty/libmdbx/version.

@@ -1,0 +1,91 @@
+methods:
+  - slot: store_register
+    domain: accounts
+    owning_class: store
+    return_type: struct picomesh_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: uid
+        type: uint32_t
+  - slot: store_exists
+    domain: accounts
+    owning_class: store
+    return_type: struct picomesh_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: uid
+        type: uint32_t
+  - slot: store_set_balance
+    domain: accounts
+    owning_class: store
+    return_type: struct picomesh_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: uid
+        type: uint32_t
+      - name: n
+        type: int64_t
+  - slot: store_balance
+    domain: accounts
+    owning_class: store
+    return_type: struct picomesh_int64_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: uid
+        type: uint32_t
+  - slot: store_count
+    domain: accounts
+    owning_class: store
+    return_type: struct picomesh_size_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+classes:
+  - name: store
+    domain: accounts
+    accessor: accounts_store_class_get
+    type: regular
+    source_file: /home/misi/work/my/picomesh/src/picomesh/plugins/accounts/accounts.c
+    parent: null
+    mixins: []
+    data: struct accounts_store_data
+    ops:
+      - slot: store_register
+        slot_domain: accounts
+        impl: accounts_store_register_impl
+      - slot: store_exists
+        slot_domain: accounts
+        impl: accounts_store_exists_impl
+      - slot: store_set_balance
+        slot_domain: accounts
+        impl: accounts_store_set_balance_impl
+      - slot: store_balance
+        slot_domain: accounts
+        impl: accounts_store_balance_impl
+      - slot: store_count
+        slot_domain: accounts
+        impl: accounts_store_count_impl

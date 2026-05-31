@@ -39,8 +39,8 @@ PKG_REV="${VERSION##*-}"
     exit 1
 }
 
-WORK_DIR="${WORK_DIR:-/tmp/yaafc-3rdparty-opensbi}"
-CACHE_DIR="${CACHE_DIR:-$HOME/.cache/yaafc-3rdparty}"
+WORK_DIR="${WORK_DIR:-/tmp/picomesh-3rdparty-opensbi}"
+CACHE_DIR="${CACHE_DIR:-$HOME/.cache/picomesh-3rdparty}"
 CROSS_COMPILE="${CROSS_COMPILE:-riscv64-linux-gnu-}"
 NCPU="$(nproc 2>/dev/null || echo 4)"
 

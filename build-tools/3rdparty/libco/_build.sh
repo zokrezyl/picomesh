@@ -11,7 +11,7 @@
 # Reads the upstream pin from sibling `version` file. libco has no
 # tagged releases — pin via commit SHA.
 #
-# Tarball layout (consumed by build-tools/yaafc/libs/co.cmake):
+# Tarball layout (consumed by build-tools/picomesh/libs/co.cmake):
 #   lib/libco.a
 #   include/libco.h
 
@@ -25,8 +25,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/version")"
 [ -n "$VERSION" ] || { echo "empty version file" >&2; exit 1; }
 
-WORK_DIR="${WORK_DIR:-/tmp/yaafc-3rdparty-libco-$TARGET_PLATFORM}"
-CACHE_DIR="${CACHE_DIR:-$HOME/.cache/yaafc-3rdparty}"
+WORK_DIR="${WORK_DIR:-/tmp/picomesh-3rdparty-libco-$TARGET_PLATFORM}"
+CACHE_DIR="${CACHE_DIR:-$HOME/.cache/picomesh-3rdparty}"
 
 LIBCO_URL="https://github.com/higan-emu/libco/archive/${VERSION}.tar.gz"
 LIBCO_TARBALL="$CACHE_DIR/libco-${VERSION}.tar.gz"
@@ -55,7 +55,7 @@ fi
 rm -rf "$INSTALL_DIR" "$STAGE"
 mkdir -p "$INSTALL_DIR/lib" "$INSTALL_DIR/include" "$STAGE"
 
-# -DLIBCO_MP is REQUIRED: yaafc runs N worker threads, each driving its
+# -DLIBCO_MP is REQUIRED: picomesh runs N worker threads, each driving its
 # own libco coroutine scheduler concurrently. Without LIBCO_MP, libco's
 # settings.h #defines `thread_local` to nothing, so its active-context
 # handles (co_active_handle / co_active_buffer) become process-global and

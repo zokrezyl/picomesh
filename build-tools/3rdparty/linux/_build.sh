@@ -3,7 +3,7 @@
 # containing:
 #   lib/kernel-riscv64.bin
 #
-# Alpine rootfs is handled by scenarios/git-yaafc/yemu/build-image.sh
+# Alpine rootfs is handled by scenarios/picoforge/yemu/build-image.sh
 # (downloads the upstream minirootfs and bakes the ext4 image), not by
 # this recipe. The linux artifact here is just the kernel.
 #
@@ -37,8 +37,8 @@ PKG_REV="${VERSION##*-}"
 }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-WORK_DIR="${WORK_DIR:-/tmp/yaafc-3rdparty-linux}"
-CACHE_DIR="${CACHE_DIR:-$HOME/.cache/yaafc-3rdparty}"
+WORK_DIR="${WORK_DIR:-/tmp/picomesh-3rdparty-linux}"
+CACHE_DIR="${CACHE_DIR:-$HOME/.cache/picomesh-3rdparty}"
 
 # Pick the right cross prefix: try the gnu one first (Ubuntu/Debian's
 # `gcc-riscv64-linux-gnu`), then unknown- (Linux upstream / yetty docs

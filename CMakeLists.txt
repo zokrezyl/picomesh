@@ -1,13 +1,13 @@
 cmake_minimum_required(VERSION 3.20)
-project(yaafc C CXX)
+project(picomesh C CXX)
 
 # C++17 is the floor (simdjson requires it). The C bits stay C17; only
-# src/yaafc/yjson/yjson.cpp gets compiled as C++.
+# src/picomesh/yjson/yjson.cpp gets compiled as C++.
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-set(YAAFC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" CACHE INTERNAL "")
+set(PICOMESH_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" CACHE INTERNAL "")
 
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -26,101 +26,101 @@ add_compile_options(
 find_package(Threads REQUIRED)
 
 # 3rdparty deps (built locally via build-tools/3rdparty/<lib>/_build.sh)
-include(build-tools/yaafc/libs/co.cmake)
-include(build-tools/yaafc/libs/uv.cmake)
-include(build-tools/yaafc/libs/yaml.cmake)
-include(build-tools/yaafc/libs/simdjson.cmake)
-include(build-tools/yaafc/libs/sqlite3.cmake)
-include(build-tools/yaafc/libs/libmdbx.cmake)
-include(build-tools/yaafc/libs/libgit2.cmake)
+include(build-tools/picomesh/libs/co.cmake)
+include(build-tools/picomesh/libs/uv.cmake)
+include(build-tools/picomesh/libs/yaml.cmake)
+include(build-tools/picomesh/libs/simdjson.cmake)
+include(build-tools/picomesh/libs/sqlite3.cmake)
+include(build-tools/picomesh/libs/libmdbx.cmake)
+include(build-tools/picomesh/libs/libgit2.cmake)
 
 # ---- yplatform backend selection -------------------------------------
 #
 # yplatform abstractions get one backend file per platform. Backends
-# under src/yaafc/yplatform/<module>/<platform>.c. Today only `time`
+# under src/picomesh/yplatform/<module>/<platform>.c. Today only `time`
 # is platform-split; future modules (paths, threads, sockets) follow
 # the same shape.
 if(WIN32)
-    set(YAAFC_YPLATFORM_TIME_SRC src/yaafc/yplatform/time/windows.c)
+    set(PICOMESH_YPLATFORM_TIME_SRC src/picomesh/yplatform/time/windows.c)
 else()
-    set(YAAFC_YPLATFORM_TIME_SRC src/yaafc/yplatform/time/posix.c)
+    set(PICOMESH_YPLATFORM_TIME_SRC src/picomesh/yplatform/time/posix.c)
 endif()
 
-# ---- yaafc runtime ---------------------------------------------------
-add_library(yaafc_runtime STATIC
-    src/yaafc/ycore/result.c
-    src/yaafc/ycore/ytrace.c
-    src/yaafc/ycore/yspan.c
-    src/yaafc/yclass/class.c
-    src/yaafc/yclass/rpc.c
-    src/yaafc/yclass/jinvoke.c
-    src/yaafc/yclass/yheaders.c
-    src/yaafc/yco/coro.c
-    src/yaafc/yloop/yloop.c
-    src/yaafc/yengine/engine.c
-    src/yaafc/frontends/yrpc/yrpc.c
-    src/yaafc/frontends/yttp/yttp.c
-    src/yaafc/frontends/yhttp/yhttp.c
-    src/yaafc/frontends/yhttp/frontend.c
-    src/yaafc/frontends/cli/cli.c
+# ---- picomesh runtime ---------------------------------------------------
+add_library(picomesh_runtime STATIC
+    src/picomesh/ycore/result.c
+    src/picomesh/ycore/ytrace.c
+    src/picomesh/ycore/yspan.c
+    src/picomesh/yclass/class.c
+    src/picomesh/yclass/rpc.c
+    src/picomesh/yclass/jinvoke.c
+    src/picomesh/yclass/yheaders.c
+    src/picomesh/yco/coro.c
+    src/picomesh/yloop/yloop.c
+    src/picomesh/yengine/engine.c
+    src/picomesh/frontends/yrpc/yrpc.c
+    src/picomesh/frontends/yttp/yttp.c
+    src/picomesh/frontends/yhttp/yhttp.c
+    src/picomesh/frontends/yhttp/frontend.c
+    src/picomesh/frontends/cli/cli.c
     src/picohttpparser/picohttpparser.c
-    src/yaafc/yconfig/yconfig.c
-    src/yaafc/yargv/yargv.c
-    src/yaafc/yjson/yjson.cpp
-    ${YAAFC_YPLATFORM_TIME_SRC}
+    src/picomesh/yconfig/yconfig.c
+    src/picomesh/yargv/yargv.c
+    src/picomesh/yjson/yjson.cpp
+    ${PICOMESH_YPLATFORM_TIME_SRC}
 )
-target_include_directories(yaafc_runtime PUBLIC
+target_include_directories(picomesh_runtime PUBLIC
     include
     include/uthash
     include/picohttpparser
 )
 
-# All plugin public headers now land in include/yaafc/plugin/<name>/
+# All plugin public headers now land in include/picomesh/plugin/<name>/
 # (codegen output target). They're reachable through the repo-wide
 # `include/` already PUBLIC-included above — no plugin-specific
 # include directories needed.
-target_link_libraries(yaafc_runtime PUBLIC co uv yaml simdjson Threads::Threads)
-target_compile_definitions(yaafc_runtime PUBLIC _GNU_SOURCE)
+target_link_libraries(picomesh_runtime PUBLIC co uv yaml simdjson Threads::Threads)
+target_compile_definitions(picomesh_runtime PUBLIC _GNU_SOURCE)
 
 # ---- codegen helper --------------------------------------------------
 #
-# yaafc_add_plugin(<name>
+# picomesh_add_plugin(<name>
 #                  SOURCES <annotated-c-files...>)
 #
-# Drives src/yaafc/yclass/gen/codegen.py for one plugin module.
+# Drives src/picomesh/yclass/gen/codegen.py for one plugin module.
 #
 # Layout invariant:
-#   - PUBLIC generated headers land in  include/yaafc/plugin/<name>/   (repo-wide include root)
-#   - INTERNAL .gen.c files land next to the annotated sources under  src/yaafc/plugins/<name>/
+#   - PUBLIC generated headers land in  include/picomesh/plugin/<name>/   (repo-wide include root)
+#   - INTERNAL .gen.c files land next to the annotated sources under  src/picomesh/plugins/<name>/
 #
-# Defines an OBJECT library `yaafc_plugin_<name>` linked into the
+# Defines an OBJECT library `picomesh_plugin_<name>` linked into the
 # driver binary.
-function(yaafc_add_plugin NAME)
+function(picomesh_add_plugin NAME)
     cmake_parse_arguments(PLUG "" "" "SOURCES;EXTRA_INCLUDES" ${ARGN})
     set(_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
-    set(_PUB_DIR "${YAAFC_ROOT}/include/yaafc/plugin/${NAME}")
+    set(_PUB_DIR "${PICOMESH_ROOT}/include/picomesh/plugin/${NAME}")
     file(MAKE_DIRECTORY "${_PUB_DIR}")
 
     # EXTRA_INCLUDES are dirs the annotated source needs at AST-dump
     # time (codegen runs clang -fsyntax-only) AND at compile time.
-    # Each path is joined with ':' for the YAAFC_CODEGEN_EXTRA_INCLUDES
+    # Each path is joined with ':' for the PICOMESH_CODEGEN_EXTRA_INCLUDES
     # env var that codegen.py splits. Plugins compose via each other's
     # PUBLIC generated stubs (e.g. session.c -> storage_set) and
-    # those all live under <repo>/include/yaafc/plugin/*, which is
-    # part of YAAFC_ROOT/include — so we don't need to enumerate
+    # those all live under <repo>/include/picomesh/plugin/*, which is
+    # part of PICOMESH_ROOT/include — so we don't need to enumerate
     # sibling plugin include dirs here anymore.
-    set(_EXTRA_INCLUDE_PATH "${YAAFC_ROOT}/include")
+    set(_EXTRA_INCLUDE_PATH "${PICOMESH_ROOT}/include")
     foreach(_d ${PLUG_EXTRA_INCLUDES})
         set(_EXTRA_INCLUDE_PATH "${_EXTRA_INCLUDE_PATH}:${_d}")
     endforeach()
 
     # Outputs that codegen.py writes for this plugin:
-    #   include/yaafc/plugin/<name>/<name>.h       — combined public API
-    #   src/yaafc/plugins/<name>/<name>.internal.h — codegen-only types
-    #   src/yaafc/plugins/<name>/<stem>.gen.c      — class-accessor body
-    #   src/yaafc/plugins/<name>/methods.gen.c     — public-stub bodies
-    #   src/yaafc/plugins/<name>/rpc.gen.c         — skel + jinvoke + create
-    #   src/yaafc/plugins/<name>/model.yaml        — parsed model echo
+    #   include/picomesh/plugin/<name>/<name>.h       — combined public API
+    #   src/picomesh/plugins/<name>/<name>.internal.h — codegen-only types
+    #   src/picomesh/plugins/<name>/<stem>.gen.c      — class-accessor body
+    #   src/picomesh/plugins/<name>/methods.gen.c     — public-stub bodies
+    #   src/picomesh/plugins/<name>/rpc.gen.c         — skel + jinvoke + create
+    #   src/picomesh/plugins/<name>/model.yaml        — parsed model echo
     set(_GEN_PUBLIC "${_PUB_DIR}/${NAME}.h")
     set(_GEN_INTERNAL
          "${_SRC_DIR}/${NAME}.internal.h"
@@ -140,42 +140,42 @@ function(yaafc_add_plugin NAME)
     add_custom_command(
         OUTPUT ${_GEN_PUBLIC} ${_GEN_INTERNAL}
         COMMAND ${CMAKE_COMMAND} -E env
-            "YAAFC_CODEGEN_EXTRA_INCLUDES=${_EXTRA_INCLUDE_PATH}"
-            uv run ${YAAFC_ROOT}/src/yaafc/yclass/gen/codegen.py
+            "PICOMESH_CODEGEN_EXTRA_INCLUDES=${_EXTRA_INCLUDE_PATH}"
+            uv run ${PICOMESH_ROOT}/src/picomesh/yclass/gen/codegen.py
                 ${NAME}
-                ${YAAFC_ROOT}/include
+                ${PICOMESH_ROOT}/include
                 ${_SRC_DIR}
                 ${_SOURCES_FULL}
-        DEPENDS ${_SOURCES_FULL} ${YAAFC_ROOT}/src/yaafc/yclass/gen/codegen.py
+        DEPENDS ${_SOURCES_FULL} ${PICOMESH_ROOT}/src/picomesh/yclass/gen/codegen.py
         WORKING_DIRECTORY ${_SRC_DIR}
         COMMENT "codegen[${NAME}]: regenerating public/internal artefacts"
         VERBATIM
     )
-    add_custom_target(yaafc_plugin_${NAME}_codegen
+    add_custom_target(picomesh_plugin_${NAME}_codegen
                       DEPENDS ${_GEN_PUBLIC} ${_GEN_INTERNAL})
 
     # The annotated <stem>.c #include's its sibling <stem>.gen.c, so we
     # don't add the .gen.c files separately — only methods.gen.c and
     # rpc.gen.c are independent translation units.
-    add_library(yaafc_plugin_${NAME} OBJECT
+    add_library(picomesh_plugin_${NAME} OBJECT
         ${_SOURCES_FULL}
         ${_SRC_DIR}/methods.gen.c
         ${_SRC_DIR}/rpc.gen.c
     )
-    add_dependencies(yaafc_plugin_${NAME} yaafc_plugin_${NAME}_codegen)
+    add_dependencies(picomesh_plugin_${NAME} picomesh_plugin_${NAME}_codegen)
     # All plugins (and the rest of the tree) reach generated public
-    # headers via <yaafc/plugin/<name>/...>, which resolves under
+    # headers via <picomesh/plugin/<name>/...>, which resolves under
     # the repo-wide include/ root.
-    target_include_directories(yaafc_plugin_${NAME} PUBLIC ${YAAFC_ROOT}/include)
-    target_link_libraries(yaafc_plugin_${NAME} PUBLIC yaafc_runtime)
+    target_include_directories(picomesh_plugin_${NAME} PUBLIC ${PICOMESH_ROOT}/include)
+    target_link_libraries(picomesh_plugin_${NAME} PUBLIC picomesh_runtime)
 endfunction()
 
 # ---- plugins ---------------------------------------------------------
 #
-# Adding a new plugin: drop a dir under src/yaafc/plugins/<name>/
-# with a CMakeLists.txt that calls `yaafc_add_plugin(<name> SOURCES …)`,
-# then append <name> to YAAFC_PLUGINS below.
-set(YAAFC_PLUGINS
+# Adding a new plugin: drop a dir under src/picomesh/plugins/<name>/
+# with a CMakeLists.txt that calls `picomesh_add_plugin(<name> SOURCES …)`,
+# then append <name> to PICOMESH_PLUGINS below.
+set(PICOMESH_PLUGINS
     storage
     sharded_storage
     calculator
@@ -192,8 +192,8 @@ set(YAAFC_PLUGINS
     personal_access_tokens
     mesh
 )
-foreach(_p ${YAAFC_PLUGINS})
-    add_subdirectory(src/yaafc/plugins/${_p})
+foreach(_p ${PICOMESH_PLUGINS})
+    add_subdirectory(src/picomesh/plugins/${_p})
 endforeach()
 
 # Some plugins #include other plugins' generated headers (session,
@@ -205,27 +205,27 @@ endforeach()
 foreach(_consumer session accounts password_authn token_issuer
                   personal_access_tokens issues git_repo git_pipeline
                   github_authn)
-    add_dependencies(yaafc_plugin_${_consumer}_codegen
-                     yaafc_plugin_storage_codegen)
+    add_dependencies(picomesh_plugin_${_consumer}_codegen
+                     picomesh_plugin_storage_codegen)
 endforeach()
 
 # The runtime's frontend (yhttp/frontend.c) and ymain's smoke `client`
 # subcommand both pull in plugin public headers. They must therefore
 # wait for every plugin's codegen to have produced those headers
 # before they get compiled.
-foreach(_p ${YAAFC_PLUGINS})
-    add_dependencies(yaafc_runtime yaafc_plugin_${_p}_codegen)
+foreach(_p ${PICOMESH_PLUGINS})
+    add_dependencies(picomesh_runtime picomesh_plugin_${_p}_codegen)
 endforeach()
 
 # ---- driver entry point (ymain) -------------------------------------
 #
-# The main() now lives under src/yaafc/ymain/ — see that module's
-# CMakeLists for the rationale (yaafc/<name>/ is the only sanctioned
-# place for compiled yaafc sources; bin/ used to host the driver but
+# The main() now lives under src/picomesh/ymain/ — see that module's
+# CMakeLists for the rationale (picomesh/<name>/ is the only sanctioned
+# place for compiled picomesh sources; bin/ used to host the driver but
 # was a wart).
-add_subdirectory(src/yaafc/ymain)
-foreach(_p ${YAAFC_PLUGINS})
-    add_dependencies(yaafc_ymain yaafc_plugin_${_p}_codegen)
+add_subdirectory(src/picomesh/ymain)
+foreach(_p ${PICOMESH_PLUGINS})
+    add_dependencies(picomesh_ymain picomesh_plugin_${_p}_codegen)
 endforeach()
 
 # ---- driver binary ---------------------------------------------------
@@ -234,38 +234,38 @@ endforeach()
 # executable rather than via target_link_libraries — object-file
 # sources never get dropped by the linker, so the codegen constructor
 # hooks (`__attribute__((constructor))`) fire reliably. The driver
-# entry point (yaafc_ymain) gets the same treatment.
-set(YAAFC_PLUGIN_OBJECTS "")
-set(YAAFC_PLUGIN_TARGETS "")
-foreach(_p ${YAAFC_PLUGINS})
-    list(APPEND YAAFC_PLUGIN_OBJECTS  $<TARGET_OBJECTS:yaafc_plugin_${_p}>)
-    list(APPEND YAAFC_PLUGIN_TARGETS  yaafc_plugin_${_p})
+# entry point (picomesh_ymain) gets the same treatment.
+set(PICOMESH_PLUGIN_OBJECTS "")
+set(PICOMESH_PLUGIN_TARGETS "")
+foreach(_p ${PICOMESH_PLUGINS})
+    list(APPEND PICOMESH_PLUGIN_OBJECTS  $<TARGET_OBJECTS:picomesh_plugin_${_p}>)
+    list(APPEND PICOMESH_PLUGIN_TARGETS  picomesh_plugin_${_p})
 endforeach()
 
-add_executable(yaafc
-    $<TARGET_OBJECTS:yaafc_ymain>
-    ${YAAFC_PLUGIN_OBJECTS}
-    src/yaafc/yplatform/longjmp_chk_stub.c)
-add_dependencies(yaafc yaafc_ymain ${YAAFC_PLUGIN_TARGETS})
-target_link_libraries(yaafc PRIVATE yaafc_runtime sqlite3 libmdbx libgit2)
+add_executable(picomesh
+    $<TARGET_OBJECTS:picomesh_ymain>
+    ${PICOMESH_PLUGIN_OBJECTS}
+    src/picomesh/yplatform/longjmp_chk_stub.c)
+add_dependencies(picomesh picomesh_ymain ${PICOMESH_PLUGIN_TARGETS})
+target_link_libraries(picomesh PRIVATE picomesh_runtime sqlite3 libmdbx libgit2)
 
-# ---- yaafc-frontend (standalone HTML frontend) ------------------------
+# ---- picoforge-webapp (standalone HTML web app) --------------------------
 #
-# Separate binary that mirrors yaapp's scenarios/git-yaapp/frontend/
-# frontend.py: own HTTP listener, talks to a gateway via POST /_rpc.
-# No plugins, no mesh, no yclass dispatch — pure HTTP-client +
-# template-renderer process. Designed to work against either the yaafc
+# The picoforge page tier: a separate binary that mirrors the yaapp
+# git-yaapp page server — own HTTP listener, talks to a gateway via
+# POST /_rpc. No plugins, no mesh, no yclass dispatch — pure HTTP-client +
+# template-renderer process. Designed to work against either the picomesh
 # C gateway or the yaapp Python gateway interchangeably (the `/_rpc`
 # wire shape is the contract).
-add_executable(yaafc-frontend
-    src/yaafc/frontend/main.c
-    src/yaafc/frontend/frontend.c
-    src/yaafc/frontend/http_client.c
-    src/yaafc/yplatform/longjmp_chk_stub.c
+add_executable(picoforge-webapp
+    src/picoforge/webapp/main.c
+    src/picoforge/webapp/webapp.c
+    src/picoforge/webapp/http_client.c
+    src/picomesh/yplatform/longjmp_chk_stub.c
 )
-target_link_libraries(yaafc-frontend PRIVATE yaafc_runtime)
-target_include_directories(yaafc-frontend PRIVATE
-    src/yaafc/frontend
+target_link_libraries(picoforge-webapp PRIVATE picomesh_runtime)
+target_include_directories(picoforge-webapp PRIVATE
+    src/picoforge/webapp
     include/picohttpparser
 )
 

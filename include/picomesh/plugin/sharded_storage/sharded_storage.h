@@ -1,0 +1,33 @@
+/* GENERATED — do not edit. */
+/* Public interface for plugin `sharded_storage` — GENERATED.
+ * Edit the annotated sources under src/picomesh/plugins/sharded_storage/. */
+#ifndef PICOMESH_PLUGIN_SHARDED_STORAGE_H
+#define PICOMESH_PLUGIN_SHARDED_STORAGE_H
+
+#include <picomesh/yclass/class.h>
+#include <picomesh/yclass/rpc.h>
+
+struct picomesh_int_result;
+struct picomesh_size_result;
+struct picomesh_string_result;
+struct yheaders;
+struct object_ptr_result;
+struct class_ptr_result;
+
+/* ---- class accessors ---- */
+struct class_ptr_result sharded_storage_db_class_get(void);
+
+/* ---- constructors ---- */
+struct object_ptr_result sharded_storage_db_create(struct ctx *ctx);
+
+/* ---- methods ---- */
+struct picomesh_int_result sharded_storage_db_set(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * context, const char * key, const char * value);
+struct picomesh_string_result sharded_storage_db_get(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * context, const char * key);
+struct picomesh_int_result sharded_storage_db_exists(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * context, const char * key);
+struct picomesh_int_result sharded_storage_db_del(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * context, const char * key);
+struct picomesh_size_result sharded_storage_db_count(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * context);
+
+/* ---- activation ---- */
+void picomesh_plugin_sharded_storage_register(void);
+
+#endif

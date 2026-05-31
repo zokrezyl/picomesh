@@ -6,7 +6,7 @@
 #   TARGET_PLATFORM   linux-x86_64 | linux-aarch64 | macos-arm64 | macos-x86_64
 #   OUTPUT_DIR        where the tarball is written
 #
-# Tarball layout (consumed by build-tools/yaafc/libs/sqlite3.cmake):
+# Tarball layout (consumed by build-tools/picomesh/libs/sqlite3.cmake):
 #   lib/libsqlite3.a
 #   include/sqlite3.h
 
@@ -27,8 +27,8 @@ VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/version")"
 IFS='.' read -r _MAJ _MIN _PAT <<< "$VERSION"
 SJVER=$(printf "%d%02d%02d00" "$_MAJ" "$_MIN" "$_PAT")
 URL="https://www.sqlite.org/2024/sqlite-autoconf-${SJVER}.tar.gz"
-TARBALL_CACHE="$HOME/.cache/yaafc-3rdparty/sqlite-autoconf-${SJVER}.tar.gz"
-WORK_DIR="${WORK_DIR:-/tmp/yaafc-3rdparty-libsqlite3-$TARGET_PLATFORM}"
+TARBALL_CACHE="$HOME/.cache/picomesh-3rdparty/sqlite-autoconf-${SJVER}.tar.gz"
+WORK_DIR="${WORK_DIR:-/tmp/picomesh-3rdparty-libsqlite3-$TARGET_PLATFORM}"
 SRC_DIR="$WORK_DIR/sqlite-autoconf-${SJVER}"
 STAGE="$WORK_DIR/stage-${TARGET_PLATFORM}"
 TARBALL="$OUTPUT_DIR/libsqlite3-${TARGET_PLATFORM}-${VERSION}.tar.gz"

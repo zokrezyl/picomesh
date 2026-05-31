@@ -6,7 +6,7 @@
 #   TARGET_PLATFORM   linux-x86_64 | linux-aarch64 | macos-arm64 | macos-x86_64
 #   OUTPUT_DIR        where the tarball is written
 #
-# Tarball layout (consumed by build-tools/yaafc/libs/simdjson.cmake):
+# Tarball layout (consumed by build-tools/picomesh/libs/simdjson.cmake):
 #   lib/libsimdjson.a
 #   include/simdjson.h, simdjson/...
 
@@ -20,8 +20,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/version")"
 [ -n "$VERSION" ] || { echo "empty version file" >&2; exit 1; }
 
-WORK_DIR="${WORK_DIR:-/tmp/yaafc-3rdparty-simdjson-$TARGET_PLATFORM}"
-CACHE_DIR="${CACHE_DIR:-$HOME/.cache/yaafc-3rdparty}"
+WORK_DIR="${WORK_DIR:-/tmp/picomesh-3rdparty-simdjson-$TARGET_PLATFORM}"
+CACHE_DIR="${CACHE_DIR:-$HOME/.cache/picomesh-3rdparty}"
 NCPU="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 
 SJ_URL="https://github.com/simdjson/simdjson/archive/refs/tags/v${VERSION}.tar.gz"

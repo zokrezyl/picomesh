@@ -6,7 +6,7 @@
 #   TARGET_PLATFORM   linux-x86_64 | linux-aarch64 | macos-arm64 | macos-x86_64
 #   OUTPUT_DIR        where the tarball is written
 #
-# Tarball layout (consumed by build-tools/yaafc/libs/libmdbx.cmake):
+# Tarball layout (consumed by build-tools/picomesh/libs/libmdbx.cmake):
 #   lib/libmdbx.a
 #   include/mdbx.h
 #
@@ -32,8 +32,8 @@ VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/version")"
 #     mdbx.h++
 #     ...
 URL="https://libmdbx.dqdkfa.ru/release/libmdbx-amalgamated-${VERSION}.tar.xz"
-TARBALL_CACHE="$HOME/.cache/yaafc-3rdparty/libmdbx-amalgamated-${VERSION}.tar.xz"
-WORK_DIR="${WORK_DIR:-/tmp/yaafc-3rdparty-libmdbx-$TARGET_PLATFORM}"
+TARBALL_CACHE="$HOME/.cache/picomesh-3rdparty/libmdbx-amalgamated-${VERSION}.tar.xz"
+WORK_DIR="${WORK_DIR:-/tmp/picomesh-3rdparty-libmdbx-$TARGET_PLATFORM}"
 SRC_DIR="$WORK_DIR/src-${VERSION}"
 STAGE="$WORK_DIR/stage-${TARGET_PLATFORM}"
 TARBALL="$OUTPUT_DIR/libmdbx-${TARGET_PLATFORM}-${VERSION}.tar.gz"

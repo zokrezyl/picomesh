@@ -1,0 +1,509 @@
+/* readlink + sigaction live behind _POSIX_C_SOURCE on glibc; the
+ * codegen runs clang without that, so set the minimum at file-top
+ * before any include pulls in <features.h>. */
+#define _POSIX_C_SOURCE 200809L
+
+/* mesh — orchestrator (skeleton).
+ *
+ * The yaapp mesh spawns each declared service as a child process and
+ * brokers their addresses via portalloc. Subprocess management needs
+ * libuv's `uv_spawn` plus shutdown/restart logic — wired in a follow-
+ * up patch. For now the plugin exposes the inspection surface so the
+ * gateway can call mesh.reconcile / mesh.status without crashing:
+ *
+ *   register_service(service_id, port)   → 1
+ *   resolve(service_id)                  → port (0 if unknown)
+ *   forget(service_id)                   → 1 / 0
+ *   count_services                       → currently-registered count
+ *   reconcile                            → stub: returns 1 */
+
+#include <picomesh/ycore/result.h>
+#include <picomesh/ycore/ytrace.h>
+#include <picomesh/yclass/class.h>
+#include <picomesh/yengine/engine.h>
+#include <picomesh/yloop/yloop.h>
+#include <picomesh/yconfig/yconfig.h>
+#include <picomesh/yargv/yargv.h>
+
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <signal.h>
+#include <unistd.h>
+#include <errno.h>
+#include <sys/stat.h>
+
+#define MESH_MAX_SERVICES 64
+#define MESH_MAX_CHILDREN 32
+
+struct mesh_service_entry {
+    uint32_t service_id;
+    uint32_t port;
+    int used;
+};
+
+struct mesh_child_entry {
+    int32_t pid;
+    uint32_t port;     /* the port we asked the child to bind on */
+    int exited;
+    int exit_status;
+};
+
+struct PICOMESH_CLASS_ANNOTATE("class@mesh:store") mesh_store_data {
+    struct mesh_service_entry entries[MESH_MAX_SERVICES];
+    struct mesh_child_entry children[MESH_MAX_CHILDREN];
+    size_t count;
+    size_t child_count;
+};
+
+static struct mesh_store_data *ms(struct object *obj)
+{
+    return (struct mesh_store_data *)((char *)obj + sizeof(struct object));
+}
+
+PICOMESH_CLASS_ANNOTATE("override@mesh:store:store_register_service")
+struct picomesh_int_result mesh_store_register_service_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                                                         uint32_t service_id, uint32_t port)
+{
+    (void)ctx;
+    struct mesh_store_data *d = ms(obj);
+    /* idempotent: re-registering same id updates the port */
+    for (size_t i = 0; i < MESH_MAX_SERVICES; ++i) {
+        if (d->entries[i].used && d->entries[i].service_id == service_id) {
+            d->entries[i].port = port;
+            return PICOMESH_OK(picomesh_int, 1);
+        }
+    }
+    for (size_t i = 0; i < MESH_MAX_SERVICES; ++i) {
+        if (!d->entries[i].used) {
+            d->entries[i].service_id = service_id;
+            d->entries[i].port = port;
+            d->entries[i].used = 1;
+            d->count++;
+            yinfo("mesh: registered service %u on port %u", service_id, port);
+            return PICOMESH_OK(picomesh_int, 1);
+        }
+    }
+    return PICOMESH_ERR(picomesh_int, "mesh_register_service: table full");
+}
+
+PICOMESH_CLASS_ANNOTATE("override@mesh:store:store_resolve")
+struct picomesh_uint32_result mesh_store_resolve_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                                                   uint32_t service_id)
+{
+    (void)ctx;
+    struct mesh_store_data *d = ms(obj);
+    for (size_t i = 0; i < MESH_MAX_SERVICES; ++i) {
+        if (d->entries[i].used && d->entries[i].service_id == service_id) {
+            return PICOMESH_OK(picomesh_uint32, d->entries[i].port);
+        }
+    }
+    return PICOMESH_OK(picomesh_uint32, 0);
+}
+
+PICOMESH_CLASS_ANNOTATE("override@mesh:store:store_forget")
+struct picomesh_int_result mesh_store_forget_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                                               uint32_t service_id)
+{
+    (void)ctx;
+    struct mesh_store_data *d = ms(obj);
+    for (size_t i = 0; i < MESH_MAX_SERVICES; ++i) {
+        if (d->entries[i].used && d->entries[i].service_id == service_id) {
+            d->entries[i].used = 0;
+            d->count--;
+            return PICOMESH_OK(picomesh_int, 1);
+        }
+    }
+    return PICOMESH_OK(picomesh_int, 0);
+}
+
+PICOMESH_CLASS_ANNOTATE("override@mesh:store:store_count_services")
+struct picomesh_size_result mesh_store_count_services_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
+{
+    (void)ctx;
+    return PICOMESH_OK(picomesh_size, ms(obj)->count);
+}
+
+/* uv_spawn-based subprocess management:
+ *   spawn_picomesh(port)   → child pid (0 on failure)
+ *   kill_pid(pid)       → 1 ok / 0 unknown
+ *   count_children      → live (not-yet-reaped) child count
+ *
+ * spawn_picomesh(port) launches a fresh `<self> --frontend yttp --host
+ * 127.0.0.1 --port <port> serve`. The child inherits stdin/stdout/
+ * stderr from the parent so its trace lands in the parent's terminal.
+ *
+ * The exit callback flips the matching `exited` flag so kill_pid /
+ * count_children stay accurate without a reap step.
+ *
+ * Path discovery uses `/proc/self/exe` on Linux. On macOS we'd use
+ * `_NSGetExecutablePath` — TODO for the platform shim. */
+
+static int find_child_slot(struct mesh_store_data *d, int32_t pid)
+{
+    for (int i = 0; i < MESH_MAX_CHILDREN; ++i) {
+        if (!d->children[i].exited && d->children[i].pid == pid) return i;
+    }
+    return -1;
+}
+
+static void mesh_child_exit_cb(struct yloop_process *p, int64_t exit_status,
+                               int term_signal, void *ud)
+{
+    (void)p; (void)term_signal;
+    struct object *obj = ud;
+    if (!obj) return;
+    struct mesh_store_data *d = ms(obj);
+    /* libuv only knows the uv_process_t pointer; the pid we stashed
+     * at spawn time matches the slot. Sweep for any non-exited child
+     * whose pid matches the captured exit. Since uv passes us the
+     * yloop_process but not the pid directly, we walk all live
+     * children and mark the first one matching this callback chain
+     * — limitation: assumes one child exits per cb (true), and pid
+     * uniqueness in the window. Good enough. */
+    /* We can't recover the pid from `p` here without leaking the
+     * yloop_process internals, so we use `ud` to carry both obj +
+     * pid in a pair. */
+    (void)d; (void)exit_status;
+}
+
+struct mesh_child_cookie {
+    struct object *obj;
+    int32_t pid;
+};
+
+static void mesh_child_exit_cb_real(struct yloop_process *p, int64_t exit_status,
+                                    int term_signal, void *ud)
+{
+    (void)p;
+    struct mesh_child_cookie *c = ud;
+    if (!c) return;
+    struct mesh_store_data *d = ms(c->obj);
+    int slot = find_child_slot(d, c->pid);
+    if (slot >= 0) {
+        d->children[slot].exited = 1;
+        d->children[slot].exit_status = (int)exit_status;
+        d->child_count--;
+        yinfo("mesh: child pid=%d exited (status=%d, term_signal=%d)",
+              c->pid, (int)exit_status, term_signal);
+    }
+    free(c);
+}
+
+PICOMESH_CLASS_ANNOTATE("override@mesh:store:store_spawn_picomesh")
+struct picomesh_int_result mesh_store_spawn_picomesh_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                                                    uint32_t port)
+{
+    (void)ctx;
+    struct mesh_store_data *d = ms(obj);
+    struct picomesh_engine *e = picomesh_active_engine();
+    if (!e) return PICOMESH_ERR(picomesh_int, "spawn_picomesh: no active engine");
+
+    int slot = -1;
+    for (int i = 0; i < MESH_MAX_CHILDREN; ++i) {
+        if (d->children[i].exited || d->children[i].pid == 0) { slot = i; break; }
+    }
+    if (slot < 0) return PICOMESH_ERR(picomesh_int, "spawn_picomesh: child table full");
+
+    /* /proc/self/exe is Linux-only; macOS needs _NSGetExecutablePath
+     * (TODO via yplatform once a Mac build is exercised). */
+    char self_exe[4096];
+    ssize_t n = readlink("/proc/self/exe", self_exe, sizeof(self_exe) - 1);
+    if (n <= 0) return PICOMESH_ERR(picomesh_int, "spawn_picomesh: readlink(/proc/self/exe) failed");
+    self_exe[n] = 0;
+
+    char port_str[16];
+    snprintf(port_str, sizeof(port_str), "%u", port);
+
+    char *argv[] = {
+        self_exe,
+        (char *)"--frontend", (char *)"yhttp",
+        (char *)"--host", (char *)"127.0.0.1",
+        (char *)"--port", port_str,
+        (char *)"serve",
+        NULL,
+    };
+
+    struct mesh_child_cookie *c = calloc(1, sizeof(*c));
+    if (!c) return PICOMESH_ERR(picomesh_int, "spawn_picomesh: calloc(cookie) failed");
+    c->obj = obj;
+
+    int pid = yloop_spawn(picomesh_engine_loop(e), self_exe, argv,
+                          mesh_child_exit_cb_real, c);
+    if (pid <= 0) {
+        free(c);
+        return PICOMESH_ERR(picomesh_int, "spawn_picomesh: yloop_spawn failed");
+    }
+    c->pid = pid;
+    d->children[slot].pid = pid;
+    d->children[slot].port = port;
+    d->children[slot].exited = 0;
+    d->children[slot].exit_status = 0;
+    d->child_count++;
+    yinfo("mesh: spawned pid=%d on port=%u", pid, port);
+    return PICOMESH_OK(picomesh_int, pid);
+}
+
+PICOMESH_CLASS_ANNOTATE("override@mesh:store:store_kill_pid")
+struct picomesh_int_result mesh_store_kill_pid_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                                                 int32_t pid)
+{
+    (void)ctx;
+    struct picomesh_engine *e = picomesh_active_engine();
+    if (!e) return PICOMESH_ERR(picomesh_int, "kill_pid: no active engine");
+    struct mesh_store_data *d = ms(obj);
+    if (find_child_slot(d, pid) < 0) {
+        return PICOMESH_OK(picomesh_int, 0);
+    }
+    int rc = yloop_kill(picomesh_engine_loop(e), pid, SIGTERM);
+    return PICOMESH_OK(picomesh_int, rc == 0 ? 1 : 0);
+}
+
+PICOMESH_CLASS_ANNOTATE("override@mesh:store:store_count_children")
+struct picomesh_size_result mesh_store_count_children_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
+{
+    (void)ctx;
+    return PICOMESH_OK(picomesh_size, ms(obj)->child_count);
+}
+
+/* for_each cb state: emit "<key>: <value>\n" for each entry of the node's
+ * `config:` map at top level (column 0). `value` is serialized with the
+ * shared node dumper, so nested maps/lists round-trip. */
+struct split_emit { char *buf; size_t off; size_t cap; int overflow; };
+
+static int split_config_kv_cb(const char *key, const struct yconfig_node *val, void *ud)
+{
+    struct split_emit *se = ud;
+    int kn = snprintf(se->buf + se->off, se->cap - se->off, "%s: ", key);
+    if (kn < 0 || (size_t)kn >= se->cap - se->off) { se->overflow = 1; return 1; }
+    se->off += (size_t)kn;
+    size_t vn = yconfig_node_dump(val, se->buf + se->off, se->cap - se->off);
+    se->off += vn;
+    if (se->off + 2 >= se->cap) { se->overflow = 1; return 1; }
+    se->buf[se->off++] = '\n';
+    se->buf[se->off] = 0;
+    return 0;
+}
+
+/* Split one service's config out of the mesh config into a STANDALONE
+ * per-node config file and return its path (written into `out`).
+ *
+ * The mesh config is the mesh plugin's OWN config: it lists nodes, their
+ * ports, and each node's `config:` block. A node must NOT read the mesh
+ * config — it gets its own file. So at spawn time we lift
+ * `mesh.services.<name>.config` (the node's plugins + per-plugin config +
+ * remotes) to the TOP LEVEL of a fresh file, plus the node's own `name:`,
+ * `host:`, `port:`, `frontend:`. The child is launched with just
+ * `--config-file <that file>` and finds everything at natural top-level
+ * paths — no `--name` projection, no mesh.services lookup.
+ *
+ * Returns 0 on success. Files land under <dir>/nodes/<name>.yaml where
+ * <dir> is the mesh's working area (derives from /tmp/picoforge). */
+static int mesh_write_node_config(struct picomesh_engine *e, const char *name,
+                                  char *out, size_t out_cap)
+{
+    char base[256];
+    snprintf(base, sizeof(base), "mesh.services.%s", name);
+
+    /* Pull the per-node pieces from the mesh config. */
+    char path[320];
+    snprintf(path, sizeof(path), "%s.config", base);
+    struct yconfig_node_ptr_result cfgr = yconfig_get(picomesh_engine_config(e), path);
+    const struct yconfig_node *cfg_node =
+        (PICOMESH_IS_OK(cfgr) && cfgr.value) ? cfgr.value : NULL;
+
+    snprintf(path, sizeof(path), "%s.port", base);
+    struct yconfig_node_ptr_result pr = yconfig_get(picomesh_engine_config(e), path);
+    int64_t port = (PICOMESH_IS_OK(pr) && pr.value) ? yconfig_node_as_int(pr.value, -1) : -1;
+
+    snprintf(path, sizeof(path), "%s.host", base);
+    struct yconfig_node_ptr_result hr = yconfig_get(picomesh_engine_config(e), path);
+    const char *host = (PICOMESH_IS_OK(hr) && hr.value) ? yconfig_node_as_string(hr.value, NULL) : NULL;
+
+    snprintf(path, sizeof(path), "%s.frontend", base);
+    struct yconfig_node_ptr_result fr = yconfig_get(picomesh_engine_config(e), path);
+    const char *frontend = (PICOMESH_IS_OK(fr) && fr.value) ? yconfig_node_as_string(fr.value, NULL) : NULL;
+
+    snprintf(path, sizeof(path), "%s.plugins", base);
+    struct yconfig_node_ptr_result plr = yconfig_get(picomesh_engine_config(e), path);
+    const struct yconfig_node *plugins_node =
+        (PICOMESH_IS_OK(plr) && plr.value) ? plr.value : NULL;
+
+    snprintf(path, sizeof(path), "%s.workers", base);
+    struct yconfig_node_ptr_result wr = yconfig_get(picomesh_engine_config(e), path);
+    int64_t workers = (PICOMESH_IS_OK(wr) && wr.value) ? yconfig_node_as_int(wr.value, -1) : -1;
+
+    /* Build the standalone node file as flow YAML (yconfig parses it). */
+    char body[16384];
+    size_t off = 0;
+    off += (size_t)snprintf(body + off, sizeof(body) - off, "name: \"%s\"\n", name);
+    if (host)     off += (size_t)snprintf(body + off, sizeof(body) - off, "host: \"%s\"\n", host);
+    if (port > 0) off += (size_t)snprintf(body + off, sizeof(body) - off, "port: %lld\n", (long long)port);
+    if (frontend) off += (size_t)snprintf(body + off, sizeof(body) - off, "frontend: \"%s\"\n", frontend);
+    if (workers > 0) off += (size_t)snprintf(body + off, sizeof(body) - off, "workers: %lld\n", (long long)workers);
+    if (plugins_node) {
+        off += (size_t)snprintf(body + off, sizeof(body) - off, "plugins: ");
+        off += yconfig_node_dump(plugins_node, body + off, sizeof(body) - off);
+        off += (size_t)snprintf(body + off, sizeof(body) - off, "\n");
+    }
+    /* The node's `config:` block — its per-plugin config + remotes —
+     * lifted to top level: emit each of its keys at column 0 so plugins
+     * read them at natural paths (`git_repo.repos_dir`, `remotes`, …). */
+    if (cfg_node && yconfig_node_kind(cfg_node) == YCONFIG_MAP) {
+        struct split_emit se = {body, off, sizeof(body), 0};
+        yconfig_node_for_each(cfg_node, split_config_kv_cb, &se);
+        off = se.off;
+        if (se.overflow) return -1;
+    }
+
+    if (off >= sizeof(body)) return -1;
+
+    /* Path: alongside the parent's repos tree, under nodes/. */
+    snprintf(out, out_cap, "/tmp/picoforge/nodes/%s.yaml", name);
+    /* mkdir -p /tmp/picoforge/nodes */
+    char dir[256]; snprintf(dir, sizeof(dir), "/tmp/picoforge/nodes");
+    char acc[256] = {0};
+    for (size_t i = 1; dir[i]; ++i) {
+        if (dir[i] == '/') { memcpy(acc, dir, i); acc[i] = 0; mkdir(acc, 0755); }
+    }
+    mkdir(dir, 0755);
+
+    FILE *f = fopen(out, "w");
+    if (!f) { ywarn("mesh.split: cannot write %s: %s", out, strerror(errno)); return -1; }
+    fwrite(body, 1, off, f);
+    fclose(f);
+    return 0;
+}
+
+/* Spawn one child picomesh process for service `name`. The mesh SPLITS its
+ * config into a standalone per-node file (mesh_write_node_config) and the
+ * child is launched with just that file:
+ *
+ *   picomesh --config-file <nodes/<name>.yaml> --name <name> --frontend X serve
+ *
+ * The node file carries the node's own top-level config (plugins, per-
+ * plugin config, remotes, port, host, frontend) — the child never reads
+ * the mesh config. `--name` is kept only so the engine resolves bind
+ * port/host from the node file's top-level keys uniformly. */
+static int mesh_internal_spawn(struct object *obj, const char *name)
+{
+    if (!name || !*name) return 0;
+    struct mesh_store_data *d = ms(obj);
+    struct picomesh_engine *e = picomesh_active_engine();
+    if (!e) return 0;
+    int slot = -1;
+    for (int i = 0; i < MESH_MAX_CHILDREN; ++i) {
+        if (d->children[i].exited || d->children[i].pid == 0) { slot = i; break; }
+    }
+    if (slot < 0) return 0;
+    char self_exe[4096];
+    ssize_t n = readlink("/proc/self/exe", self_exe, sizeof(self_exe) - 1);
+    if (n <= 0) return 0;
+    self_exe[n] = 0;
+
+    /* Per CLAUDE.md: backends listen yrpc by default; only the gateway
+     * opts into yhttp via `frontend: yhttp`. Read it from the mesh config
+     * (we still have it here, in the parent). */
+    char fe_path[256];
+    snprintf(fe_path, sizeof(fe_path), "mesh.services.%s.frontend", name);
+    const char *frontend = "yrpc";
+    struct yconfig_node_ptr_result fr = yconfig_get(picomesh_engine_config(e), fe_path);
+    if (PICOMESH_IS_OK(fr) && fr.value) {
+        const char *s = yconfig_node_as_string(fr.value, NULL);
+        if (s && *s) frontend = s;
+    }
+
+    /* Split the mesh config → standalone per-node config file. */
+    static char node_cfg[MESH_MAX_CHILDREN][256];
+    if (mesh_write_node_config(e, name, node_cfg[slot], sizeof(node_cfg[slot])) != 0) {
+        ywarn("mesh.spawn: failed to write per-node config for '%s'", name);
+        return 0;
+    }
+    const char *cfg = node_cfg[slot];
+
+    /* `cfg`, `name`, and `frontend` outlive the spawn call (cfg is in the
+     * process-lifetime node_cfg table), so dropping them into argv[] is safe. */
+    char *argv[] = {
+        self_exe,
+        (char *)"--config-file", (char *)cfg,
+        (char *)"--name",        (char *)name,
+        (char *)"--frontend",    (char *)frontend,
+        (char *)"serve",
+        NULL,
+    };
+
+    struct mesh_child_cookie *c = calloc(1, sizeof(*c));
+    if (!c) return 0;
+    c->obj = obj;
+    int pid = yloop_spawn(picomesh_engine_loop(e), self_exe, argv,
+                          mesh_child_exit_cb_real, c);
+    if (pid <= 0) { free(c); return 0; }
+    c->pid = pid;
+    d->children[slot].pid = pid;
+    d->children[slot].port = 0; /* port is in the YAML; child resolves */
+    d->children[slot].exited = 0;
+    d->child_count++;
+    yinfo("mesh: spawned pid=%d service='%s'", pid, name);
+    return pid;
+}
+
+/* Walk callback for the services map. Each iteration sees one
+ * (service_name, service_node) pair — we always spawn a child for
+ * each service (the child looks up its own port/host/remotes by name
+ * via the inherited --config-file). */
+struct reconcile_ctx {
+    struct object *obj;
+    int spawned;
+};
+
+static int reconcile_walk_cb(const char *service_name,
+                             const struct yconfig_node *val, void *ud)
+{
+    struct reconcile_ctx *rc = ud;
+    if (yconfig_node_kind(val) != YCONFIG_MAP) return 0;
+
+    int pid = mesh_internal_spawn(rc->obj, service_name);
+    if (pid > 0) {
+        rc->spawned++;
+        yinfo("mesh.reconcile: '%s' → pid=%d", service_name, pid);
+    } else {
+        ywarn("mesh.reconcile: failed to spawn '%s'", service_name);
+    }
+    return 0;
+}
+
+PICOMESH_CLASS_ANNOTATE("override@mesh:store:store_reconcile_from_config")
+struct picomesh_int_result mesh_store_reconcile_from_config_impl(struct ctx *ctx,
+                                                              struct object *obj,
+                                                              struct yheaders *hdrs)
+{
+    (void)ctx;
+    struct picomesh_engine *e = picomesh_active_engine();
+    if (!e) return PICOMESH_ERR(picomesh_int, "reconcile_from_config: no active engine");
+
+    /* `mesh.services` — a map keyed by service name. */
+    struct yconfig_node_ptr_result r =
+        yconfig_get(picomesh_engine_config(e), "mesh.services");
+    if (PICOMESH_IS_ERR(r) || !r.value) {
+        return PICOMESH_ERR(picomesh_int, "reconcile_from_config: mesh.services missing");
+    }
+    if (yconfig_node_kind(r.value) != YCONFIG_MAP) {
+        return PICOMESH_ERR(picomesh_int, "reconcile_from_config: mesh.services not a map");
+    }
+    struct reconcile_ctx rc = {.obj = obj, .spawned = 0};
+    yconfig_node_for_each(r.value, reconcile_walk_cb, &rc);
+    yinfo("mesh.reconcile_from_config: spawned %d services", rc.spawned);
+    return PICOMESH_OK(picomesh_int, rc.spawned);
+}
+
+PICOMESH_CLASS_ANNOTATE("override@mesh:store:store_reconcile")
+struct picomesh_int_result mesh_store_reconcile_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
+{
+    (void)ctx;
+    /* No actual orchestration yet — placeholder for the spawn loop. */
+    yinfo("mesh: reconcile (count=%zu)", ms(obj)->count);
+    return PICOMESH_OK(picomesh_int, 1);
+}
+
+#include "store.gen.c"
