@@ -30,7 +30,7 @@ struct picomesh_uint32_result git_repo_store_make(struct ctx * ctx, struct objec
         uint8_t _a[16384];
         size_t _off = 0;
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace_id, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
          * into the `hdrs` argument. The codegen never inspects the
          * contents — it just lets the framework (de)serialize the bag. */
@@ -114,7 +114,7 @@ struct picomesh_int_result git_repo_store_delete(struct ctx * ctx, struct object
         uint8_t _a[16384];
         size_t _off = 0;
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace_id, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
          * into the `hdrs` argument. The codegen never inspects the
          * contents — it just lets the framework (de)serialize the bag. */
@@ -184,7 +184,7 @@ struct picomesh_uint32_result git_repo_store_owner_of(struct ctx * ctx, struct o
         uint8_t _a[16384];
         size_t _off = 0;
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace_id, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
          * into the `hdrs` argument. The codegen never inspects the
          * contents — it just lets the framework (de)serialize the bag. */
@@ -254,7 +254,7 @@ struct picomesh_size_result git_repo_store_count_for_owner(struct ctx * ctx, str
         uint8_t _a[16384];
         size_t _off = 0;
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace_id, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
          * into the `hdrs` argument. The codegen never inspects the
          * contents — it just lets the framework (de)serialize the bag. */
@@ -324,7 +324,7 @@ struct picomesh_size_result git_repo_store_count_total(struct ctx * ctx, struct 
         uint8_t _a[16384];
         size_t _off = 0;
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace_id, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
          * into the `hdrs` argument. The codegen never inspects the
          * contents — it just lets the framework (de)serialize the bag. */
@@ -391,7 +391,7 @@ struct picomesh_string_result git_repo_store_list_for_owner(struct ctx * ctx, st
         uint8_t _a[16384];
         size_t _off = 0;
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace_id, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
          * into the `hdrs` argument. The codegen never inspects the
          * contents — it just lets the framework (de)serialize the bag. */
@@ -466,7 +466,7 @@ struct picomesh_string_result git_repo_store_read_tree(struct ctx * ctx, struct 
         uint8_t _a[16384];
         size_t _off = 0;
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace_id, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
          * into the `hdrs` argument. The codegen never inspects the
          * contents — it just lets the framework (de)serialize the bag. */
@@ -555,7 +555,7 @@ struct picomesh_string_result git_repo_store_read_file(struct ctx * ctx, struct 
         uint8_t _a[16384];
         size_t _off = 0;
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace_id, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
          * into the `hdrs` argument. The codegen never inspects the
          * contents — it just lets the framework (de)serialize the bag. */
@@ -644,7 +644,7 @@ struct picomesh_string_result git_repo_store_put_file(struct ctx * ctx, struct o
         uint8_t _a[16384];
         size_t _off = 0;
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace_id, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
          * into the `hdrs` argument. The codegen never inspects the
          * contents — it just lets the framework (de)serialize the bag. */
@@ -754,7 +754,7 @@ struct picomesh_int_result git_repo_store_is_public(struct ctx * ctx, struct obj
         uint8_t _a[16384];
         size_t _off = 0;
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace_id, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
          * into the `hdrs` argument. The codegen never inspects the
          * contents — it just lets the framework (de)serialize the bag. */
@@ -824,7 +824,7 @@ struct picomesh_int_result git_repo_store_set_public(struct ctx * ctx, struct ob
         uint8_t _a[16384];
         size_t _off = 0;
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace_id, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
          * into the `hdrs` argument. The codegen never inspects the
          * contents — it just lets the framework (de)serialize the bag. */

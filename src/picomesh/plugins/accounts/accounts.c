@@ -69,29 +69,45 @@ static void close_storage(struct acc_storage_handle *h)
 
 /* The store holds string values; account state is integer counters and
  * balances, so serialize as decimal strings and parse them back. */
-static void kv_set_int(struct acc_storage_handle *h, struct yheaders *hdrs,
-                       const char *key, int64_t value)
+/* A failed write is propagated, never swallowed. */
+static struct picomesh_void_result kv_set_int(struct acc_storage_handle *h, struct yheaders *hdrs,
+                                              const char *key, int64_t value)
 {
     char vbuf[32];
     snprintf(vbuf, sizeof(vbuf), "%lld", (long long)value);
-    sharded_storage_db_set(&h->c, h->obj, hdrs, ACCOUNTS_CTX, key, vbuf);
+    struct picomesh_int_result r = sharded_storage_db_set(&h->c, h->obj, hdrs, ACCOUNTS_CTX, key, vbuf);
+    if (PICOMESH_IS_ERR(r)) return PICOMESH_ERR(picomesh_void, "accounts: storage write failed", r);
+    return PICOMESH_OK_VOID();
 }
 
-static int64_t kv_get_or(struct acc_storage_handle *h, struct yheaders *hdrs, const char *key, int64_t fallback)
+/* Read an int. A real backend error is propagated; an absent/empty key
+ * (db_get returns "") yields `fallback` — not conflated. */
+static struct picomesh_int64_result kv_get_int(struct acc_storage_handle *h, struct yheaders *hdrs,
+                                               const char *key, int64_t fallback)
 {
     struct picomesh_string_result r = sharded_storage_db_get(&h->c, h->obj, hdrs, ACCOUNTS_CTX, key);
-    if (PICOMESH_IS_ERR(r)) { picomesh_error_destroy(r.error); return fallback; }
-    int64_t v = r.value ? strtoll(r.value, NULL, 10) : fallback;
+    if (PICOMESH_IS_ERR(r)) return PICOMESH_ERR(picomesh_int64, "accounts: storage read failed", r);
+    int64_t v = (r.value && r.value[0]) ? strtoll(r.value, NULL, 10) : fallback;
     free(r.value);
-    return v;
+    return PICOMESH_OK(picomesh_int64, v);
 }
 
-static int kv_exists(struct acc_storage_handle *h, struct yheaders *hdrs, const char *key)
+/* Atomic counter bump — propagates a backend failure (OK value = count
+ * after the add). */
+static struct picomesh_int64_result kv_incr(struct acc_storage_handle *h, struct yheaders *hdrs,
+                                            const char *key, int64_t delta)
+{
+    struct picomesh_int64_result r = sharded_storage_db_incr(&h->c, h->obj, hdrs, ACCOUNTS_CTX, key, delta);
+    if (PICOMESH_IS_ERR(r)) return PICOMESH_ERR(picomesh_int64, "accounts: counter update failed", r);
+    return r;
+}
+
+/* Existence check. A real backend error is propagated; OK carries 0/1. */
+static struct picomesh_int_result kv_exists(struct acc_storage_handle *h, struct yheaders *hdrs, const char *key)
 {
     struct picomesh_int_result r = sharded_storage_db_exists(&h->c, h->obj, hdrs, ACCOUNTS_CTX, key);
-    int present = PICOMESH_IS_OK(r) && r.value;
-    if (PICOMESH_IS_ERR(r)) picomesh_error_destroy(r.error);
-    return present;
+    if (PICOMESH_IS_ERR(r)) return PICOMESH_ERR(picomesh_int, "accounts: storage exists failed", r);
+    return r;
 }
 
 PICOMESH_CLASS_ANNOTATE("override@accounts:store:store_register")
@@ -103,18 +119,26 @@ struct picomesh_int_result accounts_store_register_impl(struct ctx *ctx, struct 
     if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_int, "accounts_register: open_storage failed", sr);
     struct acc_storage_handle h = sr.value;
 
+    /* put_if_absent ELECTS one registrant for this uid atomically: two
+     * concurrent registers can't both pass an exists-check and both bump
+     * the count. Only the inserting caller increments the total and
+     * reports "newly registered" (1); a loser reports "already exists" (0). */
     char k[64];
     snprintf(k, sizeof(k), "user:%u", uid);
-    if (kv_exists(&h, hdrs, k)) {
+    struct picomesh_int_result ins = sharded_storage_db_put_if_absent(&h.c, h.obj, hdrs, ACCOUNTS_CTX, k, "1");
+    if (PICOMESH_IS_ERR(ins)) {
+        close_storage(&h);
+        return PICOMESH_ERR(picomesh_int, "accounts_register: storage write failed", ins);
+    }
+    if (ins.value == 0) {
         close_storage(&h);
         ydebug("accounts_register: uid=%u already exists", uid);
         return PICOMESH_OK(picomesh_int, 0);
     }
-    kv_set_int(&h, hdrs, k, 1);
-    int64_t count = kv_get_or(&h, hdrs, "count", 0) + 1;
-    kv_set_int(&h, hdrs, "count", count);
+    struct picomesh_int64_result cinc = kv_incr(&h, hdrs, "count", 1);
+    if (PICOMESH_IS_ERR(cinc)) { close_storage(&h); return PICOMESH_ERR(picomesh_int, "accounts_register: bump count failed", cinc); }
     close_storage(&h);
-    yinfo("accounts_register: uid=%u (total=%lld)", uid, (long long)count);
+    yinfo("accounts_register: uid=%u", uid);
     return PICOMESH_OK(picomesh_int, 1);
 }
 
@@ -128,9 +152,10 @@ struct picomesh_int_result accounts_store_exists_impl(struct ctx *ctx, struct ob
     struct acc_storage_handle h = sr.value;
     char k[64];
     snprintf(k, sizeof(k), "user:%u", uid);
-    int present = kv_exists(&h, hdrs, k);
+    struct picomesh_int_result ex = kv_exists(&h, hdrs, k);
     close_storage(&h);
-    return PICOMESH_OK(picomesh_int, present);
+    if (PICOMESH_IS_ERR(ex)) return PICOMESH_ERR(picomesh_int, "accounts_exists: read failed", ex);
+    return PICOMESH_OK(picomesh_int, ex.value ? 1 : 0);
 }
 
 PICOMESH_CLASS_ANNOTATE("override@accounts:store:store_set_balance")
@@ -143,12 +168,15 @@ struct picomesh_int_result accounts_store_set_balance_impl(struct ctx *ctx, stru
     struct acc_storage_handle h = sr.value;
     char k[64];
     snprintf(k, sizeof(k), "user:%u", uid);
-    if (!kv_exists(&h, hdrs, k)) {
+    struct picomesh_int_result ex = kv_exists(&h, hdrs, k);
+    if (PICOMESH_IS_ERR(ex)) { close_storage(&h); return PICOMESH_ERR(picomesh_int, "accounts_set_balance: existence check failed", ex); }
+    if (!ex.value) {
         close_storage(&h);
         return PICOMESH_ERR(picomesh_int, "accounts_set_balance: unknown uid");
     }
     snprintf(k, sizeof(k), "balance:%u", uid);
-    kv_set_int(&h, hdrs, k, n);
+    struct picomesh_void_result w = kv_set_int(&h, hdrs, k, n);
+    if (PICOMESH_IS_ERR(w)) { close_storage(&h); return PICOMESH_ERR(picomesh_int, "accounts_set_balance: write failed", w); }
     close_storage(&h);
     ydebug("accounts_set_balance: uid=%u balance=%lld", uid, (long long)n);
     return PICOMESH_OK(picomesh_int, 1);
@@ -164,14 +192,17 @@ struct picomesh_int64_result accounts_store_balance_impl(struct ctx *ctx, struct
     struct acc_storage_handle h = sr.value;
     char k[64];
     snprintf(k, sizeof(k), "user:%u", uid);
-    if (!kv_exists(&h, hdrs, k)) {
+    struct picomesh_int_result ex = kv_exists(&h, hdrs, k);
+    if (PICOMESH_IS_ERR(ex)) { close_storage(&h); return PICOMESH_ERR(picomesh_int64, "accounts_balance: existence check failed", ex); }
+    if (!ex.value) {
         close_storage(&h);
         return PICOMESH_ERR(picomesh_int64, "accounts_balance: unknown uid");
     }
     snprintf(k, sizeof(k), "balance:%u", uid);
-    int64_t bal = kv_get_or(&h, hdrs, k, 0);
+    struct picomesh_int64_result balr = kv_get_int(&h, hdrs, k, 0);
     close_storage(&h);
-    return PICOMESH_OK(picomesh_int64, bal);
+    if (PICOMESH_IS_ERR(balr)) return PICOMESH_ERR(picomesh_int64, "accounts_balance: read failed", balr);
+    return PICOMESH_OK(picomesh_int64, balr.value);
 }
 
 PICOMESH_CLASS_ANNOTATE("override@accounts:store:store_count")
@@ -181,9 +212,10 @@ struct picomesh_size_result accounts_store_count_impl(struct ctx *ctx, struct ob
     struct acc_storage_handle_result sr = open_storage();
     if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_size, "accounts_count: open_storage failed", sr);
     struct acc_storage_handle h = sr.value;
-    int64_t c = kv_get_or(&h, hdrs, "count", 0);
+    struct picomesh_int64_result cr = kv_get_int(&h, hdrs, "count", 0);
     close_storage(&h);
-    return PICOMESH_OK(picomesh_size, (size_t)(c < 0 ? 0 : c));
+    if (PICOMESH_IS_ERR(cr)) return PICOMESH_ERR(picomesh_size, "accounts_count: read failed", cr);
+    return PICOMESH_OK(picomesh_size, (size_t)(cr.value < 0 ? 0 : cr.value));
 }
 
 /* List the registered users as newline-separated "<uid>\t<username>" rows.
@@ -201,7 +233,9 @@ struct picomesh_string_result accounts_store_list_impl(struct ctx *ctx, struct o
     struct picomesh_string_result g =
         sharded_storage_db_get(&h.c, h.obj, hdrs, ACCOUNTS_CTX, "index");
     close_storage(&h);
-    if (PICOMESH_IS_ERR(g)) { picomesh_error_destroy(g.error); return PICOMESH_OK(picomesh_string, strdup("")); }
+    /* A real backend read failure must NOT masquerade as "no users" —
+     * propagate it. Absent index (db_get → "") is a legitimate empty list. */
+    if (PICOMESH_IS_ERR(g)) return PICOMESH_ERR(picomesh_string, "accounts_list: read failed", g);
     if (!g.value) return PICOMESH_OK(picomesh_string, strdup(""));
     return PICOMESH_OK(picomesh_string, g.value); /* transfer ownership */
 }

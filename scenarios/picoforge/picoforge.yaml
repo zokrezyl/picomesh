@@ -65,7 +65,9 @@ mesh:
       # table is per-worker (a connection is pinned to one worker for its
       # lifetime); the class registry is shared read-only. Omitted ⇒ 1
       # (single-threaded). Requires libco built with -DLIBCO_MP.
-      # workers: 8
+      # The shared source of truth for every backend's state — hit hardest,
+      # so it gets the most workers.
+      workers: 8
       plugins: [sharded_storage]
       config:
         sharded_storage:
@@ -74,7 +76,11 @@ mesh:
 
     session:
       port: 8203
-      # workers: 4
+      # Hit on EVERY authenticated /_rpc (token→uid). State is in
+      # sharded_storage (no in-memory bookkeeping); start mints a random
+      # 128-bit token (no shared counter) and lookup is a single read, so
+      # there is no read-modify-write to race across workers.
+      workers: 8
       plugins: [session]
       config:
         remotes:
@@ -129,7 +135,12 @@ mesh:
 
     git_repo:
       port: 8209
-      # workers: 4
+      # Metadata is in sharded_storage (the bare repos on disk are the content
+      # source of truth). Creation elects one writer via storage put_if_absent
+      # and bumps the count / owner index with atomic db_incr + compare-and-set,
+      # so concurrent creates can't double-count or lose index entries. Fewer
+      # workers than the storage/session tier — repo ops are heavier (libgit2).
+      workers: 4
       plugins: [git_repo]
       config:
         git_repo:
@@ -200,7 +211,11 @@ mesh:
       # holds its own loop + coroutine scheduler and its own warm yrpc
       # connection set to every backend, all sharing this port via
       # SO_REUSEPORT. Omitted ⇒ 1. Requires libco built with -DLIBCO_MP.
-      # workers: 8
+      # Safe to scale now that every stateful backend (git_repo, issues,
+      # git_pipeline, session, accounts, …) keeps its state in sharded_storage
+      # rather than per-object memory — each gateway worker's own backend
+      # objects all read/write the same shared source of truth.
+      workers: 8
       plugins: []
       config:
         yhttp:

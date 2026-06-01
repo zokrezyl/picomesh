@@ -7,6 +7,7 @@
 #include <picomesh/yclass/class.h>
 #include <picomesh/yclass/rpc.h>
 
+struct picomesh_int64_result;
 struct picomesh_int_result;
 struct picomesh_size_result;
 struct picomesh_string_result;
@@ -26,6 +27,9 @@ struct picomesh_string_result sharded_storage_db_get(struct ctx * ctx, struct ob
 struct picomesh_int_result sharded_storage_db_exists(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * context, const char * key);
 struct picomesh_int_result sharded_storage_db_del(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * context, const char * key);
 struct picomesh_size_result sharded_storage_db_count(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * context);
+struct picomesh_int64_result sharded_storage_db_incr(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * context, const char * key, int64_t delta);
+struct picomesh_int_result sharded_storage_db_put_if_absent(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * context, const char * key, const char * value);
+struct picomesh_int_result sharded_storage_db_compare_and_set(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * context, const char * key, const char * expected, const char * replacement);
 
 /* ---- activation ---- */
 void picomesh_plugin_sharded_storage_register(void);

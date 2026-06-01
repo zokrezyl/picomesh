@@ -309,7 +309,7 @@ expect_contains 'gateway POST /_rpc {path,args}' "$out" '"result":'
 ASID=$(awk '/picomesh-sid/ {print $NF}' tmp/side-cookies.txt 2>/dev/null | tail -1)
 out=$(curl -sS --max-time 10 -XPOST "http://127.0.0.1:${WEB}/_rpc" \
            -H 'Content-Type: application/json' \
-           -d "{\"path\":\"session.store.lookup\",\"args\":[${ASID:-0}]}")
+           -d "{\"path\":\"session.store.lookup\",\"args\":[\"${ASID:-0}\"]}")
 expect_contains 'gateway /_rpc authed round-trip (session.lookup→uid)' "$out" '"result":[1-9][0-9]*'
 
 # Malformed path → stable 400; unknown method → 404.
@@ -352,11 +352,11 @@ if [ -z "$shard_dats" ]; then
     note_fail "no mdbx shard files under $SHARDED_DIR (sharded_storage didn't persist?)"
 else
     have_key() { grep -aq "$1" $shard_dats 2>/dev/null; }
-    # accounts → user:/role:/count, session → next_sid, password_authn → count
-    if have_key next_sid && have_key "user:" && have_key "role:"; then
-        note_pass "sharded mdbx on disk has session + account state (next_sid, user:, role:)"
+    # accounts → user:/role:/count, session → uid:<token>, password_authn → count
+    if have_key "uid:" && have_key "user:" && have_key "role:"; then
+        note_pass "sharded mdbx on disk has session + account state (uid:, user:, role:)"
     else
-        present=$(for k in next_sid count "user:" "role:" "uid:"; do have_key "$k" && printf '%s ' "$k"; done)
+        present=$(for k in count "user:" "role:" "uid:"; do have_key "$k" && printf '%s ' "$k"; done)
         note_fail "expected keys not all found in mdbx shards on disk (present: ${present:-none})"
     fi
     du -sh "$SHARDED_DIR" 2>/dev/null | sed 's/^/  sharded on-disk size: /'

@@ -30,7 +30,7 @@ struct picomesh_int_result mesh_store_register_service(struct ctx * ctx, struct 
         uint8_t _a[16384];
         size_t _off = 0;
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace_id, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
          * into the `hdrs` argument. The codegen never inspects the
          * contents — it just lets the framework (de)serialize the bag. */
@@ -103,7 +103,7 @@ struct picomesh_uint32_result mesh_store_resolve(struct ctx * ctx, struct object
         uint8_t _a[16384];
         size_t _off = 0;
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace_id, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
          * into the `hdrs` argument. The codegen never inspects the
          * contents — it just lets the framework (de)serialize the bag. */
@@ -173,7 +173,7 @@ struct picomesh_int_result mesh_store_forget(struct ctx * ctx, struct object * o
         uint8_t _a[16384];
         size_t _off = 0;
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace_id, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
          * into the `hdrs` argument. The codegen never inspects the
          * contents — it just lets the framework (de)serialize the bag. */
@@ -243,7 +243,7 @@ struct picomesh_size_result mesh_store_count_services(struct ctx * ctx, struct o
         uint8_t _a[16384];
         size_t _off = 0;
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace_id, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
          * into the `hdrs` argument. The codegen never inspects the
          * contents — it just lets the framework (de)serialize the bag. */
@@ -310,7 +310,7 @@ struct picomesh_int_result mesh_store_spawn_picomesh(struct ctx * ctx, struct ob
         uint8_t _a[16384];
         size_t _off = 0;
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace_id, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
          * into the `hdrs` argument. The codegen never inspects the
          * contents — it just lets the framework (de)serialize the bag. */
@@ -380,7 +380,7 @@ struct picomesh_int_result mesh_store_kill_pid(struct ctx * ctx, struct object *
         uint8_t _a[16384];
         size_t _off = 0;
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace_id, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
          * into the `hdrs` argument. The codegen never inspects the
          * contents — it just lets the framework (de)serialize the bag. */
@@ -450,7 +450,7 @@ struct picomesh_size_result mesh_store_count_children(struct ctx * ctx, struct o
         uint8_t _a[16384];
         size_t _off = 0;
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace_id, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
          * into the `hdrs` argument. The codegen never inspects the
          * contents — it just lets the framework (de)serialize the bag. */
@@ -517,7 +517,7 @@ struct picomesh_int_result mesh_store_reconcile_from_config(struct ctx * ctx, st
         uint8_t _a[16384];
         size_t _off = 0;
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace_id, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
          * into the `hdrs` argument. The codegen never inspects the
          * contents — it just lets the framework (de)serialize the bag. */
@@ -584,7 +584,7 @@ struct picomesh_int_result mesh_store_reconcile(struct ctx * ctx, struct object 
         uint8_t _a[16384];
         size_t _off = 0;
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace_id, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
          * into the `hdrs` argument. The codegen never inspects the
          * contents — it just lets the framework (de)serialize the bag. */

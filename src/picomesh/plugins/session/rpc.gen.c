@@ -43,7 +43,7 @@ static size_t session_store_start_skel(const void *_body, size_t _body_len,
     memcpy(&_v2, (const uint8_t *)_body + _off, sizeof(_v2));
     _off += sizeof(_v2);
     double span_start = picomesh_ytime_monotonic_sec();
-    struct picomesh_uint32_result _r = session_store_start(&_local, _obj, _hdrs, _v1, _v2);
+    struct picomesh_string_result _r = session_store_start(&_local, _obj, _hdrs, _v1, _v2);
     {
         double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
         const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
@@ -68,10 +68,16 @@ static size_t session_store_start_skel(const void *_body, size_t _body_len,
         picomesh_error_destroy(_r.error);
         return 1 + 4 + _ml;
     }
-    if (_resp_max < 1 + sizeof(_r.value)) return 0;
-    ((uint8_t *)_resp)[0] = 0;
-    memcpy((uint8_t *)_resp + 1, &_r.value, sizeof(_r.value));
-    return 1 + sizeof(_r.value);
+    {
+        const char *_sv = _r.value ? _r.value : "";
+        uint32_t _svlen = (uint32_t)strlen(_sv);
+        if (_resp_max < 1 + 4 + (size_t)_svlen) { free(_r.value); return 0; }
+        ((uint8_t *)_resp)[0] = 0;
+        memcpy((uint8_t *)_resp + 1, &_svlen, 4);
+        if (_svlen) memcpy((uint8_t *)_resp + 5, _sv, _svlen);
+        free(_r.value);
+        return 1 + 4 + (size_t)_svlen;
+    }
 _short_body:
     yheaders_free(_hdrs);
     if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
@@ -99,12 +105,18 @@ static size_t session_store_lookup_skel(const void *_body, size_t _body_len,
         memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
         _obj = (struct object *)rpc_handle_resolve(_h);
     }
-    uint32_t _v1 = 0;
-    if (_off + sizeof(_v1) > _body_len) goto _short_body;
-    memcpy(&_v1, (const uint8_t *)_body + _off, sizeof(_v1));
-    _off += sizeof(_v1);
+    char _s1[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s1)) goto _short_body;
+        if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
+        _s1[_slen] = 0; _off += _slen;
+    }
     double span_start = picomesh_ytime_monotonic_sec();
-    struct picomesh_uint32_result _r = session_store_lookup(&_local, _obj, _hdrs, _v1);
+    struct picomesh_uint32_result _r = session_store_lookup(&_local, _obj, _hdrs, _s1);
     {
         double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
         const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
@@ -160,12 +172,18 @@ static size_t session_store_destroy_skel(const void *_body, size_t _body_len,
         memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
         _obj = (struct object *)rpc_handle_resolve(_h);
     }
-    uint32_t _v1 = 0;
-    if (_off + sizeof(_v1) > _body_len) goto _short_body;
-    memcpy(&_v1, (const uint8_t *)_body + _off, sizeof(_v1));
-    _off += sizeof(_v1);
+    char _s1[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s1)) goto _short_body;
+        if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
+        _s1[_slen] = 0; _off += _slen;
+    }
     double span_start = picomesh_ytime_monotonic_sec();
-    struct picomesh_int_result _r = session_store_destroy(&_local, _obj, _hdrs, _v1);
+    struct picomesh_int_result _r = session_store_destroy(&_local, _obj, _hdrs, _s1);
     {
         double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
         const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
@@ -265,14 +283,15 @@ static int session_store_start_jinvoke(struct ctx *ctx, struct object *obj, stru
     uint32_t arg1 = (uint32_t)yjson_as_int(yjson_array_at(args, 1), 0);
     struct ctx local_ctx = {0};
     struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct picomesh_uint32_result call_result = session_store_start(call_ctx, obj, hdrs, arg0, arg1);
+    struct picomesh_string_result call_result = session_store_start(call_ctx, obj, hdrs, arg0, arg1);
     if (PICOMESH_IS_ERR(call_result)) {
         snprintf(err, err_cap, "%s: %s", "session_store_start",
                  call_result.error.msg ? call_result.error.msg : "<no message>");
         picomesh_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(result, (int64_t)call_result.value);
+    yjson_w_string(result, call_result.value ? call_result.value : "");
+    free(call_result.value);
     return 0;
 }
 
@@ -280,7 +299,7 @@ static int session_store_lookup_jinvoke(struct ctx *ctx, struct object *obj, str
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
 {
-    uint32_t arg0 = (uint32_t)yjson_as_int(yjson_array_at(args, 0), 0);
+    const char *arg0 = yjson_as_string(yjson_array_at(args, 0), "");
     struct ctx local_ctx = {0};
     struct ctx *call_ctx = ctx ? ctx : &local_ctx;
     struct picomesh_uint32_result call_result = session_store_lookup(call_ctx, obj, hdrs, arg0);
@@ -298,7 +317,7 @@ static int session_store_destroy_jinvoke(struct ctx *ctx, struct object *obj, st
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
 {
-    uint32_t arg0 = (uint32_t)yjson_as_int(yjson_array_at(args, 0), 0);
+    const char *arg0 = yjson_as_string(yjson_array_at(args, 0), "");
     struct ctx local_ctx = {0};
     struct ctx *call_ctx = ctx ? ctx : &local_ctx;
     struct picomesh_int_result call_result = session_store_destroy(call_ctx, obj, hdrs, arg0);

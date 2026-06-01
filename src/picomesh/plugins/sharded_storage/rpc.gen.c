@@ -404,6 +404,271 @@ _short_body:
     return _resp_max >= 1 ? 1 : 0;
 }
 
+static size_t sharded_storage_db_incr_skel(const void *_body, size_t _body_len,
+                          void *_resp, size_t _resp_max)
+{
+    size_t _off = 0;
+    struct ctx _local = {0};
+    /* The framework header section is first on every CALL body — parse
+     * it back into the `hdrs` argument before the packed business args. */
+    struct yheaders *_hdrs = NULL;
+    {
+        size_t _hconsumed = 0;
+        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
+        if (!_hdrs) goto _short_body;
+        _off = _hconsumed;
+    }
+    struct object *_obj = NULL;
+    {
+        if (_off + 8 > _body_len) goto _short_body;
+        uint64_t _h;
+        memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
+        _obj = (struct object *)rpc_handle_resolve(_h);
+    }
+    char _s1[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s1)) goto _short_body;
+        if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
+        _s1[_slen] = 0; _off += _slen;
+    }
+    char _s2[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s2)) goto _short_body;
+        if (_slen) memcpy(_s2, (const uint8_t *)_body + _off, _slen);
+        _s2[_slen] = 0; _off += _slen;
+    }
+    int64_t _v3 = 0;
+    if (_off + sizeof(_v3) > _body_len) goto _short_body;
+    memcpy(&_v3, (const uint8_t *)_body + _off, sizeof(_v3));
+    _off += sizeof(_v3);
+    double span_start = picomesh_ytime_monotonic_sec();
+    struct picomesh_int64_result _r = sharded_storage_db_incr(&_local, _obj, _hdrs, _s1, _s2, _v3);
+    {
+        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
+        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
+        ydebug("span trace=%s op=skel.sharded_storage_db_incr dur_us=%.0f", span_trace ? span_trace : "-", span_us);
+        yspan_record("skel.sharded_storage_db_incr", span_us);
+    }
+    yheaders_free(_hdrs); _hdrs = NULL;
+    if (_resp_max < 1) return 0;
+    if (PICOMESH_IS_ERR(_r)) {
+        picomesh_error_print(stderr, "[skel] sharded_storage_db_incr", _r.error);
+        const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
+        uint32_t _ml = (uint32_t)strlen(_msg);
+        if (_ml > 256) _ml = 256;
+        if (_resp_max < 1 + 4 + _ml) {
+            picomesh_error_destroy(_r.error);
+            ((uint8_t *)_resp)[0] = 1;
+            return _resp_max >= 1 ? 1 : 0;
+        }
+        ((uint8_t *)_resp)[0] = 1;
+        memcpy((uint8_t *)_resp + 1, &_ml, 4);
+        memcpy((uint8_t *)_resp + 5, _msg, _ml);
+        picomesh_error_destroy(_r.error);
+        return 1 + 4 + _ml;
+    }
+    if (_resp_max < 1 + sizeof(_r.value)) return 0;
+    ((uint8_t *)_resp)[0] = 0;
+    memcpy((uint8_t *)_resp + 1, &_r.value, sizeof(_r.value));
+    return 1 + sizeof(_r.value);
+_short_body:
+    yheaders_free(_hdrs);
+    if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
+    return _resp_max >= 1 ? 1 : 0;
+}
+
+static size_t sharded_storage_db_put_if_absent_skel(const void *_body, size_t _body_len,
+                          void *_resp, size_t _resp_max)
+{
+    size_t _off = 0;
+    struct ctx _local = {0};
+    /* The framework header section is first on every CALL body — parse
+     * it back into the `hdrs` argument before the packed business args. */
+    struct yheaders *_hdrs = NULL;
+    {
+        size_t _hconsumed = 0;
+        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
+        if (!_hdrs) goto _short_body;
+        _off = _hconsumed;
+    }
+    struct object *_obj = NULL;
+    {
+        if (_off + 8 > _body_len) goto _short_body;
+        uint64_t _h;
+        memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
+        _obj = (struct object *)rpc_handle_resolve(_h);
+    }
+    char _s1[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s1)) goto _short_body;
+        if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
+        _s1[_slen] = 0; _off += _slen;
+    }
+    char _s2[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s2)) goto _short_body;
+        if (_slen) memcpy(_s2, (const uint8_t *)_body + _off, _slen);
+        _s2[_slen] = 0; _off += _slen;
+    }
+    char _s3[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s3)) goto _short_body;
+        if (_slen) memcpy(_s3, (const uint8_t *)_body + _off, _slen);
+        _s3[_slen] = 0; _off += _slen;
+    }
+    double span_start = picomesh_ytime_monotonic_sec();
+    struct picomesh_int_result _r = sharded_storage_db_put_if_absent(&_local, _obj, _hdrs, _s1, _s2, _s3);
+    {
+        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
+        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
+        ydebug("span trace=%s op=skel.sharded_storage_db_put_if_absent dur_us=%.0f", span_trace ? span_trace : "-", span_us);
+        yspan_record("skel.sharded_storage_db_put_if_absent", span_us);
+    }
+    yheaders_free(_hdrs); _hdrs = NULL;
+    if (_resp_max < 1) return 0;
+    if (PICOMESH_IS_ERR(_r)) {
+        picomesh_error_print(stderr, "[skel] sharded_storage_db_put_if_absent", _r.error);
+        const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
+        uint32_t _ml = (uint32_t)strlen(_msg);
+        if (_ml > 256) _ml = 256;
+        if (_resp_max < 1 + 4 + _ml) {
+            picomesh_error_destroy(_r.error);
+            ((uint8_t *)_resp)[0] = 1;
+            return _resp_max >= 1 ? 1 : 0;
+        }
+        ((uint8_t *)_resp)[0] = 1;
+        memcpy((uint8_t *)_resp + 1, &_ml, 4);
+        memcpy((uint8_t *)_resp + 5, _msg, _ml);
+        picomesh_error_destroy(_r.error);
+        return 1 + 4 + _ml;
+    }
+    if (_resp_max < 1 + sizeof(_r.value)) return 0;
+    ((uint8_t *)_resp)[0] = 0;
+    memcpy((uint8_t *)_resp + 1, &_r.value, sizeof(_r.value));
+    return 1 + sizeof(_r.value);
+_short_body:
+    yheaders_free(_hdrs);
+    if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
+    return _resp_max >= 1 ? 1 : 0;
+}
+
+static size_t sharded_storage_db_compare_and_set_skel(const void *_body, size_t _body_len,
+                          void *_resp, size_t _resp_max)
+{
+    size_t _off = 0;
+    struct ctx _local = {0};
+    /* The framework header section is first on every CALL body — parse
+     * it back into the `hdrs` argument before the packed business args. */
+    struct yheaders *_hdrs = NULL;
+    {
+        size_t _hconsumed = 0;
+        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
+        if (!_hdrs) goto _short_body;
+        _off = _hconsumed;
+    }
+    struct object *_obj = NULL;
+    {
+        if (_off + 8 > _body_len) goto _short_body;
+        uint64_t _h;
+        memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
+        _obj = (struct object *)rpc_handle_resolve(_h);
+    }
+    char _s1[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s1)) goto _short_body;
+        if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
+        _s1[_slen] = 0; _off += _slen;
+    }
+    char _s2[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s2)) goto _short_body;
+        if (_slen) memcpy(_s2, (const uint8_t *)_body + _off, _slen);
+        _s2[_slen] = 0; _off += _slen;
+    }
+    char _s3[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s3)) goto _short_body;
+        if (_slen) memcpy(_s3, (const uint8_t *)_body + _off, _slen);
+        _s3[_slen] = 0; _off += _slen;
+    }
+    char _s4[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s4)) goto _short_body;
+        if (_slen) memcpy(_s4, (const uint8_t *)_body + _off, _slen);
+        _s4[_slen] = 0; _off += _slen;
+    }
+    double span_start = picomesh_ytime_monotonic_sec();
+    struct picomesh_int_result _r = sharded_storage_db_compare_and_set(&_local, _obj, _hdrs, _s1, _s2, _s3, _s4);
+    {
+        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
+        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
+        ydebug("span trace=%s op=skel.sharded_storage_db_compare_and_set dur_us=%.0f", span_trace ? span_trace : "-", span_us);
+        yspan_record("skel.sharded_storage_db_compare_and_set", span_us);
+    }
+    yheaders_free(_hdrs); _hdrs = NULL;
+    if (_resp_max < 1) return 0;
+    if (PICOMESH_IS_ERR(_r)) {
+        picomesh_error_print(stderr, "[skel] sharded_storage_db_compare_and_set", _r.error);
+        const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
+        uint32_t _ml = (uint32_t)strlen(_msg);
+        if (_ml > 256) _ml = 256;
+        if (_resp_max < 1 + 4 + _ml) {
+            picomesh_error_destroy(_r.error);
+            ((uint8_t *)_resp)[0] = 1;
+            return _resp_max >= 1 ? 1 : 0;
+        }
+        ((uint8_t *)_resp)[0] = 1;
+        memcpy((uint8_t *)_resp + 1, &_ml, 4);
+        memcpy((uint8_t *)_resp + 5, _msg, _ml);
+        picomesh_error_destroy(_r.error);
+        return 1 + 4 + _ml;
+    }
+    if (_resp_max < 1 + sizeof(_r.value)) return 0;
+    ((uint8_t *)_resp)[0] = 0;
+    memcpy((uint8_t *)_resp + 1, &_r.value, sizeof(_r.value));
+    return 1 + sizeof(_r.value);
+_short_body:
+    yheaders_free(_hdrs);
+    if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
+    return _resp_max >= 1 ? 1 : 0;
+}
+
 static int sharded_storage_db_set_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
@@ -500,6 +765,67 @@ static int sharded_storage_db_count_jinvoke(struct ctx *ctx, struct object *obj,
     return 0;
 }
 
+static int sharded_storage_db_incr_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
+{
+    const char *arg0 = yjson_as_string(yjson_array_at(args, 0), "");
+    const char *arg1 = yjson_as_string(yjson_array_at(args, 1), "");
+    int64_t arg2 = (int64_t)yjson_as_int(yjson_array_at(args, 2), 0);
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_int64_result call_result = sharded_storage_db_incr(call_ctx, obj, hdrs, arg0, arg1, arg2);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "sharded_storage_db_incr",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    yjson_w_int(result, (int64_t)call_result.value);
+    return 0;
+}
+
+static int sharded_storage_db_put_if_absent_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
+{
+    const char *arg0 = yjson_as_string(yjson_array_at(args, 0), "");
+    const char *arg1 = yjson_as_string(yjson_array_at(args, 1), "");
+    const char *arg2 = yjson_as_string(yjson_array_at(args, 2), "");
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_int_result call_result = sharded_storage_db_put_if_absent(call_ctx, obj, hdrs, arg0, arg1, arg2);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "sharded_storage_db_put_if_absent",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    yjson_w_int(result, (int64_t)call_result.value);
+    return 0;
+}
+
+static int sharded_storage_db_compare_and_set_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
+{
+    const char *arg0 = yjson_as_string(yjson_array_at(args, 0), "");
+    const char *arg1 = yjson_as_string(yjson_array_at(args, 1), "");
+    const char *arg2 = yjson_as_string(yjson_array_at(args, 2), "");
+    const char *arg3 = yjson_as_string(yjson_array_at(args, 3), "");
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_int_result call_result = sharded_storage_db_compare_and_set(call_ctx, obj, hdrs, arg0, arg1, arg2, arg3);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "sharded_storage_db_compare_and_set",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    yjson_w_int(result, (int64_t)call_result.value);
+    return 0;
+}
+
 struct object_ptr_result sharded_storage_db_create(struct ctx *ctx)
 {
     ydebug("class=sharded_storage_db");
@@ -521,7 +847,10 @@ static const struct sharded_storage_jinvoke_row sharded_storage_jinvoke_rows[] =
     {"sharded_storage_db_get", sharded_storage_db_get_jinvoke},
     {"sharded_storage_db_exists", sharded_storage_db_exists_jinvoke},
     {"sharded_storage_db_del", sharded_storage_db_del_jinvoke},
-    {"sharded_storage_db_count", sharded_storage_db_count_jinvoke}
+    {"sharded_storage_db_count", sharded_storage_db_count_jinvoke},
+    {"sharded_storage_db_incr", sharded_storage_db_incr_jinvoke},
+    {"sharded_storage_db_put_if_absent", sharded_storage_db_put_if_absent_jinvoke},
+    {"sharded_storage_db_compare_and_set", sharded_storage_db_compare_and_set_jinvoke}
 };
 
 static jinvoke_fn sharded_storage_jinvoke_lookup(const char *qname)
@@ -549,7 +878,10 @@ static const struct sharded_storage_skel_row sharded_storage_skel_rows[] = {
     {"sharded_storage_db_get", sharded_storage_db_get_skel},
     {"sharded_storage_db_exists", sharded_storage_db_exists_skel},
     {"sharded_storage_db_del", sharded_storage_db_del_skel},
-    {"sharded_storage_db_count", sharded_storage_db_count_skel}
+    {"sharded_storage_db_count", sharded_storage_db_count_skel},
+    {"sharded_storage_db_incr", sharded_storage_db_incr_skel},
+    {"sharded_storage_db_put_if_absent", sharded_storage_db_put_if_absent_skel},
+    {"sharded_storage_db_compare_and_set", sharded_storage_db_compare_and_set_skel}
 };
 
 static rpc_skel_fn sharded_storage_skel_lookup(method_slot slot)

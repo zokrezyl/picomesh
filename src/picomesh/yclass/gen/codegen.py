@@ -712,7 +712,7 @@ def emit_dispatch_body(m: dict) -> str:
         uint8_t _a[{WIRE_ARG_BUFFER_BYTES}];
         size_t _off = 0;
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace_id, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
          * into the `hdrs` argument. The codegen never inspects the
          * contents — it just lets the framework (de)serialize the bag. */

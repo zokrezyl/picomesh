@@ -30,7 +30,7 @@ struct picomesh_uint32_result portalloc_store_allocate(struct ctx * ctx, struct 
         uint8_t _a[16384];
         size_t _off = 0;
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace_id, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
          * into the `hdrs` argument. The codegen never inspects the
          * contents — it just lets the framework (de)serialize the bag. */
@@ -100,7 +100,7 @@ struct picomesh_int_result portalloc_store_release(struct ctx * ctx, struct obje
         uint8_t _a[16384];
         size_t _off = 0;
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace_id, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
          * into the `hdrs` argument. The codegen never inspects the
          * contents — it just lets the framework (de)serialize the bag. */
@@ -170,7 +170,7 @@ struct picomesh_size_result portalloc_store_count_used(struct ctx * ctx, struct 
         uint8_t _a[16384];
         size_t _off = 0;
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, sid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace_id, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
          * into the `hdrs` argument. The codegen never inspects the
          * contents — it just lets the framework (de)serialize the bag. */

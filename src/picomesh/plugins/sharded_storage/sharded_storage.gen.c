@@ -11,6 +11,12 @@ __attribute__((unused))
 static sharded_storage_db_del_fn _sharded_storage_db_sharded_storage_db_del_check = sharded_storage_db_del_impl;
 __attribute__((unused))
 static sharded_storage_db_count_fn _sharded_storage_db_sharded_storage_db_count_check = sharded_storage_db_count_impl;
+__attribute__((unused))
+static sharded_storage_db_incr_fn _sharded_storage_db_sharded_storage_db_incr_check = sharded_storage_db_incr_impl;
+__attribute__((unused))
+static sharded_storage_db_put_if_absent_fn _sharded_storage_db_sharded_storage_db_put_if_absent_check = sharded_storage_db_put_if_absent_impl;
+__attribute__((unused))
+static sharded_storage_db_compare_and_set_fn _sharded_storage_db_sharded_storage_db_compare_and_set_check = sharded_storage_db_compare_and_set_impl;
 
 struct class_ptr_result sharded_storage_db_class_get(void)
 {
@@ -29,6 +35,9 @@ struct class_ptr_result sharded_storage_db_class_get(void)
         {"sharded_storage", "db_exists", (method_id_t)sharded_storage_db_exists, (impl_t)sharded_storage_db_exists_impl},
         {"sharded_storage", "db_del", (method_id_t)sharded_storage_db_del, (impl_t)sharded_storage_db_del_impl},
         {"sharded_storage", "db_count", (method_id_t)sharded_storage_db_count, (impl_t)sharded_storage_db_count_impl},
+        {"sharded_storage", "db_incr", (method_id_t)sharded_storage_db_incr, (impl_t)sharded_storage_db_incr_impl},
+        {"sharded_storage", "db_put_if_absent", (method_id_t)sharded_storage_db_put_if_absent, (impl_t)sharded_storage_db_put_if_absent_impl},
+        {"sharded_storage", "db_compare_and_set", (method_id_t)sharded_storage_db_compare_and_set, (impl_t)sharded_storage_db_compare_and_set_impl},
     };
     struct class_ptr_result _r =
         class_register(&desc, ops, sizeof(ops) / sizeof(ops[0]),

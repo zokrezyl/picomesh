@@ -161,7 +161,14 @@ static void storage_run(struct storage_work *w)
     struct yloop *l = e ? picomesh_engine_loop(e) : NULL;
     if (!l) { storage_work_fn(w); return; }
     struct picomesh_void_result r = yloop_run_blocking(l, storage_work_fn, w);
-    if (PICOMESH_IS_ERR(r)) { picomesh_error_destroy(r.error); storage_work_fn(w); }
+    if (PICOMESH_IS_ERR(r)) {
+        /* Offload failed — run inline so the op still completes, but log it:
+         * it can indicate a degraded event loop / worker pool. */
+        ywarn("storage: worker-pool offload failed (%s) — running inline",
+              r.error.msg ? r.error.msg : "?");
+        picomesh_error_destroy(r.error);
+        storage_work_fn(w);
+    }
 }
 
 PICOMESH_CLASS_ANNOTATE("override@storage:db:set")

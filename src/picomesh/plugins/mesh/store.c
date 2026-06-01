@@ -118,34 +118,44 @@ static struct object *mesh_storage_db(void)
     return g_mesh_store_db;
 }
 
-static void mesh_storage_set(const char *key, const char *val)
+/* Persist a lifecycle row. Propagates the storage failure so callers that
+ * MUST have it durable (e.g. the parent pid) can surface it rather than
+ * pretend success. */
+static struct picomesh_void_result mesh_storage_set(const char *key, const char *val)
 {
     struct object *db = mesh_storage_db();
     struct picomesh_engine *e = picomesh_active_engine();
-    if (!db || !e) return;
+    if (!db || !e) return PICOMESH_ERR(picomesh_void, "mesh: storage unavailable");
     struct ctx c = picomesh_engine_service_ctx(e, "storage");
     struct picomesh_int_result r = storage_set(&c, db, NULL, "mesh", key, val);
-    if (PICOMESH_IS_ERR(r)) picomesh_error_destroy(r.error);
+    if (PICOMESH_IS_ERR(r)) return PICOMESH_ERR(picomesh_void, "mesh: lifecycle write failed", r);
+    return PICOMESH_OK_VOID();
 }
 
-static void mesh_storage_del(const char *key)
+static struct picomesh_void_result mesh_storage_del(const char *key)
 {
     struct object *db = mesh_storage_db();
     struct picomesh_engine *e = picomesh_active_engine();
-    if (!db || !e) return;
+    if (!db || !e) return PICOMESH_ERR(picomesh_void, "mesh: storage unavailable");
     struct ctx c = picomesh_engine_service_ctx(e, "storage");
     struct picomesh_int_result r = storage_del(&c, db, NULL, "mesh", key);
-    if (PICOMESH_IS_ERR(r)) picomesh_error_destroy(r.error);
+    if (PICOMESH_IS_ERR(r)) return PICOMESH_ERR(picomesh_void, "mesh: lifecycle delete failed", r);
+    return PICOMESH_OK_VOID();
 }
 
-/* Record a freshly spawned child: signal-reaper mirror + storage row. */
-static void mesh_child_track(int slot, int pid, const char *name)
+/* Record a freshly spawned child: signal-reaper mirror + storage row. The
+ * in-memory mirror (set first) is what reaps the child on THIS run's
+ * shutdown; the storage row is the cross-run backup (reaped after a crash).
+ * A failed storage write is therefore non-fatal but must be LOUD, never
+ * silent — the caller logs it (the cross-run record is missing). Returns the
+ * write result so the spawn path can surface it. */
+static struct picomesh_void_result mesh_child_track(int slot, int pid, const char *name)
 {
     if (slot >= 0 && slot < MESH_MAX_CHILDREN) g_mesh_reap_pids[slot] = pid;
     char key[32], val[160];
     snprintf(key, sizeof(key), "child:%d", slot);
     snprintf(val, sizeof(val), "%d %s", pid, name ? name : "");
-    mesh_storage_set(key, val);
+    return mesh_storage_set(key, val);
 }
 
 static void mesh_child_untrack(int slot)
@@ -153,7 +163,12 @@ static void mesh_child_untrack(int slot)
     if (slot >= 0 && slot < MESH_MAX_CHILDREN) g_mesh_reap_pids[slot] = 0;
     char key[32];
     snprintf(key, sizeof(key), "child:%d", slot);
-    mesh_storage_del(key);
+    /* Best-effort cleanup of the cross-run record; log if it fails. */
+    struct picomesh_void_result r = mesh_storage_del(key);
+    if (PICOMESH_IS_ERR(r)) {
+        ywarn("mesh: failed to clear child record slot=%d (%s)", slot, r.error.msg ? r.error.msg : "?");
+        picomesh_error_destroy(r.error);
+    }
 }
 
 /* Reap children a PREVIOUS run left alive (its parent was SIGKILLed/crashed
@@ -176,7 +191,12 @@ static void mesh_reap_previous_run(void)
             }
         }
         if (PICOMESH_IS_OK(g)) free(g.value); else picomesh_error_destroy(g.error);
-        mesh_storage_del(key);
+        /* Best-effort clear of the stale record; log if it fails. */
+        struct picomesh_void_result d = mesh_storage_del(key);
+        if (PICOMESH_IS_ERR(d)) {
+            ywarn("mesh: failed to clear stale child record slot=%d (%s)", slot, d.error.msg ? d.error.msg : "?");
+            picomesh_error_destroy(d.error);
+        }
     }
 }
 
@@ -361,7 +381,12 @@ struct picomesh_int_result mesh_store_spawn_picomesh_impl(struct ctx *ctx, struc
     d->children[slot].exit_status = 0;
     d->child_count++;
     mesh_reap_install();
-    mesh_child_track(slot, pid, "picomesh");
+    struct picomesh_void_result tr = mesh_child_track(slot, pid, "picomesh");
+    if (PICOMESH_IS_ERR(tr)) {
+        ywarn("mesh: spawned pid=%d but its cross-run reap record FAILED to persist (%s) — "
+              "the in-memory reaper still covers this run's shutdown", pid, tr.error.msg ? tr.error.msg : "?");
+        picomesh_error_destroy(tr.error);
+    }
     yinfo("mesh: spawned pid=%d on port=%u", pid, port);
     return PICOMESH_OK(picomesh_int, pid);
 }
@@ -566,7 +591,12 @@ static int mesh_internal_spawn(struct object *obj, const char *name)
     d->children[slot].exited = 0;
     d->child_count++;
     mesh_reap_install();
-    mesh_child_track(slot, pid, name);
+    struct picomesh_void_result tr = mesh_child_track(slot, pid, name);
+    if (PICOMESH_IS_ERR(tr)) {
+        ywarn("mesh: spawned service='%s' pid=%d but its cross-run reap record FAILED to persist (%s) — "
+              "the in-memory reaper still covers this run's shutdown", name, pid, tr.error.msg ? tr.error.msg : "?");
+        picomesh_error_destroy(tr.error);
+    }
     yinfo("mesh: spawned pid=%d service='%s'", pid, name);
     return pid;
 }
@@ -612,7 +642,12 @@ struct picomesh_int_result mesh_store_reconcile_from_config_impl(struct ctx *ctx
     mesh_reap_previous_run();
     char parent_pid[16];
     snprintf(parent_pid, sizeof(parent_pid), "%d", (int)getpid());
-    mesh_storage_set("parent", parent_pid);
+    /* The parent pid MUST be durable: it is how the stack is stopped (signal
+     * the recorded parent; no pkill). If we can't persist it, refuse to spawn
+     * — a running stack with no recorded parent can't be cleanly taken down. */
+    struct picomesh_void_result pp = mesh_storage_set("parent", parent_pid);
+    if (PICOMESH_IS_ERR(pp))
+        return PICOMESH_ERR(picomesh_int, "reconcile_from_config: cannot persist parent pid", pp);
 
     /* `mesh.services` — a map keyed by service name. */
     struct yconfig_node_ptr_result r =

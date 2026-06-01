@@ -2,8 +2,10 @@
  *
  * Mirrors `scenarios/git-yaapp/frontend/frontend.py` from yaapp:
  * Jinja templates → hand-emitted HTML, FastAPI routes → an inline URL
- * router, FastAPI's session cookie → a plain `picomesh-sid` cookie that
- * resolves to a uint32 sid via `session_store_lookup`.
+ * router, FastAPI's session cookie → a plain `picomesh-sid` cookie. That
+ * cookie carries an OPAQUE 128-bit hex session token (not a parseable
+ * integer); the gateway resolves it to a uid via `session_store_lookup`
+ * and forwards only the resolved uid to backends.
  *
  * Pages currently rendered (URL shape matches git-yaapp where it
  * makes sense; the simpler scalar-only wire keeps some places
@@ -704,10 +706,10 @@ static int cookie_get(const char *headers_raw, size_t headers_raw_len,
 }
 
 /* Defined later — the opaque-token extractor (cookie OR `picomesh-sid:`
- * header OR `Authorization: Bearer`) and the sid→uid session lookup. */
+ * header OR `Authorization: Bearer`) and the token→uid session lookup. */
 static int extract_session_token(const char *headers_raw, size_t headers_raw_len,
                                  char *out, size_t cap);
-static uint32_t uid_for_sid(uint32_t sid);
+static uint32_t uid_for_token(const char *token);
 
 /* Resolve the caller's opaque session token → user id, or 0 if
  * missing/invalid. Accepts the token as a Cookie (browser), a
@@ -719,9 +721,7 @@ static uint32_t resolve_uid(const char *headers_raw, size_t headers_raw_len)
     char token[64];
     if (!extract_session_token(headers_raw, headers_raw_len, token, sizeof(token)))
         return 0;
-    uint32_t sid = (uint32_t)strtoul(token, NULL, 10);
-    if (!sid) return 0;
-    return uid_for_sid(sid);
+    return uid_for_token(token);
 }
 
 /* ---------- per-route page helpers ---------- */
@@ -838,21 +838,23 @@ static void render_register(struct yloop_stream *s, const char *error, int keep_
  * non-zero on success; caller has already validated `uname` via
  * username_ok() so it's safe to splice into the cookie value. */
 static int build_session_cookies(char *out, size_t cap,
-                                 uint32_t sid, const char *uname)
+                                 const char *token, const char *uname)
 {
     int n = snprintf(out, cap,
-        "Set-Cookie: picomesh-sid=%u; Path=/; HttpOnly; SameSite=Lax\r\n"
+        "Set-Cookie: picomesh-sid=%s; Path=/; HttpOnly; SameSite=Lax\r\n"
         "Set-Cookie: picomesh-uname=%s; Path=/; SameSite=Lax\r\n",
-        sid, uname);
+        token, uname);
     return n > 0 && (size_t)n < cap;
 }
 
 /* Authenticate + mint a session. Used by both /login and /register
  * (after register has put the credential record in place). On error
  * the function does NOT render — it returns 0 and fills *err with a
- * static error string. On success returns the new sid. */
-static uint32_t auth_and_start_session(uint32_t uid, int64_t pw,
-                                       const char **err)
+ * static error string. On success returns 1 and writes the opaque
+ * session token (128-bit hex string) into tok_out. */
+static int auth_and_start_session(uint32_t uid, int64_t pw,
+                                  char *tok_out, size_t tok_cap,
+                                  const char **err)
 {
     struct picomesh_engine *e = picomesh_active_engine();
     if (!e) { *err = "no engine"; return 0; }
@@ -875,15 +877,18 @@ static uint32_t auth_and_start_session(uint32_t uid, int64_t pw,
 
     SVC_OPEN(ses, "session", session_store_create);
     if (!ses.ok) { *err = "session unreachable"; return 0; }
-    struct picomesh_uint32_result sid_r =
+    struct picomesh_string_result tok_r =
         session_store_start(&ses.c, ses.obj, NULL, uid, /*provider*/1);
     SVC_CLOSE(ses);
-    if (PICOMESH_IS_ERR(sid_r)) {
-        picomesh_error_destroy(sid_r.error);
+    if (PICOMESH_IS_ERR(tok_r)) {
+        picomesh_error_destroy(tok_r.error);
         *err = "session create failed";
         return 0;
     }
-    return sid_r.value;
+    snprintf(tok_out, tok_cap, "%s", tok_r.value ? tok_r.value : "");
+    free(tok_r.value);
+    if (!tok_out[0]) { *err = "session create failed"; return 0; }
+    return 1;
 }
 
 /* POST /login — yaapp shape: authenticate an EXISTING account; do NOT
@@ -916,11 +921,14 @@ static void route_login_post(struct yloop_stream *s, const char *body,
     }
 
     const char *err = NULL;
-    uint32_t sid = auth_and_start_session(uid, pw, &err);
-    if (!sid) { render_login(s, err ? err : "login failed", keep_alive); return; }
+    char tok[64];
+    if (!auth_and_start_session(uid, pw, tok, sizeof(tok), &err)) {
+        render_login(s, err ? err : "login failed", keep_alive);
+        return;
+    }
 
     char cookie_hdr[256];
-    if (!build_session_cookies(cookie_hdr, sizeof(cookie_hdr), sid, uname)) {
+    if (!build_session_cookies(cookie_hdr, sizeof(cookie_hdr), tok, uname)) {
         render_login(s, "cookie build failed", keep_alive);
         return;
     }
@@ -994,11 +1002,14 @@ static void route_register_post(struct yloop_stream *s, const char *body,
     }
 
     const char *err = NULL;
-    uint32_t sid = auth_and_start_session(uid, pw, &err);
-    if (!sid) { render_register(s, err ? err : "register failed", keep_alive); return; }
+    char tok[64];
+    if (!auth_and_start_session(uid, pw, tok, sizeof(tok), &err)) {
+        render_register(s, err ? err : "register failed", keep_alive);
+        return;
+    }
 
     char cookie_hdr[256];
-    if (!build_session_cookies(cookie_hdr, sizeof(cookie_hdr), sid, uname)) {
+    if (!build_session_cookies(cookie_hdr, sizeof(cookie_hdr), tok, uname)) {
         render_register(s, "cookie build failed", keep_alive);
         return;
     }
@@ -1014,16 +1025,13 @@ static void route_logout(struct yloop_stream *s,
                          const char *headers_raw, size_t headers_raw_len,
                          int keep_alive)
 {
-    char sid_s[64];
-    if (cookie_get(headers_raw, headers_raw_len, "picomesh-sid", sid_s, sizeof(sid_s))) {
-        uint32_t sid = (uint32_t)strtoul(sid_s, NULL, 10);
-        if (sid) {
-            SVC_OPEN(ses, "session", session_store_create);
-            if (ses.ok) {
-                struct picomesh_int_result r = session_store_destroy(&ses.c, ses.obj, NULL, sid);
-                if (PICOMESH_IS_ERR(r)) picomesh_error_destroy(r.error);
-                SVC_CLOSE(ses);
-            }
+    char tok[64];
+    if (cookie_get(headers_raw, headers_raw_len, "picomesh-sid", tok, sizeof(tok)) && tok[0]) {
+        SVC_OPEN(ses, "session", session_store_create);
+        if (ses.ok) {
+            struct picomesh_int_result r = session_store_destroy(&ses.c, ses.obj, NULL, tok);
+            if (PICOMESH_IS_ERR(r)) picomesh_error_destroy(r.error);
+            SVC_CLOSE(ses);
         }
     }
     send_redirect(s, "/login", keep_alive,
@@ -1391,18 +1399,18 @@ static int extract_session_token(const char *headers_raw, size_t headers_raw_len
     return 0;
 }
 
-/* Resolve an opaque sid to the authenticated uid via the session
- * backend. 0 → anonymous / invalid. */
-static uint32_t uid_for_sid(uint32_t sid)
+/* Resolve an opaque session token to the authenticated uid via the
+ * session backend. 0 → anonymous / invalid. */
+static uint32_t uid_for_token(const char *token)
 {
-    if (!sid) return 0;
+    if (!token || !*token) return 0;
     struct picomesh_engine *e = picomesh_active_engine();
     if (!e) return 0;
     struct ctx c = picomesh_engine_service_ctx(e, "session");
     /* peer==NULL ⇒ session collocated in-process; create resolves it locally. */
     struct object_ptr_result o = session_store_create(&c);
     if (PICOMESH_IS_ERR(o)) { picomesh_error_destroy(o.error); return 0; }
-    struct picomesh_uint32_result lr = session_store_lookup(&c, o.value, NULL, sid);
+    struct picomesh_uint32_result lr = session_store_lookup(&c, o.value, NULL, token);
     object_release_in_ctx(&c, o.value);
     if (PICOMESH_IS_ERR(lr)) { picomesh_error_destroy(lr.error); return 0; }
     return lr.value;
@@ -1502,11 +1510,9 @@ static void route_json_rpc(struct yloop_stream *s,
     }
 
     char token[64];
-    uint32_t sid = 0, uid = 0;
-    if (extract_session_token(headers_raw, headers_raw_len, token, sizeof(token))) {
-        sid = (uint32_t)strtoul(token, NULL, 10);
-        uid = uid_for_sid(sid);
-    }
+    uint32_t uid = 0;
+    if (extract_session_token(headers_raw, headers_raw_len, token, sizeof(token)))
+        uid = uid_for_token(token);
 
     struct ctx c = picomesh_engine_service_ctx(e, service);
     /* peer==NULL ⇒ the service is collocated locally; object_create_in_ctx
@@ -1531,12 +1537,13 @@ static void route_json_rpc(struct yloop_stream *s,
     }
 
     /* Request-header bag handed to the backend: resolved auth identity
-     * (uid/sid) + correlation id (honour inbound X-Trace-Id, else mint). */
+     * (uid) + correlation id (honour inbound X-Trace-Id, else mint).
+     * Only the resolved uid crosses to the backend — the opaque session
+     * token never leaves the gateway. */
     uint64_t trace_id = 0;
     struct yheaders *hdrs = yheaders_new();
     if (hdrs) {
         yheaders_set_u32(hdrs, "uid", uid);
-        yheaders_set_u32(hdrs, "sid", sid);
         char tbuf[24] = {0};
         if (header_value(headers_raw, headers_raw_len, "x-trace-id", tbuf, sizeof(tbuf)))
             trace_id = strtoull(tbuf, NULL, 10);
@@ -1592,7 +1599,7 @@ static void route_whoami(struct yloop_stream *s,
     char token[64];
     uint32_t uid = 0;
     if (extract_session_token(headers_raw, headers_raw_len, token, sizeof(token)))
-        uid = uid_for_sid((uint32_t)strtoul(token, NULL, 10));
+        uid = uid_for_token(token);
 
     char uname[64] = {0};
     if (uid) {
@@ -1851,12 +1858,6 @@ int yhttp_frontend_try(struct yloop_stream *s,
                     yconfig_node_as_bool(serve_app_r.value, 0);
     if (!has_session_remote && !serve_app) return 0;
 
-    uint32_t uid = resolve_uid(headers_raw, headers_raw_len);
-    /* Cookie username is decided up front so route_root can route
-     * straight to /<username> when the user is already signed in. */
-    char dispatch_uname[64] = {0};
-    resolve_uname(headers_raw, headers_raw_len,
-                  dispatch_uname, sizeof(dispatch_uname));
     int is_get = strcmp(method, "GET") == 0;
     int is_post = strcmp(method, "POST") == 0;
 
@@ -1920,6 +1921,15 @@ int yhttp_frontend_try(struct yloop_stream *s,
     if (is_post && path_eq(path, "/login"))    { route_login_post(s, body, body_len, keep_alive); return 1; }
     if (is_post && path_eq(path, "/register")) { route_register_post(s, body, body_len, keep_alive); return 1; }
     if (is_post && path_eq(path, "/logout"))   { route_logout(s, headers_raw, headers_raw_len, keep_alive); return 1; }
+
+    /* Resolve identity only here, for the authenticated action POSTs — the
+     * API routes above (/_rpc, /_describe, /_whoami, /_trace) and the
+     * login/register/logout POSTs either resolve sid→uid themselves or
+     * don't need it. Resolving up front would charge every /_rpc a second,
+     * redundant session.store.lookup (the dominant per-call cost). */
+    uint32_t uid = resolve_uid(headers_raw, headers_raw_len);
+    char dispatch_uname[64] = {0};
+    resolve_uname(headers_raw, headers_raw_len, dispatch_uname, sizeof(dispatch_uname));
 
     /* Authenticated action POSTs (forwarded by the frontend app with the
      * session cookie). They redirect or 404 — never render a page. */

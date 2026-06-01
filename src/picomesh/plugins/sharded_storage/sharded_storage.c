@@ -13,8 +13,10 @@
  * responsive; shards are threads on the pool, NOT separate processes.
  *
  * Config (service block):
- *   sharded_storage.shards  = N        (default 8, max 64)
- *   sharded_storage.path    = base dir (default /tmp/picomesh-sharded) */
+ *   sharded_storage.shards  = N        (optional, default 8, max 64)
+ *   sharded_storage.path    = base dir (REQUIRED — no default; a missing
+ *                             path fails loudly rather than silently writing
+ *                             shards to a shared fallback location) */
 
 #include <picomesh/ycore/result.h>
 #include <picomesh/ycore/ytrace.h>
@@ -83,33 +85,50 @@ static struct shard_set *shard_set(void)
     static int tried = 0;
 
     if (s.ready) return &s;
+    /* `tried` means a previous init attempt PERMANENTLY FAILED — not "in
+     * progress". It is set only on a failure return below, never before the
+     * (slow) env-open. A concurrent caller during init therefore finds
+     * tried==0 here, blocks on the mutex, and re-checks `ready` after the
+     * initializer unlocks — instead of spuriously getting NULL while the
+     * envs are still opening (which surfaced as `shard open failed` under a
+     * concurrent cold-start burst). */
     if (tried) return NULL;
 
     pthread_mutex_lock(&mu);
     if (s.ready) { pthread_mutex_unlock(&mu); return &s; }
     if (tried)   { pthread_mutex_unlock(&mu); return NULL; }
-    tried = 1;
 
-    int n = 8;
-    const char *base = "/tmp/picomesh-sharded";
+    /* The data directory is REQUIRED config — there is no hardcoded default.
+     * A silent fallback would let a misconfigured node write its shards to a
+     * shared/wrong path with nobody noticing (data in the wrong place, or
+     * two nodes colliding on one dir). Fail loudly instead. */
     struct picomesh_engine *e = picomesh_active_engine();
-    if (e) {
-        struct yconfig_node_ptr_result r =
-            yconfig_get(picomesh_engine_config(e), "sharded_storage.shards");
-        if (PICOMESH_IS_OK(r) && r.value) {
-            int v = (int)yconfig_node_as_int(r.value, 8);
-            if (v > 0 && v <= SHARDED_MAX_SHARDS) n = v;
-        }
-        struct yconfig_node_ptr_result p =
-            yconfig_get(picomesh_engine_config(e), "sharded_storage.path");
-        if (PICOMESH_IS_OK(p) && p.value) {
-            const char *str = yconfig_node_as_string(p.value, NULL);
-            if (str && *str) base = str;
-        }
+    if (!e) {
+        ywarn("sharded_storage: no active engine — cannot resolve required config 'sharded_storage.path'");
+        tried = 1; pthread_mutex_unlock(&mu); return NULL;
+    }
+    struct yconfig_node_ptr_result p =
+        yconfig_get(picomesh_engine_config(e), "sharded_storage.path");
+    const char *base = (PICOMESH_IS_OK(p) && p.value) ? yconfig_node_as_string(p.value, NULL) : NULL;
+    if (!base || !*base) {
+        ywarn("sharded_storage: required config 'sharded_storage.path' is missing — "
+              "refusing to fall back to a shared default");
+        tried = 1; pthread_mutex_unlock(&mu); return NULL;
+    }
+    /* Shard count: optional tuning knob, documented default 8. Unlike the
+     * path it is stable across runs when unset (always 8), so a default here
+     * does not silently misplace or collide data. */
+    int n = 8;
+    struct yconfig_node_ptr_result r =
+        yconfig_get(picomesh_engine_config(e), "sharded_storage.shards");
+    if (PICOMESH_IS_OK(r) && r.value) {
+        int v = (int)yconfig_node_as_int(r.value, 8);
+        if (v > 0 && v <= SHARDED_MAX_SHARDS) n = v;
     }
 
     if (mkdir(base, 0700) != 0 && errno != EEXIST) {
         ywarn("sharded_storage: mkdir(%s) failed: %s", base, strerror(errno));
+        tried = 1;
         pthread_mutex_unlock(&mu);
         return NULL;
     }
@@ -118,11 +137,12 @@ static struct shard_set *shard_set(void)
         snprintf(path, sizeof(path), "%s/shard-%d", base, i);
         if (mkdir(path, 0700) != 0 && errno != EEXIST) {
             ywarn("sharded_storage: mkdir(%s) failed: %s", path, strerror(errno));
+            tried = 1;
             pthread_mutex_unlock(&mu);
             return NULL;
         }
         MDBX_env *env = NULL;
-        if (mdbx_env_create(&env) != MDBX_SUCCESS) { pthread_mutex_unlock(&mu); return NULL; }
+        if (mdbx_env_create(&env) != MDBX_SUCCESS) { tried = 1; pthread_mutex_unlock(&mu); return NULL; }
         mdbx_env_set_maxdbs(env, SHARDED_DBI_PER_SHARD);
         mdbx_env_set_geometry(env, 1 << 20, -1, 1 << 30, 1 << 20, -1, -1);
         /* Same durability as the storage mdbx backend (WRITEMAP +
@@ -131,6 +151,7 @@ static struct shard_set *shard_set(void)
         if (mdbx_env_open(env, path, MDBX_WRITEMAP | MDBX_NOMETASYNC, 0644) != MDBX_SUCCESS) {
             ywarn("sharded_storage: env_open(%s) failed", path);
             mdbx_env_close(env);
+            tried = 1;
             pthread_mutex_unlock(&mu);
             return NULL;
         }
@@ -205,16 +226,24 @@ static MDBX_dbi shard_dbi(struct shard *sh, const char *ns, enum shard_rc *rc)
 
 /* ---- worker-pool ops ----------------------------------------------- */
 
-enum shard_op { OP_SET, OP_GET, OP_EXISTS, OP_DEL, OP_COUNT };
+enum shard_op {
+    OP_SET, OP_GET, OP_EXISTS, OP_DEL, OP_COUNT,
+    OP_INCR,          /* read int64 + delta + write, one txn → new value */
+    OP_PUT_IF_ABSENT, /* insert only if key absent, one txn → inserted? */
+    OP_CAS,           /* swap only if current bytes == expected, one txn */
+};
 
 struct shard_work {
     enum shard_op op;
     const char *ns;
     const char *key;
-    const char *value; /* in:  set (opaque string/bytes, NUL-terminated) */
-    char *out_str;     /* out: get — heap, NUL-terminated, owned by caller */
-    int out_i;         /* out: exists/del */
-    size_t out_sz;     /* out: count */
+    const char *value;    /* in:  set / put_if_absent / cas-replacement */
+    const char *expected; /* in:  cas — exact current bytes to match */
+    int64_t in_delta;     /* in:  incr */
+    char *out_str;        /* out: get — heap, NUL-terminated, owned by caller */
+    int out_i;            /* out: exists/del/put_if_absent/cas */
+    int64_t out_i64;      /* out: incr — value after the add */
+    size_t out_sz;        /* out: count */
     enum shard_rc rc;
 };
 
@@ -316,6 +345,90 @@ static void shard_work_fn(void *arg)
         }
         return;
     }
+    case OP_INCR: {
+        /* read-add-write inside ONE write txn. MDBX serializes write txns
+         * per env, and a given (ns,key) always routes to this one shard, so
+         * the whole RMW is atomic against every other writer — no lost
+         * updates, no duplicate monotonic ids under concurrency. */
+        MDBX_val v = {0};
+        int64_t cur = 0;
+        int r = mdbx_get(txn, dbi, &k, &v);
+        if (r == MDBX_SUCCESS) {
+            char tmp[32];
+            size_t n = v.iov_len < sizeof(tmp) - 1 ? v.iov_len : sizeof(tmp) - 1;
+            memcpy(tmp, v.iov_base, n);
+            tmp[n] = 0;
+            cur = strtoll(tmp, NULL, 10);
+        } else if (r != MDBX_NOTFOUND) {
+            mdbx_txn_abort(txn); w->rc = SHARD_INTERNAL; return;
+        }
+        int64_t next = cur + w->in_delta;
+        char nbuf[32];
+        int nlen = snprintf(nbuf, sizeof(nbuf), "%lld", (long long)next);
+        MDBX_val nv = {.iov_base = nbuf, .iov_len = (size_t)nlen};
+        if (mdbx_put(txn, dbi, &k, &nv, MDBX_UPSERT) != MDBX_SUCCESS ||
+            mdbx_txn_commit(txn) != MDBX_SUCCESS) {
+            mdbx_txn_abort(txn); w->rc = SHARD_INTERNAL; return;
+        }
+        w->out_i64 = next;
+        w->rc = SHARD_OK;
+        return;
+    }
+    case OP_PUT_IF_ABSENT: {
+        /* MDBX_NOOVERWRITE makes the insert-or-fail atomic: KEYEXIST when
+         * the key is already present, SUCCESS when this txn created it. */
+        MDBX_val v = {.iov_base = (void *)w->value,
+                      .iov_len = w->value ? strlen(w->value) : 0};
+        int r = mdbx_put(txn, dbi, &k, &v, MDBX_NOOVERWRITE);
+        if (r == MDBX_SUCCESS) {
+            if (mdbx_txn_commit(txn) != MDBX_SUCCESS) { w->rc = SHARD_INTERNAL; return; }
+            w->out_i = 1;  /* inserted */
+            w->rc = SHARD_OK;
+        } else if (r == MDBX_KEYEXIST) {
+            mdbx_txn_abort(txn);
+            w->out_i = 0;  /* already existed */
+            w->rc = SHARD_OK;
+        } else {
+            mdbx_txn_abort(txn);
+            w->rc = SHARD_INTERNAL;
+        }
+        return;
+    }
+    case OP_CAS: {
+        /* Optimistic swap: replace only if the stored bytes still equal
+         * `expected`. Lets a caller read a record, then commit a mutation
+         * guaranteed not to clobber a concurrent change (a pipeline runner
+         * leasing a job exactly once, an owner-index append-without-loss).
+         * An EMPTY `expected` matches an absent or empty key, so the same
+         * primitive both creates the first value and updates an existing
+         * one. */
+        MDBX_val v = {0};
+        int r = mdbx_get(txn, dbi, &k, &v);
+        if (r != MDBX_SUCCESS && r != MDBX_NOTFOUND) {
+            mdbx_txn_abort(txn); w->rc = SHARD_INTERNAL; return;
+        }
+        size_t elen = w->expected ? strlen(w->expected) : 0;
+        int cur_empty = (r == MDBX_NOTFOUND) || (v.iov_len == 0);
+        int match = (elen == 0)
+                    ? cur_empty
+                    : (r == MDBX_SUCCESS && v.iov_len == elen &&
+                       memcmp(v.iov_base, w->expected, elen) == 0);
+        if (!match) {
+            mdbx_txn_abort(txn);
+            w->out_i = 0;  /* not swapped */
+            w->rc = SHARD_OK;
+            return;
+        }
+        MDBX_val nv = {.iov_base = (void *)w->value,
+                       .iov_len = w->value ? strlen(w->value) : 0};
+        if (mdbx_put(txn, dbi, &k, &nv, MDBX_UPSERT) != MDBX_SUCCESS ||
+            mdbx_txn_commit(txn) != MDBX_SUCCESS) {
+            mdbx_txn_abort(txn); w->rc = SHARD_INTERNAL; return;
+        }
+        w->out_i = 1;  /* swapped */
+        w->rc = SHARD_OK;
+        return;
+    }
     default:
         mdbx_txn_abort(txn);
         w->rc = SHARD_INTERNAL;
@@ -331,7 +444,15 @@ static void shard_run(struct shard_work *w)
     struct yloop *l = e ? picomesh_engine_loop(e) : NULL;
     if (!l) { shard_work_fn(w); return; }
     struct picomesh_void_result r = yloop_run_blocking(l, shard_work_fn, w);
-    if (PICOMESH_IS_ERR(r)) { picomesh_error_destroy(r.error); shard_work_fn(w); }
+    if (PICOMESH_IS_ERR(r)) {
+        /* Offload failed — fall back to running inline so the op still
+         * completes, but make the failure visible: it can signal a degraded
+         * event loop / worker pool, not just a transient hiccup. */
+        ywarn("sharded_storage: worker-pool offload failed (%s) — running inline",
+              r.error.msg ? r.error.msg : "?");
+        picomesh_error_destroy(r.error);
+        shard_work_fn(w);
+    }
 }
 
 static const char *shard_rc_msg(enum shard_rc rc)
@@ -393,6 +514,18 @@ struct picomesh_string_result sharded_storage_db_get_impl(struct ctx *ctx, struc
     double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
     ydebug("span trace=%s op=shard.get.%s dur_us=%.0f", trace ? trace : "-", context, span_us);
     yspan_record("shard.get", span_us);
+    if (w.rc == SHARD_NOT_FOUND) {
+        /* Not-found is a NORMAL result, DISTINCT from a backend failure.
+         * Return an empty string on success so a caller can tell "absent"
+         * (value[0]==0) from a real storage error (IS_ERR) — instead of the
+         * old behaviour where both came back as an error and callers
+         * silently treated every failure as "missing". A genuinely
+         * empty-valued key is indistinguishable from absent here; callers
+         * that must tell those apart use db_exists. */
+        char *empty = calloc(1, 1);
+        if (!empty) return PICOMESH_ERR(picomesh_string, "db_get: out of memory");
+        return PICOMESH_OK(picomesh_string, empty);
+    }
     if (w.rc != SHARD_OK) return PICOMESH_ERR(picomesh_string, shard_err_key(w.rc, context, key));
     return PICOMESH_OK(picomesh_string, w.out_str);
 }
@@ -431,6 +564,65 @@ struct picomesh_size_result sharded_storage_db_count_impl(struct ctx *ctx, struc
     shard_run(&w);
     if (w.rc != SHARD_OK) return PICOMESH_ERR(picomesh_size, shard_rc_msg(w.rc));
     return PICOMESH_OK(picomesh_size, w.out_sz);
+}
+
+/* Atomic read-add-write of a decimal-int64 counter; returns the value
+ * AFTER the add. The only safe way to allocate monotonic ids or bump
+ * shared counters once the gateway/backends run multiple workers — the
+ * old get→+1→set pair over two RPCs raced and lost updates / duplicated
+ * ids. A missing key counts as 0. */
+PICOMESH_CLASS_ANNOTATE("override@sharded_storage:db:db_incr")
+struct picomesh_int64_result sharded_storage_db_incr_impl(struct ctx *ctx, struct object *obj,
+                                                       struct yheaders *hdrs,
+                                                       const char *context, const char *key,
+                                                       int64_t delta)
+{
+    (void)ctx; (void)obj;
+    const char *trace = hdrs ? yheaders_get(hdrs, "trace_id") : NULL;
+    struct shard_work w = {.op = OP_INCR, .ns = context, .key = key, .in_delta = delta};
+    double span_start = picomesh_ytime_monotonic_sec();
+    shard_run(&w);
+    double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
+    ydebug("span trace=%s op=shard.incr.%s dur_us=%.0f", trace ? trace : "-", context, span_us);
+    yspan_record("shard.incr", span_us);
+    if (w.rc != SHARD_OK) return PICOMESH_ERR(picomesh_int64, shard_err_key(w.rc, context, key));
+    return PICOMESH_OK(picomesh_int64, w.out_i64);
+}
+
+/* Insert (context,key)=value only if the key is absent. Returns 1 when
+ * this call created it, 0 when it already existed. Atomic — the basis for
+ * unique records like `repo:<rid>` where two concurrent creates must not
+ * both believe they won. */
+PICOMESH_CLASS_ANNOTATE("override@sharded_storage:db:db_put_if_absent")
+struct picomesh_int_result sharded_storage_db_put_if_absent_impl(struct ctx *ctx, struct object *obj,
+                                                              struct yheaders *hdrs,
+                                                              const char *context, const char *key,
+                                                              const char *value)
+{
+    (void)ctx; (void)obj; (void)hdrs;
+    struct shard_work w = {.op = OP_PUT_IF_ABSENT, .ns = context, .key = key, .value = value};
+    shard_run(&w);
+    if (w.rc != SHARD_OK) return PICOMESH_ERR(picomesh_int, shard_err_key(w.rc, context, key));
+    return PICOMESH_OK(picomesh_int, w.out_i);
+}
+
+/* Compare-and-set: replace the value only if the stored bytes still equal
+ * `expected`. Returns 1 when swapped, 0 when the current value differed (or
+ * the key was absent). Optimistic concurrency for read-decide-write flows
+ * such as leasing a pipeline job exactly once. */
+PICOMESH_CLASS_ANNOTATE("override@sharded_storage:db:db_compare_and_set")
+struct picomesh_int_result sharded_storage_db_compare_and_set_impl(struct ctx *ctx, struct object *obj,
+                                                                struct yheaders *hdrs,
+                                                                const char *context, const char *key,
+                                                                const char *expected,
+                                                                const char *replacement)
+{
+    (void)ctx; (void)obj; (void)hdrs;
+    struct shard_work w = {.op = OP_CAS, .ns = context, .key = key,
+                           .expected = expected, .value = replacement};
+    shard_run(&w);
+    if (w.rc != SHARD_OK) return PICOMESH_ERR(picomesh_int, shard_err_key(w.rc, context, key));
+    return PICOMESH_OK(picomesh_int, w.out_i);
 }
 
 #include "sharded_storage.gen.c"

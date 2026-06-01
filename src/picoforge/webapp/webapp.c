@@ -1451,14 +1451,14 @@ static long rpc_result_int(struct yloop *loop, const struct serve_ud *sud,
     return out;
 }
 
-/* Resolve the opaque session id (numeric cookie value) back to a uid via
- * the gateway. 0 when unknown / not signed in. */
+/* Resolve the opaque session token (hex-string cookie value) back to a uid
+ * via the gateway. 0 when unknown / not signed in. */
 static uint32_t resolve_uid(struct yloop *loop, const struct serve_ud *sud,
                             const char *sid)
 {
     if (!sid || !*sid) return 0;
-    char args[32];
-    snprintf(args, sizeof(args), "[%s]", sid);
+    char args[96];
+    snprintf(args, sizeof(args), "[\"%s\"]", sid);
     long uid = rpc_result_int(loop, sud, sid, "session.store.lookup", args, 0);
     return uid > 0 ? (uint32_t)uid : 0;
 }

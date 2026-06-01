@@ -60,6 +60,8 @@ static MDBX_env *mdbx_shared_env(void)
     pthread_mutex_lock(&init_mu);
     if (env || tried) { pthread_mutex_unlock(&init_mu); return env; }
 
+    /* The data directory is REQUIRED config — no hardcoded default, so a
+     * misconfigured node can't silently write its db to a shared/wrong path. */
     const char *path = NULL;
     struct picomesh_engine *e = picomesh_active_engine();
     if (e) {
@@ -70,7 +72,13 @@ static MDBX_env *mdbx_shared_env(void)
             if (s && *s) path = s;
         }
     }
-    if (!path) path = "/tmp/picomesh-storage.mdbx";
+    if (!path || !*path) {
+        ywarn("storage[mdbx]: required config 'storage.mdbx_path' is missing — "
+              "refusing to fall back to a shared default");
+        tried = 1;
+        pthread_mutex_unlock(&init_mu);
+        return NULL;
+    }
 
     if (mkdir(path, 0700) != 0 && errno != EEXIST) {
         ywarn("storage[mdbx]: mkdir(%s) failed: %s", path, strerror(errno));
