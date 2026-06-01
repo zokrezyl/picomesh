@@ -32,26 +32,42 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <time.h>
 
 #define WEBAPP_REQ_BUF      (256 * 1024)
 #define WEBAPP_MAX_HEADERS  64
 
 /* Active backend services discovered from the gateway's /_describe.
- * Populated once (lazily, on the first request that needs it) and reused
- * for the process lifetime — the mesh's service set is fixed at bring-up.
- * Pages gate on this: a service the mesh isn't running yields no page. */
+ * Cached and refreshed on a TTL (see WEBAPP_SERVICES_TTL_SEC): the mesh can
+ * activate or reconcile services at runtime, so a process-lifetime cache
+ * would go stale. Pages gate on this set: a service the mesh isn't running
+ * yields no page. */
 struct service_set {
-    char names[32][64];
-    char sources[32][32];
+    char   names[32][64];
+    char   sources[32][32];
     size_t n;
-    int loaded;
+    int    loaded;
+    time_t loaded_at;
 };
+
+#define WEBAPP_SERVICES_TTL_SEC 30
 
 struct serve_ud {
     struct yloop *loop;
     const struct webapp_config *cfg;
     struct gateway_url gw;
     struct service_set services;
+};
+
+/* The caller's authenticated identity, resolved by the gateway from the
+ * opaque session token (see resolve_claims). This — NOT the forgeable
+ * picomesh-uname cookie — is the authority for admin gating and ownership.
+ * uid 0 ⇒ anonymous. */
+struct claims {
+    uint32_t uid;
+    char     username[64];
+    int      is_admin;
 };
 
 static int header_match(const struct phr_header *hdrs, size_t n,
@@ -84,6 +100,7 @@ static const char *http_reason(int status)
     case 200: return "OK";
     case 303: return "See Other";
     case 400: return "Bad Request";
+    case 403: return "Forbidden";
     case 404: return "Not Found";
     case 405: return "Method Not Allowed";
     case 500: return "Internal Server Error";
@@ -228,6 +245,13 @@ static int serve_static(struct yloop_stream *s, const char *root,
     if (strncmp(rel, "/static/", 8) == 0) rel += 8;
     else if (*rel == '/') rel += 1;
     if (!*rel || strstr(rel, "..")) return 0;
+
+    /* Never serve HTML from the static tree. The webapp renders every page;
+     * static holds only assets (css/js/fonts/…). This guarantees no
+     * prototype/standalone HTML can ever be shipped as product UI. */
+    size_t rlen = strlen(rel);
+    if (rlen >= 5 && strcasecmp(rel + rlen - 5, ".html") == 0) return 0;
+    if (rlen >= 4 && strcasecmp(rel + rlen - 4, ".htm") == 0) return 0;
 
     char path[1024];
     int n = snprintf(path, sizeof(path), "%s/%s", root, rel);
@@ -685,18 +709,27 @@ static uint32_t repo_hash(const char *account, const char *name);
  * the page content. `uname` NULL/"" → anonymous (brand + sign in only).
  * All classes are defined in the served /static/style.css. */
 
-static void render_topbar(struct buf *b, const char *uname)
+static void render_topbar(struct buf *b, const char *uname, const char *active_nav,
+                          int is_admin)
 {
+    int in_admin_area = active_nav && strncmp(active_nav, "admin-", 6) == 0;
     buf_puts(b, "<header class=\"topbar\">"
                 "<a class=\"brand\" href=\"/repos\">picoforge</a>");
     if (uname && *uname) {
         buf_puts(b, "<form class=\"global-search\" method=\"get\" action=\"/search\">"
                     "<input name=\"q\" placeholder=\"Search or jump to\xe2\x80\xa6\" "
                     "aria-label=\"Search\"></form>"
-                    "<nav class=\"top-actions\">"
-                    "<a class=\"btn small\" href=\"/repos/new\">New</a>"
-                    "<a href=\"/admin\">Admin</a>"
-                    "<span class=\"user\">");
+                    "<nav class=\"top-actions\">");
+        /* "New" is an app-space action — omit it in the admin area so admin
+         * chrome doesn't carry user-space project actions. */
+        if (!in_admin_area)
+            buf_puts(b, "<a class=\"btn small\" href=\"/repos/new\">New</a>");
+        /* Only a site admin gets the Admin entry point — a regular user must
+         * not even see the link (the pages 403 anyway, but the nav must not
+         * advertise admin access). */
+        if (is_admin)
+            buf_puts(b, "<a href=\"/admin\">Admin</a>");
+        buf_puts(b, "<span class=\"user\">");
         buf_esc(b, uname);
         buf_puts(b, "</span>"
                     "<form method=\"post\" action=\"/logout\">"
@@ -750,7 +783,7 @@ static void render_sidebar(struct buf *b, const char *active)
 /* Open the full shell: <head> + topbar + sidebar + <main class=content>.
  * `active_nav` highlights the matching sidebar item. */
 static void render_shell_open(struct buf *b, const char *title, const char *uname,
-                              const char *active_nav)
+                              const char *active_nav, int is_admin)
 {
     buf_puts(b, "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
                 "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
@@ -758,7 +791,7 @@ static void render_shell_open(struct buf *b, const char *title, const char *unam
     buf_esc(b, title);
     buf_puts(b, " \xc2\xb7 picoforge</title>"
                 "<link rel=\"stylesheet\" href=\"/static/style.css\"></head><body>");
-    render_topbar(b, uname);
+    render_topbar(b, uname, active_nav, is_admin);
     buf_puts(b, "<div class=\"app-shell\">");
     render_sidebar(b, active_nav);
     buf_puts(b, "<main class=\"content\">");
@@ -792,6 +825,40 @@ static void render_page_header(struct buf *b, const char *title,
         buf_puts(b, "</div>");
     }
     buf_puts(b, "</header>");
+}
+
+/* Render a styled 403 page inside the app shell and send it with a real
+ * 403 status (render_shell_close hardcodes 200, so we assemble + send it
+ * here). `uname` is the trustworthy display name (may be ""). */
+static void send_forbidden(struct yloop_stream *s, const char *uname, int keep_alive)
+{
+    struct buf b; buf_init(&b);
+    render_shell_open(&b, "Forbidden", uname, NULL, /*is_admin=*/0);
+    render_page_header(&b, "Forbidden",
+                       "You do not have permission to view this page.", NULL);
+    buf_puts(&b, "<p class=\"muted\">This area is restricted to site administrators. "
+                 "<a href=\"/repos\">Back to your repositories</a>.</p>"
+                 "</main></div>"
+                 "<footer class=\"app-footer\"><span>picoforge \xc2\xb7 served by "
+                 "picoforge-webapp via the gateway <code>/_rpc</code></span></footer>"
+                 "</body></html>");
+    send_response(s, 403, "text/html; charset=utf-8", b.data ? b.data : "", b.len,
+                  NULL, keep_alive);
+    buf_free(&b);
+}
+
+/* Gate an admin page on a signed-in site admin. Returns 1 when the caller
+ * may proceed; otherwise it has already written the response (redirect to
+ * /login for an anonymous caller, 403 for a signed-in non-admin) and the
+ * caller must return without rendering admin content. */
+static int require_admin(struct yloop_stream *s, const struct claims *cl, int keep_alive)
+{
+    if (!cl->uid) { send_redirect(s, "/login", NULL, keep_alive); return 0; }
+    if (!cl->is_admin) {
+        send_forbidden(s, cl->username[0] ? cl->username : NULL, keep_alive);
+        return 0;
+    }
+    return 1;
 }
 
 /* Repository header: breadcrumb + repo title + repo id, plus the standard
@@ -884,25 +951,24 @@ static void panel_close(struct buf *b) { buf_puts(b, "</div></section>"); }
  * `sid` NULL/empty → not signed in → bounce to /login. */
 static void route_repos_get(struct yloop *loop, struct yloop_stream *s,
                             const struct serve_ud *sud, const char *sid,
-                            const char *uname, int keep_alive)
+                            const char *uname, uint32_t owner_uid, int is_admin,
+                            int keep_alive)
 {
-    if (!sid || !*sid) {
+    if (!sid || !*sid || !owner_uid) {
         send_redirect(s, "/login", NULL, keep_alive);
         return;
     }
 
     long total = rpc_result_int(loop, sud, sid, "git_repo.store.count_total", "[]", -1);
 
-    /* List THIS user's repos by name (newline-separated). */
-    char *names = NULL;
-    if (uname && *uname) {
-        char args[48];
-        snprintf(args, sizeof(args), "[%u]", hash_username(uname));
-        names = rpc_result_str(loop, sud, sid, "git_repo.store.list_for_owner", args, NULL);
-    }
+    /* List THIS user's repos by name (newline-separated). The owner key is
+     * the session-resolved uid, not anything cookie-derived. */
+    char args[48];
+    snprintf(args, sizeof(args), "[%u]", owner_uid);
+    char *names = rpc_result_str(loop, sud, sid, "git_repo.store.list_for_owner", args, NULL);
 
     struct buf b; buf_init(&b);
-    render_shell_open(&b, "Repositories", uname, "projects");
+    render_shell_open(&b, "Repositories", uname, "projects", is_admin);
     render_page_header(&b, "Repositories", "Repositories you own across the mesh.",
                        "<a class=\"btn primary\" href=\"/repos/new\">New repository</a>");
 
@@ -1091,7 +1157,7 @@ static int parse_repo_path(const char *path, size_t path_len,
 static void route_repo_browse(struct yloop *loop, struct yloop_stream *s,
                               const struct serve_ud *sud, const char *sid,
                               const char *uname, const char *acct, const char *repo,
-                              const char *full_path, int keep_alive)
+                              const char *full_path, int is_admin, int keep_alive)
 {
     uint32_t rid = repo_hash(acct, repo);
     char *dir = query_get(full_path, "dir");
@@ -1110,7 +1176,7 @@ static void route_repo_browse(struct yloop *loop, struct yloop_stream *s,
     struct buf b; buf_init(&b);
     char title[160];
     snprintf(title, sizeof(title), "%s/%s", acct, repo);
-    render_shell_open(&b, title, uname, "projects");
+    render_shell_open(&b, title, uname, "projects", is_admin);
     render_project_header(&b, acct, repo, rid);
     render_project_tabs(&b, acct, repo, "code", ic, rc);
 
@@ -1187,7 +1253,8 @@ static void route_repo_browse(struct yloop *loop, struct yloop_stream *s,
 static void render_editor_page(struct yloop_stream *s, const char *uname,
                                const char *acct,
                                const char *repo, const char *path,
-                               const char *content, int is_new, int keep_alive)
+                               const char *content, int is_new, int is_admin,
+                               int keep_alive)
 {
     struct buf b; buf_init(&b);
     char title[200];
@@ -1195,7 +1262,7 @@ static void render_editor_page(struct yloop_stream *s, const char *uname,
     /* render_shell_open emits the topbar + sidebar + <main>; then the
      * Monaco stylesheet (vendored under /static — no CDN, the in-browser
      * VM is offline). */
-    render_shell_open(&b, title, uname, "projects");
+    render_shell_open(&b, title, uname, "projects", is_admin);
     buf_puts(&b,
         "<link rel=\"stylesheet\" href=\"/static/vendor/monaco/vs/editor/editor.main.css\">");
 
@@ -1260,7 +1327,7 @@ static void route_repo_edit_get(struct yloop *loop, struct yloop_stream *s,
                                 const struct serve_ud *sud, const char *sid,
                                 const char *uname, const char *acct, const char *repo,
                                 const char *verb, const char *full_path,
-                                int keep_alive)
+                                int is_admin, int keep_alive)
 {
     if (!sid || !*sid) { send_redirect(s, "/login", NULL, keep_alive); return; }
     uint32_t rid = repo_hash(acct, repo);
@@ -1269,7 +1336,7 @@ static void route_repo_edit_get(struct yloop *loop, struct yloop_stream *s,
         char *dir = query_get(full_path, "dir");
         char seed[1024] = {0};
         if (dir && *dir) snprintf(seed, sizeof(seed), "%s/", dir);
-        render_editor_page(s, uname, acct, repo, seed, "", /*is_new=*/1, keep_alive);
+        render_editor_page(s, uname, acct, repo, seed, "", /*is_new=*/1, is_admin, keep_alive);
         free(dir);
         return;
     }
@@ -1277,7 +1344,7 @@ static void route_repo_edit_get(struct yloop *loop, struct yloop_stream *s,
     char *path = query_get(full_path, "path");
     if (!path || !*path) {
         free(path);
-        render_editor_page(s, uname, acct, repo, "", "", /*is_new=*/1, keep_alive);
+        render_editor_page(s, uname, acct, repo, "", "", /*is_new=*/1, is_admin, keep_alive);
         return;
     }
     char path_esc[1024];
@@ -1287,7 +1354,7 @@ static void route_repo_edit_get(struct yloop *loop, struct yloop_stream *s,
     int err = 0;
     char *content = rpc_result_str(loop, sud, sid, "git_repo.store.read_file", args, &err);
     render_editor_page(s, uname, acct, repo, path, content ? content : "",
-                       /*is_new=*/(content == NULL), keep_alive);
+                       /*is_new=*/(content == NULL), is_admin, keep_alive);
     free(content); free(path);
 }
 
@@ -1396,16 +1463,50 @@ static uint32_t resolve_uid(struct yloop *loop, const struct serve_ud *sud,
     return uid > 0 ? (uint32_t)uid : 0;
 }
 
+/* Resolve the caller's authenticated claims (uid, username, admin bit) via
+ * the gateway's /_whoami. The sid is forwarded by http_post as the
+ * picomesh-sid header; the gateway maps it to the live session. On any
+ * transport/parse failure the claims stay zeroed (anonymous), so pages and
+ * the admin gate fail closed. This is the ONLY identity source the webapp
+ * trusts — the picomesh-uname cookie is never an authority. */
+static void resolve_claims(struct yloop *loop, const struct serve_ud *sud,
+                           const char *sid, struct claims *out)
+{
+    memset(out, 0, sizeof(*out));
+    if (!sid || !*sid) return;
+    struct http_response resp;
+    int rc = http_post(loop, &sud->gw, "/_whoami",
+                       "application/json", NULL, sid, "", 0, &resp);
+    if (rc != 0) { http_response_free(&resp); return; }
+    if (resp.body) {
+        struct yjson_doc *doc = yjson_parse(resp.body, resp.body_len);
+        if (doc) {
+            const struct yjson_value *root = yjson_doc_root(doc);
+            out->uid = (uint32_t)yjson_as_int(yjson_object_get(root, "uid"), 0);
+            const char *u = yjson_as_string(yjson_object_get(root, "username"), NULL);
+            if (u) snprintf(out->username, sizeof(out->username), "%s", u);
+            out->is_admin = yjson_as_bool(yjson_object_get(root, "is_admin"), 0);
+            yjson_doc_free(doc);
+        }
+    }
+    http_response_free(&resp);
+}
+
 /* Populate the active-service set from the gateway's /_describe (the list
  * of {service, source} objects). Cached after the first successful fetch.
  * /_describe answers GET or POST; we POST an empty body. On failure the
  * set stays empty and pages fail closed (404) — the safe default. */
 static void services_ensure(struct yloop *loop, struct serve_ud *sud)
 {
-    if (sud->services.loaded) return;
+    time_t now = time(NULL);
+    if (sud->services.loaded &&
+        (now - sud->services.loaded_at) < WEBAPP_SERVICES_TTL_SEC)
+        return;
     struct http_response resp;
     int rc = http_post(loop, &sud->gw, "/_describe",
                        "application/json", NULL, NULL, "", 0, &resp);
+    /* Transport failure → keep the previous set (fail to the last known
+     * topology rather than dropping every page). */
     if (rc != 0) { http_response_free(&resp); return; }
     if (resp.body) {
         struct yjson_doc *doc = yjson_parse(resp.body, resp.body_len);
@@ -1413,6 +1514,8 @@ static void services_ensure(struct yloop *loop, struct serve_ud *sud)
             const struct yjson_value *root = yjson_doc_root(doc);
             const struct yjson_value *svcs = yjson_object_get(root, "services");
             size_t cnt = svcs ? yjson_array_size(svcs) : 0;
+            /* Rebuild from scratch — a refresh can add OR drop services. */
+            sud->services.n = 0;
             for (size_t i = 0; i < cnt &&
                  sud->services.n < sizeof(sud->services.names) / sizeof(sud->services.names[0]);
                  ++i) {
@@ -1426,10 +1529,19 @@ static void services_ensure(struct yloop *loop, struct serve_ud *sud)
                 }
             }
             sud->services.loaded = 1;
+            sud->services.loaded_at = now;
             yjson_doc_free(doc);
         }
     }
     http_response_free(&resp);
+}
+
+/* Force the next services_ensure to re-fetch (e.g. when the admin opens the
+ * Services page and wants the live roster, not a cached one). */
+static void services_invalidate(struct serve_ud *sud)
+{
+    sud->services.loaded = 0;
+    sud->services.loaded_at = 0;
 }
 
 static int service_active(const struct serve_ud *sud, const char *name)
@@ -1456,9 +1568,9 @@ static int is_reserved_top(const char *seg)
  * render_shell_open) and closes with render_shell_close, so the app is one
  * whole UI rather than disconnected stubs. */
 static void page_open(struct buf *b, const char *title, const char *uname,
-                      const char *active_nav)
+                      const char *active_nav, int is_admin)
 {
-    render_shell_open(b, title, uname, active_nav);
+    render_shell_open(b, title, uname, active_nav, is_admin);
 }
 static void page_close_and_send(struct yloop_stream *s, struct buf *b, int keep_alive)
 {
@@ -1469,7 +1581,8 @@ static void page_close_and_send(struct yloop_stream *s, struct buf *b, int keep_
  * name (git_repo.store.list_for_owner) + the count. */
 static void page_account_landing(struct yloop *loop, struct yloop_stream *s,
                                  const struct serve_ud *sud, const char *sid,
-                                 const char *uname, const char *acct, int keep_alive)
+                                 const char *uname, const char *acct, int is_admin,
+                                 int keep_alive)
 {
     uint32_t owner = hash_username(acct);
     char args[48];
@@ -1480,7 +1593,7 @@ static void page_account_landing(struct yloop *loop, struct yloop_stream *s,
     struct buf b; buf_init(&b);
     char title[160];
     snprintf(title, sizeof(title), "%s", acct);
-    page_open(&b, title, uname, "projects");
+    page_open(&b, title, uname, "projects", is_admin);
     render_page_header(&b, acct, "Account namespace and its repositories.", NULL);
     char meta[48];
     if (repos >= 0) snprintf(meta, sizeof(meta), "%ld owned", repos);
@@ -1511,7 +1624,7 @@ static void page_account_landing(struct yloop *loop, struct yloop_stream *s,
 static void page_repo_issues(struct yloop *loop, struct yloop_stream *s,
                              const struct serve_ud *sud, const char *sid,
                              const char *uname, const char *acct, const char *repo,
-                             const char *full_path, int keep_alive)
+                             const char *full_path, int is_admin, int keep_alive)
 {
     (void)full_path;
     uint32_t rid = repo_hash(acct, repo);
@@ -1529,7 +1642,7 @@ static void page_repo_issues(struct yloop *loop, struct yloop_stream *s,
     struct buf b; buf_init(&b);
     char title[160];
     snprintf(title, sizeof(title), "Issues — %s/%s", acct, repo);
-    page_open(&b, title, uname, "projects");
+    page_open(&b, title, uname, "projects", is_admin);
     render_project_header(&b, acct, repo, rid);
     render_project_tabs(&b, acct, repo, "issues", open_n, rc);
 
@@ -1573,7 +1686,7 @@ static void page_repo_issues(struct yloop *loop, struct yloop_stream *s,
 static void page_repo_runs(struct yloop *loop, struct yloop_stream *s,
                            const struct serve_ud *sud, const char *sid,
                            const char *uname, const char *acct, const char *repo,
-                           const char *full_path, int keep_alive)
+                           const char *full_path, int is_admin, int keep_alive)
 {
     (void)full_path;
     long q = rpc_result_int(loop, sud, sid, "git_pipeline.store.count_pending", "[]", 0);
@@ -1590,7 +1703,7 @@ static void page_repo_runs(struct yloop *loop, struct yloop_stream *s,
     struct buf b; buf_init(&b);
     char title[160];
     snprintf(title, sizeof(title), "Pipelines — %s/%s", acct, repo);
-    page_open(&b, title, uname, "projects");
+    page_open(&b, title, uname, "projects", is_admin);
     render_project_header(&b, acct, repo, rid);
     render_project_tabs(&b, acct, repo, "runs", ic, q + r);
 
@@ -1653,7 +1766,7 @@ static void page_admin_overview(struct yloop *loop, struct yloop_stream *s,
     }
 
     struct buf b; buf_init(&b);
-    render_shell_open(&b, "Admin", uname, "admin-overview");
+    render_shell_open(&b, "Admin", uname, "admin-overview", /*is_admin=*/1);
     render_page_header(&b, "Admin", "Operational overview of this picoforge deployment.", NULL);
     buf_puts(&b, "<section class=\"stats-grid\">");
     stat_tile(&b, users, "users");
@@ -1684,19 +1797,48 @@ static void page_admin_users(struct yloop *loop, struct yloop_stream *s,
                              const char *uname, int keep_alive)
 {
     long users = rpc_result_int(loop, sud, sid, "accounts.store.count", "[]", -1);
+    /* The real user roster: newline-separated "<uid>\t<username>" rows. */
+    char *list = rpc_result_str(loop, sud, sid, "accounts.store.list", "[]", NULL);
 
     struct buf b; buf_init(&b);
-    page_open(&b, "Users", uname, "admin-users");
-    render_page_header(&b, "Users", "Registered accounts and registration.", NULL);
+    page_open(&b, "Users", uname, "admin-users", /*is_admin=*/1);
+    render_page_header(&b, "Users", "Registered accounts on this deployment.", NULL);
     buf_puts(&b, "<section class=\"stats-grid\">");
     stat_tile(&b, users, "users");
     buf_puts(&b, "</section>");
-    panel_open(&b, "Create user", NULL);
-    if (users < 0) buf_puts(&b, "<p class=\"muted\">accounts service unreachable.</p>");
-    buf_puts(&b, "<form class=\"form-grid\" method=\"post\" action=\"/admin/users/register\">"
-                 "<label>uid <input type=\"number\" name=\"uid\" value=\"100\"></label>"
-                 "<button type=\"submit\" class=\"primary\">Register</button></form>");
+
+    panel_open(&b, "Registered users", NULL);
+    if (users < 0) {
+        buf_puts(&b, "<p class=\"muted\">accounts service unreachable.</p>");
+    } else {
+        int any = 0;
+        buf_puts(&b, "<table class=\"file-table\"><thead><tr><th>uid</th>"
+                     "<th>username</th></tr></thead><tbody>");
+        if (list && *list) {
+            char *save = NULL;
+            for (char *line = strtok_r(list, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+                if (!*line) continue;
+                char *tab = strchr(line, '\t');
+                const char *name = tab ? tab + 1 : "";
+                if (tab) *tab = 0;
+                any = 1;
+                buf_puts(&b, "<tr><td class=\"muted\">");
+                buf_esc(&b, line);
+                buf_puts(&b, "</td><td>");
+                buf_esc(&b, name);
+                buf_puts(&b, "</td></tr>");
+            }
+        }
+        if (!any)
+            buf_puts(&b, "<tr><td colspan=\"2\" class=\"muted\">No users registered yet.</td></tr>");
+        buf_puts(&b, "</tbody></table>");
+    }
+    buf_puts(&b, "<p class=\"muted small\">Users are created by signing up at "
+                 "<a href=\"/register\">/register</a> (username + password). Admin-side "
+                 "user creation with credentials and role assignment is not implemented "
+                 "yet.</p>");
     panel_close(&b);
+    free(list);
     page_close_and_send(s, &b, keep_alive);
 }
 
@@ -1709,7 +1851,7 @@ static void page_admin_repos(struct yloop *loop, struct yloop_stream *s,
     long total = rpc_result_int(loop, sud, sid, "git_repo.store.count_total", "[]", -1);
 
     struct buf b; buf_init(&b);
-    page_open(&b, "Repositories", uname, "admin-repos");
+    page_open(&b, "Repositories", uname, "admin-repos", /*is_admin=*/1);
     render_page_header(&b, "Repositories", "All repositories across the mesh.", NULL);
     buf_puts(&b, "<section class=\"stats-grid\">");
     stat_tile(&b, total, "repositories");
@@ -1735,7 +1877,7 @@ static void page_admin_tokens(struct yloop *loop, struct yloop_stream *s,
         : -1;
 
     struct buf b; buf_init(&b);
-    page_open(&b, "Tokens", uname, "admin-tokens");
+    page_open(&b, "Tokens", uname, "admin-tokens", /*is_admin=*/1);
     render_page_header(&b, "Tokens", "Personal access tokens issued by the gateway.", NULL);
     buf_puts(&b, "<section class=\"stats-grid\">");
     stat_tile(&b, toks, "active tokens");
@@ -1756,7 +1898,7 @@ static void page_admin_tokens(struct yloop *loop, struct yloop_stream *s,
 static void page_repo_settings(struct yloop *loop, struct yloop_stream *s,
                                const struct serve_ud *sud, const char *sid,
                                const char *uname, const char *acct, const char *repo,
-                               int keep_alive)
+                               int is_admin, int keep_alive)
 {
     uint32_t rid = repo_hash(acct, repo);
     long ic = -1, rc = -1;
@@ -1765,7 +1907,7 @@ static void page_repo_settings(struct yloop *loop, struct yloop_stream *s,
     struct buf b; buf_init(&b);
     char title[160];
     snprintf(title, sizeof(title), "Settings — %s/%s", acct, repo);
-    render_shell_open(&b, title, uname, "projects");
+    render_shell_open(&b, title, uname, "projects", is_admin);
     render_project_header(&b, acct, repo, rid);
     render_project_tabs(&b, acct, repo, "settings", ic, rc);
 
@@ -1796,7 +1938,8 @@ static void page_repo_settings(struct yloop *loop, struct yloop_stream *s,
  * Not signed in → bounce to /login. */
 static void page_search(struct yloop *loop, struct yloop_stream *s,
                         const struct serve_ud *sud, const char *sid,
-                        const char *uname, const char *full_path, int keep_alive)
+                        const char *uname, const char *full_path, int is_admin,
+                        int keep_alive)
 {
     if (!sid || !*sid || !uname || !*uname) {
         send_redirect(s, "/login", NULL, keep_alive);
@@ -1816,7 +1959,7 @@ static void page_search(struct yloop *loop, struct yloop_stream *s,
     char *names = rpc_result_str(loop, sud, sid, "git_repo.store.list_for_owner", args, NULL);
 
     struct buf b; buf_init(&b);
-    page_open(&b, "Search", uname, "projects");
+    page_open(&b, "Search", uname, "projects", is_admin);
     render_page_header(&b, "Search", "Find a repository by name.", NULL);
     char metabuf[180];
     if (q && *q) snprintf(metabuf, sizeof(metabuf),
@@ -1854,11 +1997,12 @@ static void page_search(struct yloop *loop, struct yloop_stream *s,
 
 /* GET /repos/new — the create-repository form (the POST action is
  * webapp_repos_new on the same path). Needs a signed-in user. */
-static void page_repos_new_form(struct yloop_stream *s, const char *uname, int keep_alive)
+static void page_repos_new_form(struct yloop_stream *s, const char *uname,
+                                int is_admin, int keep_alive)
 {
     if (!uname || !*uname) { send_redirect(s, "/login", NULL, keep_alive); return; }
     struct buf b; buf_init(&b);
-    render_shell_open(&b, "New repository", uname, "projects");
+    render_shell_open(&b, "New repository", uname, "projects", is_admin);
     render_page_header(&b, "New repository", "Create a repository you own.", NULL);
     panel_open(&b, "Repository details", NULL);
     buf_puts(&b, "<form class=\"form-grid\" method=\"post\" action=\"/repos/new\">"
@@ -1870,12 +2014,17 @@ static void page_repos_new_form(struct yloop_stream *s, const char *uname, int k
 }
 
 /* GET /admin/services — the live service roster discovered from the
- * gateway's /_describe (cached in sud->services). */
-static void page_admin_services(struct yloop_stream *s, const struct serve_ud *sud,
+ * gateway's /_describe. Force a fresh fetch here so the admin sees the
+ * current topology, not whatever was cached within the TTL window. */
+static void page_admin_services(struct yloop *loop, struct yloop_stream *s,
+                                struct serve_ud *sud,
                                 const char *uname, int keep_alive)
 {
+    services_invalidate(sud);
+    services_ensure(loop, sud);
+
     struct buf b; buf_init(&b);
-    render_shell_open(&b, "Services", uname, "admin-services");
+    render_shell_open(&b, "Services", uname, "admin-services", /*is_admin=*/1);
     render_page_header(&b, "Services",
                        "Active services discovered from the gateway /_describe.", NULL);
     panel_open(&b, "Active services", "from gateway /_describe");
@@ -1896,13 +2045,13 @@ static void page_admin_services(struct yloop_stream *s, const struct serve_ud *s
 /* GET /dashboard/runs — global pipeline activity across the mesh. */
 static void page_dashboard_runs(struct yloop *loop, struct yloop_stream *s,
                                 const struct serve_ud *sud, const char *sid,
-                                const char *uname, int keep_alive)
+                                const char *uname, int is_admin, int keep_alive)
 {
     long q = rpc_result_int(loop, sud, sid, "git_pipeline.store.count_pending", "[]", 0);
     long r = rpc_result_int(loop, sud, sid, "git_pipeline.store.count_running", "[]", 0);
     long d = rpc_result_int(loop, sud, sid, "git_pipeline.store.count_done",    "[]", 0);
     struct buf b; buf_init(&b);
-    render_shell_open(&b, "Pipelines", uname, "runs");
+    render_shell_open(&b, "Pipelines", uname, "runs", is_admin);
     render_page_header(&b, "Pipelines", "Pipeline activity across the mesh.", NULL);
     panel_open(&b, "Pipeline runs", "queued, running, finished");
     buf_printf(&b,
@@ -1920,14 +2069,14 @@ static void page_dashboard_runs(struct yloop *loop, struct yloop_stream *s,
  * (no global list API yet; aggregate per-repo counts). */
 static void page_dashboard_issues(struct yloop *loop, struct yloop_stream *s,
                                   const struct serve_ud *sud, const char *sid,
-                                  const char *uname, int keep_alive)
+                                  const char *uname, int is_admin, int keep_alive)
 {
     char args[48];
     snprintf(args, sizeof(args), "[%u]", hash_username(uname));
     char *names = rpc_result_str(loop, sud, sid, "git_repo.store.list_for_owner", args, NULL);
 
     struct buf b; buf_init(&b);
-    render_shell_open(&b, "Issues", uname, "issues");
+    render_shell_open(&b, "Issues", uname, "issues", is_admin);
     render_page_header(&b, "Issues", "Open issues across your repositories.", NULL);
     panel_open(&b, "By repository", NULL);
     int any = 0;
@@ -1969,10 +2118,13 @@ static void post_issue_new(struct yloop *loop, struct yloop_stream *s,
                            const struct serve_ud *sud, const char *sid,
                            const char *acct, const char *repo, int keep_alive)
 {
-    uint32_t rid = repo_hash(acct, repo);
+    /* No valid session → no mutation. Never attribute an issue to a
+     * fallback uid; an unresolved actor is an auth failure. */
     uint32_t uid = resolve_uid(loop, sud, sid);
+    if (!uid) { send_redirect(s, "/login", NULL, keep_alive); return; }
+    uint32_t rid = repo_hash(acct, repo);
     char args[64];
-    snprintf(args, sizeof(args), "[%u,%u]", rid, uid ? uid : 1u);
+    snprintf(args, sizeof(args), "[%u,%u]", rid, uid);
     rpc_result_int(loop, sud, sid, "issues.store.open", args, -1);
     char where[300];
     snprintf(where, sizeof(where), "/%s/%s/issues", acct, repo);
@@ -1984,6 +2136,7 @@ static void post_issue_close(struct yloop *loop, struct yloop_stream *s,
                              const char *acct, const char *repo,
                              const char *body, size_t body_len, int keep_alive)
 {
+    if (!resolve_uid(loop, sud, sid)) { send_redirect(s, "/login", NULL, keep_alive); return; }
     char *iid_s = form_get(body, body_len, "issue_id");
     if (iid_s && *iid_s) {
         char args[48];
@@ -2000,6 +2153,7 @@ static void post_run_new(struct yloop *loop, struct yloop_stream *s,
                          const struct serve_ud *sud, const char *sid,
                          const char *acct, const char *repo, int keep_alive)
 {
+    if (!resolve_uid(loop, sud, sid)) { send_redirect(s, "/login", NULL, keep_alive); return; }
     char args[48];
     snprintf(args, sizeof(args), "[%u]", repo_hash(acct, repo));
     rpc_result_int(loop, sud, sid, "git_pipeline.store.enqueue", args, -1);
@@ -2013,6 +2167,7 @@ static void post_run_lease(struct yloop *loop, struct yloop_stream *s,
                            const char *acct, const char *repo,
                            const char *body, size_t body_len, int keep_alive)
 {
+    if (!resolve_uid(loop, sud, sid)) { send_redirect(s, "/login", NULL, keep_alive); return; }
     char *runner_s = form_get(body, body_len, "runner");
     unsigned long runner = runner_s && *runner_s ? strtoul(runner_s, NULL, 10) : 1;
     if (!runner) runner = 1;
@@ -2050,10 +2205,13 @@ static void relay_post(struct yloop *loop, struct yloop_stream *s,
  * which a header-only relay doesn't carry. Then bounce to /repos. */
 static void webapp_repos_new(struct yloop *loop, struct yloop_stream *s,
                              const struct serve_ud *sud, const char *sid,
-                             const char *uname, const char *body, size_t body_len,
-                             int keep_alive)
+                             const char *body, size_t body_len, int keep_alive)
 {
-    if (!sid || !*sid || !uname || !*uname) {
+    /* Owner is the session identity, never a cookie. No valid session →
+     * no repo creation. */
+    struct claims cl;
+    resolve_claims(loop, sud, sid, &cl);
+    if (!cl.uid || !cl.username[0]) {
         send_redirect(s, "/login", NULL, keep_alive);
         return;
     }
@@ -2061,10 +2219,10 @@ static void webapp_repos_new(struct yloop *loop, struct yloop_stream *s,
     if (name && *name) {
         char name_esc[96], uname_esc[96];
         if (json_escape(name_esc, sizeof(name_esc), name) &&
-            json_escape(uname_esc, sizeof(uname_esc), uname)) {
+            json_escape(uname_esc, sizeof(uname_esc), cl.username)) {
             char args[256];
             snprintf(args, sizeof(args), "[%u,\"%s\",\"%s\"]",
-                     hash_username(uname), uname_esc, name_esc);
+                     cl.uid, uname_esc, name_esc);
             rpc_result_int(loop, sud, sid, "git_repo.store.make", args, -1);
         }
     }
@@ -2207,7 +2365,18 @@ static void serve_one(struct yloop *l, struct yloop_stream *s, void *ud)
         } else {
             services_ensure(l, sud);
             char *sid = cookie_get(headers, num_headers, "picomesh-sid");
-            char *uname = cookie_get(headers, num_headers, "picomesh-uname");
+            char *uname_cookie = cookie_get(headers, num_headers, "picomesh-uname");
+
+            /* Trustworthy identity for this request, resolved by the gateway
+             * from the live session. The picomesh-uname cookie is only a
+             * cosmetic fallback for the display name — never an authority for
+             * ownership or admin access. Anonymous callers render as such even
+             * if a stale/forged uname cookie is present. */
+            struct claims cl;
+            resolve_claims(l, sud, sid, &cl);
+            const char *who = cl.uid
+                ? (cl.username[0] ? cl.username : (uname_cookie ? uname_cookie : ""))
+                : "";
 
             /* Full NUL-terminated path (query kept, for ?dir/?path). */
             char fp[1024];
@@ -2216,33 +2385,42 @@ static void serve_one(struct yloop *l, struct yloop_stream *s, void *ud)
 
             char acct[128], repo[128], verb[32];
             if (path_equals(path, path_len, "/repos")) {
-                if (service_active(sud, "git_repo")) route_repos_get(l, s, sud, sid, uname, keep_alive);
+                if (service_active(sud, "git_repo")) route_repos_get(l, s, sud, sid, who, cl.uid, cl.is_admin, keep_alive);
                 else send_text(s, 404, "no such page (git_repo not active)\n", keep_alive);
             } else if (path_equals(path, path_len, "/search") ||
                        starts_with(path, path_len, "/search?")) {
-                if (service_active(sud, "git_repo")) page_search(l, s, sud, sid, uname, fp, keep_alive);
+                if (service_active(sud, "git_repo")) page_search(l, s, sud, sid, who, fp, cl.is_admin, keep_alive);
                 else send_text(s, 404, "no such page (git_repo not active)\n", keep_alive);
             } else if (path_equals(path, path_len, "/repos/new")) {
-                if (service_active(sud, "git_repo")) page_repos_new_form(s, uname, keep_alive);
+                if (service_active(sud, "git_repo")) page_repos_new_form(s, who, cl.is_admin, keep_alive);
                 else send_text(s, 404, "no such page (git_repo not active)\n", keep_alive);
-            } else if (path_equals(path, path_len, "/admin")) {
-                page_admin_overview(l, s, sud, sid, uname, keep_alive);
-            } else if (path_equals(path, path_len, "/admin/users")) {
-                if (service_active(sud, "accounts")) page_admin_users(l, s, sud, sid, uname, keep_alive);
-                else send_text(s, 404, "no such page (accounts not active)\n", keep_alive);
-            } else if (path_equals(path, path_len, "/admin/repos")) {
-                if (service_active(sud, "git_repo")) page_admin_repos(l, s, sud, sid, uname, keep_alive);
-                else send_text(s, 404, "no such page (git_repo not active)\n", keep_alive);
-            } else if (path_equals(path, path_len, "/admin/tokens")) {
-                page_admin_tokens(l, s, sud, sid, uname, keep_alive);
-            } else if (path_equals(path, path_len, "/admin/services")) {
-                page_admin_services(s, sud, uname, keep_alive);
+            } else if (path_equals(path, path_len, "/admin") ||
+                       starts_with(path, path_len, "/admin/")) {
+                /* Admin space: prove a signed-in site admin BEFORE rendering
+                 * any admin content. Anonymous → /login; non-admin → 403. */
+                if (require_admin(s, &cl, keep_alive)) {
+                    if (path_equals(path, path_len, "/admin")) {
+                        page_admin_overview(l, s, sud, sid, who, keep_alive);
+                    } else if (path_equals(path, path_len, "/admin/users")) {
+                        if (service_active(sud, "accounts")) page_admin_users(l, s, sud, sid, who, keep_alive);
+                        else send_text(s, 404, "no such page (accounts not active)\n", keep_alive);
+                    } else if (path_equals(path, path_len, "/admin/repos")) {
+                        if (service_active(sud, "git_repo")) page_admin_repos(l, s, sud, sid, who, keep_alive);
+                        else send_text(s, 404, "no such page (git_repo not active)\n", keep_alive);
+                    } else if (path_equals(path, path_len, "/admin/tokens")) {
+                        page_admin_tokens(l, s, sud, sid, who, keep_alive);
+                    } else if (path_equals(path, path_len, "/admin/services")) {
+                        page_admin_services(l, s, sud, who, keep_alive);
+                    } else {
+                        send_text(s, 404, "not found\n", keep_alive);
+                    }
+                }
             } else if (path_equals(path, path_len, "/dashboard/issues") ||
                        starts_with(path, path_len, "/dashboard/issues?")) {
-                if (service_active(sud, "git_repo")) page_dashboard_issues(l, s, sud, sid, uname, keep_alive);
+                if (service_active(sud, "git_repo")) page_dashboard_issues(l, s, sud, sid, who, cl.is_admin, keep_alive);
                 else send_text(s, 404, "no such page (git_repo not active)\n", keep_alive);
             } else if (path_equals(path, path_len, "/dashboard/runs")) {
-                if (service_active(sud, "git_pipeline")) page_dashboard_runs(l, s, sud, sid, uname, keep_alive);
+                if (service_active(sud, "git_pipeline")) page_dashboard_runs(l, s, sud, sid, who, cl.is_admin, keep_alive);
                 else send_text(s, 404, "no such page (git_pipeline not active)\n", keep_alive);
             } else if (parse_repo_path(path, path_len, acct, sizeof(acct),
                                        repo, sizeof(repo), verb, sizeof(verb))) {
@@ -2254,11 +2432,11 @@ static void serve_one(struct yloop *l, struct yloop_stream *s, void *ud)
                 } else if (!service_active(sud, rt->service)) {
                     send_text(s, 404, "no such page (service not active)\n", keep_alive);
                 } else switch (rt->page) {
-                case RP_BROWSE:   route_repo_browse(l, s, sud, sid, uname, acct, repo, fp, keep_alive); break;
-                case RP_ISSUES:   page_repo_issues(l, s, sud, sid, uname, acct, repo, fp, keep_alive); break;
-                case RP_RUNS:     page_repo_runs(l, s, sud, sid, uname, acct, repo, fp, keep_alive);   break;
-                case RP_EDIT:     route_repo_edit_get(l, s, sud, sid, uname, acct, repo, verb, fp, keep_alive); break;
-                case RP_SETTINGS: page_repo_settings(l, s, sud, sid, uname, acct, repo, keep_alive); break;
+                case RP_BROWSE:   route_repo_browse(l, s, sud, sid, who, acct, repo, fp, cl.is_admin, keep_alive); break;
+                case RP_ISSUES:   page_repo_issues(l, s, sud, sid, who, acct, repo, fp, cl.is_admin, keep_alive); break;
+                case RP_RUNS:     page_repo_runs(l, s, sud, sid, who, acct, repo, fp, cl.is_admin, keep_alive);   break;
+                case RP_EDIT:     route_repo_edit_get(l, s, sud, sid, who, acct, repo, verb, fp, cl.is_admin, keep_alive); break;
+                case RP_SETTINGS: page_repo_settings(l, s, sud, sid, who, acct, repo, cl.is_admin, keep_alive); break;
                 }
             } else {
                 /* Single-segment /<account> → account landing. */
@@ -2269,7 +2447,7 @@ static void serve_one(struct yloop *l, struct yloop_stream *s, void *ud)
                     !memchr(path + 1, '/', plen - 1) && plen - 1 < sizeof(seg)) {
                     memcpy(seg, path + 1, plen - 1); seg[plen - 1] = 0;
                     if (!is_reserved_top(seg) && service_active(sud, "git_repo"))
-                        page_account_landing(l, s, sud, sid, uname, seg, keep_alive);
+                        page_account_landing(l, s, sud, sid, who, seg, cl.is_admin, keep_alive);
                     else
                         send_text(s, 404, "not found\n", keep_alive);
                 } else {
@@ -2277,7 +2455,7 @@ static void serve_one(struct yloop *l, struct yloop_stream *s, void *ud)
                 }
             }
             free(sid);
-            free(uname);
+            free(uname_cookie);
         }
     } else if (method_len == 4 && memcmp(method, "POST", 4) == 0) {
         /* Pull the body off the wire so route handlers see the
@@ -2329,24 +2507,28 @@ static void serve_one(struct yloop *l, struct yloop_stream *s, void *ud)
                     free(sid);
                 } else if (path_equals(path, path_len, "/repos/new")) {
                     char *sid = cookie_get(headers, num_headers, "picomesh-sid");
-                    char *uname = cookie_get(headers, num_headers, "picomesh-uname");
-                    webapp_repos_new(l, s, sud, sid, uname, body_buf, (size_t)cl, keep_alive);
-                    free(sid); free(uname);
-                } else if (path_equals(path, path_len, "/admin/users/register")) {
-                    char *sid = cookie_get(headers, num_headers, "picomesh-sid");
-                    relay_post(l, s, sud, sid, "/admin/users/register",
-                               body_buf, (size_t)cl, "/admin/users", keep_alive);
+                    webapp_repos_new(l, s, sud, sid, body_buf, (size_t)cl, keep_alive);
                     free(sid);
-                } else if (path_equals(path, path_len, "/admin/users/mint_pat")) {
+                } else if (starts_with(path, path_len, "/admin/")) {
+                    /* Admin mutations: relay to the gateway only for a
+                     * signed-in site admin. The gateway enforces this too —
+                     * this is defense in depth so the webapp never knowingly
+                     * forwards an unauthorized mutation. (cl here is the
+                     * content-length, so the claims live in cl_admin.) */
                     char *sid = cookie_get(headers, num_headers, "picomesh-sid");
-                    relay_post(l, s, sud, sid, "/admin/users/mint_pat",
-                               body_buf, (size_t)cl, "/admin/users", keep_alive);
-                    free(sid);
-                } else if (path_equals(path, path_len, "/admin/tokens/mint_pat")) {
-                    /* Tokens-page mint: same gateway action, bounce back here. */
-                    char *sid = cookie_get(headers, num_headers, "picomesh-sid");
-                    relay_post(l, s, sud, sid, "/admin/users/mint_pat",
-                               body_buf, (size_t)cl, "/admin/tokens", keep_alive);
+                    struct claims cl_admin;
+                    resolve_claims(l, sud, sid, &cl_admin);
+                    if (!cl_admin.is_admin) {
+                        if (cl_admin.uid)
+                            send_forbidden(s, cl_admin.username[0] ? cl_admin.username : NULL, keep_alive);
+                        else
+                            send_redirect(s, "/login", NULL, keep_alive);
+                    } else if (path_equals(path, path_len, "/admin/tokens/mint_pat")) {
+                        relay_post(l, s, sud, sid, "/admin/tokens/mint_pat",
+                                   body_buf, (size_t)cl, "/admin/tokens", keep_alive);
+                    } else {
+                        send_text(s, 404, "not found\n", keep_alive);
+                    }
                     free(sid);
                 } else {
                     int ns = parse_action_path(path, path_len, acct, sizeof(acct),

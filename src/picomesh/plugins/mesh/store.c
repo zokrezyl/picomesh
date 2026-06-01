@@ -24,6 +24,7 @@
 #include <picomesh/yloop/yloop.h>
 #include <picomesh/yconfig/yconfig.h>
 #include <picomesh/yargv/yargv.h>
+#include <picomesh/plugin/storage/storage.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -60,6 +61,123 @@ struct PICOMESH_CLASS_ANNOTATE("class@mesh:store") mesh_store_data {
 static struct mesh_store_data *ms(struct object *obj)
 {
     return (struct mesh_store_data *)((char *)obj + sizeof(struct object));
+}
+
+/* ---- child lifecycle: the mesh owns and reaps what it spawned ---------- *
+ *
+ * Two layers, no flat pidfiles and no external pkill:
+ *  1. Signal reaper — a SIGTERM/SIGINT handler SIGTERMs every live child this
+ *     parent spawned, so `kill -TERM <parent>` takes the whole stack down. A
+ *     handler may only touch async-signal-safe state, so live pids are
+ *     mirrored in a file-scope table and reaped with kill(2) (which IS
+ *     async-signal-safe). This — and the single process-lifetime storage
+ *     handle below — are the one sanctioned file-scope use: signal state.
+ *  2. Storage record — every spawned pid (and the parent's own pid) is
+ *     written via the `storage` plugin under context "mesh". A fresh bring-up
+ *     reaps any pid a previous run left alive (clearing restart port races);
+ *     operators read the parent pid from storage to signal it, never by
+ *     scanning the process table. */
+
+static volatile sig_atomic_t g_mesh_reap_pids[MESH_MAX_CHILDREN];
+static volatile sig_atomic_t g_mesh_reap_installed;
+static struct object *g_mesh_store_db; /* process-lifetime KV handle for PIDs */
+
+static void mesh_reap_signal_handler(int sig)
+{
+    for (int i = 0; i < MESH_MAX_CHILDREN; ++i) {
+        pid_t p = (pid_t)g_mesh_reap_pids[i];
+        if (p > 0) kill(p, SIGTERM); /* async-signal-safe */
+    }
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+static void mesh_reap_install(void)
+{
+    if (g_mesh_reap_installed) return;
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = mesh_reap_signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGINT, &sa, NULL);
+    g_mesh_reap_installed = 1;
+}
+
+/* Create (once) the in-process storage object for PID bookkeeping. Resolves
+ * locally because the parent activates the `storage` plugin. */
+static struct object *mesh_storage_db(void)
+{
+    if (g_mesh_store_db) return g_mesh_store_db;
+    struct picomesh_engine *e = picomesh_active_engine();
+    if (!e) return NULL;
+    struct ctx c = picomesh_engine_service_ctx(e, "storage");
+    struct object_ptr_result o = storage_db_create(&c);
+    if (PICOMESH_IS_ERR(o)) { picomesh_error_destroy(o.error); return NULL; }
+    g_mesh_store_db = o.value;
+    return g_mesh_store_db;
+}
+
+static void mesh_storage_set(const char *key, const char *val)
+{
+    struct object *db = mesh_storage_db();
+    struct picomesh_engine *e = picomesh_active_engine();
+    if (!db || !e) return;
+    struct ctx c = picomesh_engine_service_ctx(e, "storage");
+    struct picomesh_int_result r = storage_set(&c, db, NULL, "mesh", key, val);
+    if (PICOMESH_IS_ERR(r)) picomesh_error_destroy(r.error);
+}
+
+static void mesh_storage_del(const char *key)
+{
+    struct object *db = mesh_storage_db();
+    struct picomesh_engine *e = picomesh_active_engine();
+    if (!db || !e) return;
+    struct ctx c = picomesh_engine_service_ctx(e, "storage");
+    struct picomesh_int_result r = storage_del(&c, db, NULL, "mesh", key);
+    if (PICOMESH_IS_ERR(r)) picomesh_error_destroy(r.error);
+}
+
+/* Record a freshly spawned child: signal-reaper mirror + storage row. */
+static void mesh_child_track(int slot, int pid, const char *name)
+{
+    if (slot >= 0 && slot < MESH_MAX_CHILDREN) g_mesh_reap_pids[slot] = pid;
+    char key[32], val[160];
+    snprintf(key, sizeof(key), "child:%d", slot);
+    snprintf(val, sizeof(val), "%d %s", pid, name ? name : "");
+    mesh_storage_set(key, val);
+}
+
+static void mesh_child_untrack(int slot)
+{
+    if (slot >= 0 && slot < MESH_MAX_CHILDREN) g_mesh_reap_pids[slot] = 0;
+    char key[32];
+    snprintf(key, sizeof(key), "child:%d", slot);
+    mesh_storage_del(key);
+}
+
+/* Reap children a PREVIOUS run left alive (its parent was SIGKILLed/crashed
+ * before the handler ran) and clear the stale records. Called on bring-up. */
+static void mesh_reap_previous_run(void)
+{
+    struct object *db = mesh_storage_db();
+    struct picomesh_engine *e = picomesh_active_engine();
+    if (!db || !e) return;
+    struct ctx c = picomesh_engine_service_ctx(e, "storage");
+    for (int slot = 0; slot < MESH_MAX_CHILDREN; ++slot) {
+        char key[32];
+        snprintf(key, sizeof(key), "child:%d", slot);
+        struct picomesh_string_result g = storage_get(&c, db, NULL, "mesh", key);
+        if (PICOMESH_IS_OK(g) && g.value && *g.value) {
+            int pid = (int)strtol(g.value, NULL, 10);
+            if (pid > 0 && kill(pid, 0) == 0) {
+                kill(pid, SIGTERM);
+                yinfo("mesh: reaped orphan pid=%d from a previous run", pid);
+            }
+        }
+        if (PICOMESH_IS_OK(g)) free(g.value); else picomesh_error_destroy(g.error);
+        mesh_storage_del(key);
+    }
 }
 
 PICOMESH_CLASS_ANNOTATE("override@mesh:store:store_register_service")
@@ -185,6 +303,7 @@ static void mesh_child_exit_cb_real(struct yloop_process *p, int64_t exit_status
         d->children[slot].exited = 1;
         d->children[slot].exit_status = (int)exit_status;
         d->child_count--;
+        mesh_child_untrack(slot);
         yinfo("mesh: child pid=%d exited (status=%d, term_signal=%d)",
               c->pid, (int)exit_status, term_signal);
     }
@@ -241,6 +360,8 @@ struct picomesh_int_result mesh_store_spawn_picomesh_impl(struct ctx *ctx, struc
     d->children[slot].exited = 0;
     d->children[slot].exit_status = 0;
     d->child_count++;
+    mesh_reap_install();
+    mesh_child_track(slot, pid, "picomesh");
     yinfo("mesh: spawned pid=%d on port=%u", pid, port);
     return PICOMESH_OK(picomesh_int, pid);
 }
@@ -444,6 +565,8 @@ static int mesh_internal_spawn(struct object *obj, const char *name)
     d->children[slot].port = 0; /* port is in the YAML; child resolves */
     d->children[slot].exited = 0;
     d->child_count++;
+    mesh_reap_install();
+    mesh_child_track(slot, pid, name);
     yinfo("mesh: spawned pid=%d service='%s'", pid, name);
     return pid;
 }
@@ -481,6 +604,15 @@ struct picomesh_int_result mesh_store_reconcile_from_config_impl(struct ctx *ctx
     (void)ctx;
     struct picomesh_engine *e = picomesh_active_engine();
     if (!e) return PICOMESH_ERR(picomesh_int, "reconcile_from_config: no active engine");
+
+    /* Own the lifecycle: install the SIGTERM/SIGINT reaper, take down any
+     * children a previous run left alive, and record this parent's pid in
+     * storage so the stack can be stopped by signalling it (no pkill). */
+    mesh_reap_install();
+    mesh_reap_previous_run();
+    char parent_pid[16];
+    snprintf(parent_pid, sizeof(parent_pid), "%d", (int)getpid());
+    mesh_storage_set("parent", parent_pid);
 
     /* `mesh.services` — a map keyed by service name. */
     struct yconfig_node_ptr_result r =

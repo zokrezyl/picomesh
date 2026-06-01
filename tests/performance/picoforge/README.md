@@ -52,6 +52,33 @@ Bring the mesh up, then point the tool at it:
 | `repo_create` | `POST /repos/new` (authenticated) | write; storage + git_repo |
 | `register` | `POST /register` (new user each time) | write; accounts + authn |
 | `full` | register → login → repo create → list | end-to-end user journey |
+| `mixed` | one weighted-random user action per iter | **realistic blended load** (all backends) |
+
+### The `mixed` scenario + `make perf-picoforge`
+
+`mixed` is the "lots of users doing lots of things" workload. Each worker
+logs in as its own user and then issues a **weighted-random stream of real
+actions** — `read_count`/`read_list` (reads), `kv_set`, `put_file` (libgit2
+commit), `open_issue`, `enqueue_run`, `make_repo` (bounded per worker), and
+periodic re-`login` — emulating a live user session. Backend methods are
+addressed directly over `/_rpc` carrying the session cookie, so the gateway
+resolves sid→uid on every call (the real per-call cost). Two extra options:
+
+| option | default | meaning |
+|---|---|---|
+| `--seed-users N` | 0 | stage 1: pre-create N account records (population scale) via `accounts.store.register` — O(1), bypasses the gateway user-name index so it scales to tens of thousands |
+| `--repos-per-worker K` | 8 | cap on repos a worker creates (keeps total within the git_repo table) |
+
+The turnkey way to run it is the Makefile target, which brings up an
+**independent, port-shifted mesh** (every `8xxx`→`9xxx`, storage under
+`/tmp/picoforge-perf`) so it never collides with a dev stack on the default
+ports, runs the load, then tears the mesh down through its control parent:
+
+```sh
+make perf-picoforge                              # 50k seed, 32 workers, 60s
+make perf-picoforge DURATION=30 CONNECTIONS=64   # override any of:
+                                                 # SEED_USERS CONNECTIONS DURATION REPOS_PER_WORKER
+```
 
 Each worker establishes a session (register + login) before the timed loop for
 the scenarios that need one; `register`/`full` mint fresh users per iteration.
@@ -107,3 +134,27 @@ What stands out, and motivates the §5 async track:
   blocking / blocking-`rpc_call` / inline-storage behaviour §5 calls out. The
   harness inserts settle time between scenarios to give the mesh a chance to
   drain; the fact that it needs to is itself the finding.
+
+## `mixed` load — measured (local, indicative)
+
+`make perf-picoforge` with `SEED_USERS=50000 CONNECTIONS=32 DURATION=60`:
+
+- **Seed:** 50,000 account records in ~7.5 s ≈ **6.7k creates/s** (0 errors).
+- **Blended:** ~**14.4k ops/s**, 725k ok in 60 s. Latency mean 2.2 ms, p50 2.1,
+  p90 2.8, p99 5.2, p99.9 7.7, max 21 ms.
+- **By op:** reads (`read_count`/`read_list`), `kv_set`, `login`, `enqueue_run`
+  run clean (0 errors). 
+
+Two findings the mixed load surfaces, both rooted in the inline/blocking design:
+
+1. **Owner-checked writes (`put_file`) collapse under concurrency.** Clean at
+   1–2 workers, ~60 % errors at 4, ~90 % at 16–32 — all `forbidden (not repo
+   owner)`. The cause is the gateway resolving sid→uid (`session.store.lookup`,
+   blocking) on every `/_rpc`: under contention it returns the wrong/zero uid,
+   so the only owner-gated op (`put_file`) is rejected. Reads/`kv_set`/`make`
+   don't owner-check, so they don't expose it. This is the §5 blocking-rpc
+   bottleneck, now quantified.
+2. **The in-memory stores are fixed-size linear-scan tables.** `git_repo`
+   (`REPOS_MAX`), `issues` (`ISSUES_MAX`) and `git_pipeline` (`PIPE_MAX`) were
+   tiny (256/1024/256) and saturated instantly; raised to give load headroom,
+   but a long run still fills `issues` — they need a real index to scale.

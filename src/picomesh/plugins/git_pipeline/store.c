@@ -15,7 +15,10 @@
 
 #include <stdint.h>
 
-#define PIPE_MAX 256
+/* In-memory job slots, scanned linearly per op. Sized for headroom under
+ * load (256 saturated instantly); a few ×10k entries keep the scan cheap
+ * relative to a network RTT. */
+#define PIPE_MAX 65536
 
 struct job_entry {
     uint32_t job_id;

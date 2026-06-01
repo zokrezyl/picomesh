@@ -186,4 +186,24 @@ struct picomesh_size_result accounts_store_count_impl(struct ctx *ctx, struct ob
     return PICOMESH_OK(picomesh_size, (size_t)(c < 0 ? 0 : c));
 }
 
+/* List the registered users as newline-separated "<uid>\t<username>" rows.
+ * The frontend maps usernames → uids before calling the uid-only methods,
+ * so it records the reverse mapping in the `index` key at registration
+ * time (key `name:<uid>` too); this returns that index verbatim. Empty
+ * string when no users have registered yet. */
+PICOMESH_CLASS_ANNOTATE("override@accounts:store:store_list")
+struct picomesh_string_result accounts_store_list_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
+{
+    (void)ctx; (void)obj;
+    struct acc_storage_handle_result sr = open_storage();
+    if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_string, "accounts_list: open_storage failed", sr);
+    struct acc_storage_handle h = sr.value;
+    struct picomesh_string_result g =
+        sharded_storage_db_get(&h.c, h.obj, hdrs, ACCOUNTS_CTX, "index");
+    close_storage(&h);
+    if (PICOMESH_IS_ERR(g)) { picomesh_error_destroy(g.error); return PICOMESH_OK(picomesh_string, strdup("")); }
+    if (!g.value) return PICOMESH_OK(picomesh_string, strdup(""));
+    return PICOMESH_OK(picomesh_string, g.value); /* transfer ownership */
+}
+
 #include "accounts.gen.c"

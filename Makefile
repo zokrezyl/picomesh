@@ -20,7 +20,14 @@ BUILD_DIR_RISCV   := build-linux-riscv64-release
 BUILD_DIR_YEMU    := build-yemu-release
 BUILD_DIR_DEPLOY  := build-deploy
 
-.PHONY: help all build-desktop-release build-desktop-debug build-linux-riscv64-release build-deploy build-yemu-release build-webasm-yemu-release clean
+.PHONY: help all build-desktop-release build-desktop-debug build-linux-riscv64-release build-deploy build-yemu-release build-webasm-yemu-release perf-picoforge clean
+
+# picoforge perf tunables (override on the command line, e.g.
+#   make perf-picoforge DURATION=30 CONNECTIONS=64 SEED_USERS=20000)
+SEED_USERS       ?= 50000
+CONNECTIONS      ?= 32
+DURATION         ?= 60
+REPOS_PER_WORKER ?= 8
 
 help:
 	@awk 'BEGIN{FS=":"} /^## / {sub(/^## /,""); print "  " $$0}' $(MAKEFILE_LIST)
@@ -38,6 +45,18 @@ build-desktop-debug:
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 	@ln -sfn $(BUILD_DIR_DEBUG)/compile_commands.json compile_commands.json
 	$(CMAKE) --build $(BUILD_DIR_DEBUG) --parallel $(JOBS)
+
+## perf-picoforge          mixed-load perf on an INDEPENDENT mesh: stage-1
+##                          seeds up to SEED_USERS accounts, then CONNECTIONS
+##                          workers each emulate a user issuing a random op
+##                          stream (read/KV/file/issue/run/repo/login) for
+##                          DURATION secs. Port-shifted (9xxx) + isolated
+##                          storage, so it never touches a running dev stack.
+##                          Tunables: SEED_USERS CONNECTIONS DURATION REPOS_PER_WORKER
+perf-picoforge: build-desktop-release
+	SEED_USERS=$(SEED_USERS) CONNECTIONS=$(CONNECTIONS) DURATION=$(DURATION) \
+	REPOS_PER_WORKER=$(REPOS_PER_WORKER) \
+		bash tests/performance/picoforge/perf-run.sh
 
 ## build-deploy             stage build-deploy/ — host-runnable picomesh tree
 ##                          (binary + yaml + frontend + run.sh). Reused

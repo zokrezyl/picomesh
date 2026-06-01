@@ -63,7 +63,6 @@
 #include <picomesh/plugin/git_pipeline/git_pipeline.h>
 #include <picomesh/plugin/personal_access_tokens/personal_access_tokens.h>
 
-#include <ctype.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -183,6 +182,7 @@ static int64_t hash_password(const char *s)
  * route_register_post (bootstrap). */
 static int is_site_admin(uint32_t uid);
 static void promote_to_site_admin(uint32_t uid);
+static void accounts_index_add(uint32_t uid, const char *uname);
 static const char *landing_url(uint32_t uid, const char *uname,
                                char *out, size_t cap);
 
@@ -761,17 +761,7 @@ static inline void svc_close_impl(struct svc_ctx *v)
 }
 #define SVC_CLOSE(VAR) svc_close_impl(&(VAR))
 
-/* ---------- route: GET / ---------- */
-
-static void route_root(struct yloop_stream *s, uint32_t uid,
-                       const char *uname, int keep_alive)
-{
-    char to[128];
-    send_redirect(s, landing_url(uid, uname, to, sizeof(to)),
-                  keep_alive, NULL);
-}
-
-/* ---------- route: GET /login ---------- */
+/* ---------- username charset guard ---------- */
 
 /* Restrict the username to a charset that's safe inside a cookie value
  * and inside our nav display. Lower-case alpha, digits, "-_." — the
@@ -842,15 +832,6 @@ static void render_login(struct yloop_stream *s, const char *error, int keep_ali
 static void render_register(struct yloop_stream *s, const char *error, int keep_alive)
 {
     render_auth_form(s, /*is_register=*/1, error, keep_alive);
-}
-
-static void route_login_get(struct yloop_stream *s, int keep_alive)
-{
-    render_login(s, NULL, keep_alive);
-}
-static void route_register_get(struct yloop_stream *s, int keep_alive)
-{
-    render_register(s, NULL, keep_alive);
 }
 
 /* Build the Set-Cookie header(s) after a successful auth. Returns
@@ -994,6 +975,9 @@ static void route_register_post(struct yloop_stream *s, const char *body,
         render_register(s, "username already taken", keep_alive);
         return;
     }
+
+    /* Capture uid→username so the admin Users page can list real users. */
+    accounts_index_add(uid, uname);
 
     /* Bootstrap: the very first user becomes site-owner. After
      * `accounts.register` succeeds and the running total is 1, this
@@ -1183,6 +1167,35 @@ static void promote_to_site_admin(uint32_t uid)
     yinfo("authz: uid=%u bootstrapped as site-owner", uid);
 }
 
+/* Record uid→username so /admin/users can list the actual users. Storage
+ * otherwise holds only uid hashes (usernames are mapped to uids here at the
+ * boundary), so we capture the name where we still have it: a `name:<uid>`
+ * key plus an append to the `index` ("<uid>\t<username>\n" per row).
+ * accounts.store.list returns that index. */
+static void accounts_index_add(uint32_t uid, const char *uname)
+{
+    if (!uid || !uname || !*uname) return;
+    struct svc_ctx st = {0};
+    if (!repo_storage_open(&st)) return;
+    char k[64];
+    snprintf(k, sizeof(k), "name:%u", uid);
+    sharded_storage_db_set(&st.c, st.obj, NULL, "accounts", k, uname);
+
+    struct picomesh_string_result g =
+        sharded_storage_db_get(&st.c, st.obj, NULL, "accounts", "index");
+    const char *cur = (PICOMESH_IS_OK(g) && g.value) ? g.value : "";
+    size_t need = strlen(cur) + strlen(uname) + 32;
+    char *next = malloc(need);
+    if (next) {
+        snprintf(next, need, "%s%u\t%s\n", cur, uid, uname);
+        sharded_storage_db_set(&st.c, st.obj, NULL, "accounts", "index", next);
+        free(next);
+    }
+    if (PICOMESH_IS_OK(g)) free(g.value); else picomesh_error_destroy(g.error);
+    SVC_CLOSE(st);
+    yinfo("accounts: indexed uid=%u name=%s", uid, uname);
+}
+
 /* Mark <account>/<name> as a registered repo and return its repo_id.
  * Storage layout in the `repos` context:
  *   by_id:<repo_id>            = 1
@@ -1207,33 +1220,7 @@ static uint32_t repo_register(const char *account, const char *name, uint32_t ow
     return rid;
 }
 
-static int repo_exists(uint32_t repo_id)
-{
-    struct svc_ctx st = {0};
-    if (!repo_storage_open(&st)) return 0;
-    char k[64];
-    snprintf(k, sizeof(k), "by_id:%u", repo_id);
-    struct picomesh_int_result r = sharded_storage_db_exists(&st.c, st.obj, NULL, "repos", k);
-    int present = PICOMESH_IS_OK(r) && r.value;
-    if (PICOMESH_IS_ERR(r)) picomesh_error_destroy(r.error);
-    SVC_CLOSE(st);
-    return present;
-}
-
-static int64_t repo_count_for_owner(uint32_t owner_uid)
-{
-    struct svc_ctx st = {0};
-    if (!repo_storage_open(&st)) return -1;
-    char k[64];
-    snprintf(k, sizeof(k), "owner:%u:count", owner_uid);
-    struct picomesh_string_result r = sharded_storage_db_get(&st.c, st.obj, NULL, "repos", k);
-    int64_t v = (PICOMESH_IS_OK(r) && r.value) ? strtoll(r.value, NULL, 10) : 0;
-    if (PICOMESH_IS_OK(r)) free(r.value); else picomesh_error_destroy(r.error);
-    SVC_CLOSE(st);
-    return v;
-}
-
-/* ---------- route: GET /repos + POST /repos/new ---------- */
+/* ---------- route: POST /repos/new ---------- */
 
 /* Pull the `picomesh-uname` cookie value into a stack buffer. Returns 1
  * if found AND syntactically valid. Used by the per-request handlers
@@ -1246,89 +1233,6 @@ static int resolve_uname(const char *headers_raw, size_t headers_raw_len,
     return username_ok(out);
 }
 
-static void render_repos(struct yloop_stream *s, uint32_t uid,
-                         const char *uname, int keep_alive)
-{
-    struct buf b; buf_init(&b);
-    render_head(&b, "Repositories", uid, uname);
-    buf_puts(&b,
-        "<header class=\"page-header\">"
-        "<h1>Repositories</h1>"
-        "<a class=\"btn primary\" href=\"#new\">New repository</a>"
-        "</header>");
-
-    /* Repo count from git_repo. */
-    int64_t total = -1;
-    SVC_OPEN(repo, "git_repo", git_repo_store_create);
-    if (repo.ok) {
-        struct picomesh_size_result r = git_repo_store_count_total(&repo.c, repo.obj, NULL);
-        if (PICOMESH_IS_OK(r)) total = (int64_t)r.value;
-        else picomesh_error_destroy(r.error);
-        SVC_CLOSE(repo);
-    }
-
-    int64_t mine = (uname && *uname) ? repo_count_for_owner(uid) : -1;
-
-    buf_puts(&b, "<section class=\"card\"><header class=\"card-header\">"
-                 "<h2>All repositories</h2><span class=\"muted small\">");
-    if (total >= 0) buf_printf(&b, "%lld total", (long long)total);
-    else buf_puts(&b, "git_repo unreachable");
-    buf_puts(&b, "</span></header>");
-    if (mine >= 0 && uname) {
-        buf_printf(&b, "<p class=\"muted small\">You own %lld repo%s:</p>",
-                   (long long)mine, mine == 1 ? "" : "s");
-        /* List the signed-in user's repos by name as links. */
-        char *names = NULL;
-        SVC_OPEN(rlist, "git_repo", git_repo_store_create);
-        if (rlist.ok) {
-            struct picomesh_string_result lr =
-                git_repo_store_list_for_owner(&rlist.c, rlist.obj, NULL, uid);
-            SVC_CLOSE(rlist);
-            if (PICOMESH_IS_OK(lr)) names = lr.value;
-            else picomesh_error_destroy(lr.error);
-        }
-        if (names && *names) {
-            buf_puts(&b, "<ul class=\"repo-list\">");
-            char *p = names;
-            while (*p) {
-                char *nl = strchr(p, '\n');
-                size_t seg = nl ? (size_t)(nl - p) : strlen(p);
-                if (seg) {
-                    char nm[80];
-                    size_t cn = seg < sizeof(nm) - 1 ? seg : sizeof(nm) - 1;
-                    memcpy(nm, p, cn);
-                    nm[cn] = 0;
-                    buf_printf(&b, "<li><a href=\"/%s/%s\">%s/%s</a></li>",
-                               uname, nm, uname, nm);
-                }
-                if (!nl) break;
-                p = nl + 1;
-            }
-            buf_puts(&b, "</ul>");
-        }
-        free(names);
-    }
-    if (total <= 0) {
-        buf_puts(&b, "<p class=\"muted\">No repos yet. Use the form below.</p>");
-    }
-    buf_puts(&b, "</section>");
-
-    /* New form — owner is implicit (the signed-in user). */
-    buf_printf(&b,
-        "<section class=\"card\" id=\"new\"><header class=\"card-header\">"
-        "<h2>Create a new repository</h2></header>"
-        "<form method=\"post\" action=\"/repos/new\">"
-        "<label>Name <input type=\"text\" name=\"name\" "
-        "pattern=\"[a-zA-Z0-9._-]{1,32}\" maxlength=\"32\" required></label>"
-        "<button type=\"submit\" class=\"primary\">Create as %s/&hellip;</button>"
-        "</form></section>",
-        uname ? uname : "you");
-
-    render_foot(&b);
-    send_html(s, 200, b.data, b.len, keep_alive, NULL);
-    buf_free(&b);
-}
-
 static void route_repos_new_post(struct yloop_stream *s, uint32_t uid,
                                  const char *uname,
                                  const char *body, size_t body_len, int keep_alive)
@@ -1338,7 +1242,9 @@ static void route_repos_new_post(struct yloop_stream *s, uint32_t uid,
     char name[64];
     if (!form_get(body, body_len, "name", name, sizeof(name)) ||
         !reponame_ok(name, strlen(name))) {
-        render_repos(s, uid, uname, keep_alive);
+        /* Invalid repo name — bounce back to the list (the webapp owns the
+         * form + error display; the gateway never renders a page). */
+        send_redirect(s, "/repos", keep_alive, NULL);
         return;
     }
 
@@ -1359,504 +1265,12 @@ static void route_repos_new_post(struct yloop_stream *s, uint32_t uid,
     send_redirect(s, where, keep_alive, NULL);
 }
 
-/* Parse `/<account>/<name>[/<rest>]` into its three pieces. Returns 1
- * on success. `account` and `name` are zero-terminated copies; `rest`
- * is a pointer into the original path (NULL if the URL is just
- * /<account>/<name>). On failure all outputs are left untouched. */
-static int parse_account_repo(const char *path, char *acct, size_t acct_cap,
-                              char *name, size_t name_cap,
-                              const char **rest_out)
-{
-    if (!path || path[0] != '/') return 0;
-    const char *p = path + 1;
-    const char *slash = strchr(p, '/');
-    if (!slash) return 0;
-    size_t alen = (size_t)(slash - p);
-    if (is_reserved_top(p, alen)) return 0;
-    if (alen < 1 || alen >= acct_cap) return 0;
-    memcpy(acct, p, alen); acct[alen] = 0;
-    if (!username_ok(acct)) return 0;
-
-    const char *q = slash + 1;
-    const char *end = q;
-    while (*end && *end != '/' && *end != '?') ++end;
-    size_t nlen = (size_t)(end - q);
-    if (nlen < 1 || nlen >= name_cap) return 0;
-    memcpy(name, q, nlen); name[nlen] = 0;
-    if (!reponame_ok(name, nlen)) return 0;
-
-    *rest_out = (*end == '/' || *end == '?') ? end : NULL;
-    return 1;
-}
-
-/* All per-repo handlers now key on the URL pair `(account, name)`.
- * The wire-level repo_id is derived from `hash_repo(account, name)`
- * — same value at any call site, so the backend services (issues,
- * git_pipeline) continue to use their existing uint32 repo_id keys.
- *
- * Inside the renderers we build internal URLs as /<acct>/<name>/...
- * to keep the page graph closed under the yaapp shape. */
-
-/* ---------- route: GET /<account> ---------- */
-
-static void render_account_landing(struct yloop_stream *s, uint32_t uid,
-                                   const char *uname,
-                                   const char *account, int keep_alive)
-{
-    struct buf b; buf_init(&b);
-    char title[80];
-    snprintf(title, sizeof(title), "@%s", account);
-    render_head(&b, title, uid, uname);
-
-    uint32_t acct_uid = hash_username(account);
-    int64_t  count    = repo_count_for_owner(acct_uid);
-
-    buf_printf(&b,
-        "<header class=\"page-header\">"
-        "<h1>@%s</h1>"
-        "<a class=\"btn primary\" href=\"/repos#new\">New repository</a>"
-        "</header>"
-        "<section class=\"card\"><header class=\"card-header\">"
-        "<h2>Repositories</h2><span class=\"muted small\">",
-        account);
-    if (count < 0) buf_puts(&b, "storage unreachable");
-    else           buf_printf(&b, "%lld owned", (long long)count);
-    buf_puts(&b, "</span></header>");
-    if (count <= 0) {
-        buf_puts(&b, "<p class=\"muted\">No repos yet for this user. "
-                     "Create one from <a href=\"/repos#new\">/repos</a>.</p>");
-    } else {
-        /* Enumerate the owner's repos by NAME and render each as a link.
-         * (Previously the page only showed a count and told you to guess
-         * the URL — so a created repo never appeared anywhere.) */
-        char *names = NULL;
-        SVC_OPEN(rlist, "git_repo", git_repo_store_create);
-        if (rlist.ok) {
-            struct picomesh_string_result lr =
-                git_repo_store_list_for_owner(&rlist.c, rlist.obj, NULL, acct_uid);
-            SVC_CLOSE(rlist);
-            if (PICOMESH_IS_OK(lr)) names = lr.value;
-            else picomesh_error_destroy(lr.error);
-        }
-        if (names && *names) {
-            buf_puts(&b, "<ul class=\"repo-list\">");
-            char *p = names;
-            while (*p) {
-                char *nl = strchr(p, '\n');
-                size_t seg = nl ? (size_t)(nl - p) : strlen(p);
-                if (seg) {
-                    char nm[80];
-                    size_t cn = seg < sizeof(nm) - 1 ? seg : sizeof(nm) - 1;
-                    memcpy(nm, p, cn);
-                    nm[cn] = 0;
-                    /* name is reponame_ok-validated ([a-zA-Z0-9._-]) → safe. */
-                    buf_printf(&b, "<li><a href=\"/%s/%s\">%s/%s</a></li>",
-                               account, nm, account, nm);
-                }
-                if (!nl) break;
-                p = nl + 1;
-            }
-            buf_puts(&b, "</ul>");
-        } else {
-            buf_puts(&b, "<p class=\"muted\">No repos yet.</p>");
-        }
-        free(names);
-    }
-    buf_puts(&b, "</section>");
-
-    render_foot(&b);
-    send_html(s, 200, b.data, b.len, keep_alive, NULL);
-    buf_free(&b);
-}
-
-/* ---------- per-repo renderers ---------- */
-
-/* Repo-level sub-navigation (GitHub/GitLab-style tabs) shown in the
- * repo header. `active` is "code", "issues" or "runs" — that tab gets
- * the .active class. The per-repo Issues and Pipelines links live here,
- * in the repo header, instead of as cards in the page body. A count
- * badge is shown for any of issues_n / runs_n that is >= 0. */
-static void render_repo_tabs(struct buf *b, const char *account,
-                             const char *name, const char *active,
-                             int64_t issues_n, int64_t runs_n)
-{
-    buf_printf(b, "<nav class=\"repo-tabs\">"
-                  "<a class=\"%s\" href=\"/%s/%s\">Code</a>",
-               strcmp(active, "code") ? "" : "active", account, name);
-    buf_printf(b, "<a class=\"%s\" href=\"/%s/%s/issues\">Issues",
-               strcmp(active, "issues") ? "" : "active", account, name);
-    if (issues_n >= 0)
-        buf_printf(b, " <span class=\"count\">%lld</span>", (long long)issues_n);
-    buf_puts(b, "</a>");
-    buf_printf(b, "<a class=\"%s\" href=\"/%s/%s/runs\">Pipelines",
-               strcmp(active, "runs") ? "" : "active", account, name);
-    if (runs_n >= 0)
-        buf_printf(b, " <span class=\"count\">%lld</span>", (long long)runs_n);
-    buf_puts(b, "</a></nav>");
-}
-
-static void render_repo_show(struct yloop_stream *s, uint32_t uid,
-                             const char *uname,
-                             const char *account, const char *name,
-                             int keep_alive)
-{
-    uint32_t repo_id = hash_repo(account, name);
-    if (!repo_exists(repo_id)) {
-        send_html(s, 404, "<p>repo not found</p>", 21, keep_alive, NULL);
-        return;
-    }
-
-    struct buf b; buf_init(&b);
-    char title[160];
-    snprintf(title, sizeof(title), "%s/%s", account, name);
-    render_head(&b, title, uid, uname);
-
-    /* Resolve owner. */
-    uint32_t owner = 0;
-    SVC_OPEN(rep, "git_repo", git_repo_store_create);
-    if (rep.ok) {
-        struct picomesh_uint32_result r = git_repo_store_owner_of(&rep.c, rep.obj, NULL, repo_id);
-        if (PICOMESH_IS_OK(r)) owner = r.value;
-        else picomesh_error_destroy(r.error);
-        SVC_CLOSE(rep);
-    }
-
-    /* Counts feed the repo tab badges (Issues, Pipelines). */
-    int64_t open_issues = -1, queued = -1, running = -1;
-    SVC_OPEN(iss, "issues", issues_store_create);
-    if (iss.ok) {
-        struct picomesh_size_result o = issues_store_count_open_in_repo(&iss.c, iss.obj, NULL, repo_id);
-        if (PICOMESH_IS_OK(o)) open_issues = (int64_t)o.value; else picomesh_error_destroy(o.error);
-        SVC_CLOSE(iss);
-    }
-    SVC_OPEN(gp, "git_pipeline", git_pipeline_store_create);
-    if (gp.ok) {
-        struct picomesh_size_result p = git_pipeline_store_count_pending(&gp.c, gp.obj, NULL);
-        struct picomesh_size_result r = git_pipeline_store_count_running(&gp.c, gp.obj, NULL);
-        if (PICOMESH_IS_OK(p)) queued = (int64_t)p.value; else picomesh_error_destroy(p.error);
-        if (PICOMESH_IS_OK(r)) running = (int64_t)r.value; else picomesh_error_destroy(r.error);
-        SVC_CLOSE(gp);
-    }
-
-    buf_printf(&b,
-        "<header class=\"page-header\">"
-        "<div><h1><a href=\"/%s\">%s</a>/%s</h1>"
-        "<p class=\"muted small\">owner uid: <code>%u</code> · "
-        "repo_id: <code>%u</code></p></div>"
-        "<a class=\"btn\" href=\"/repos\">All repos ▸</a>"
-        "</header>",
-        account, account, name, owner, repo_id);
-
-    /* Per-repo Issues and Pipelines links live in the tab bar (the repo
-     * header, GitHub/GitLab-style), not as cards in the page body. */
-    render_repo_tabs(&b, account, name, "code", open_issues,
-                     queued >= 0 ? queued + running : -1);
-
-    /* Code view — just the repository. File browsing/creation will
-     * render in this section. */
-    buf_puts(&b,
-        "<section class=\"card\"><header class=\"card-header\">"
-        "<h2>Files</h2></header>"
-        "<p class=\"muted\">This repository is empty &mdash; file browsing "
-        "and creation are coming soon.</p>"
-        "</section>");
-
-    buf_printf(&b,
-        "<section class=\"card\"><h2>Clone</h2>"
-        "<pre class=\"clone-url\">git clone http://127.0.0.1:8209/git/%s/%s.git</pre>"
-        "<p class=\"muted small\">(stub URL — git transport isn't wired in yet.)</p>"
-        "</section>", account, name);
-
-    render_foot(&b);
-    send_html(s, 200, b.data, b.len, keep_alive, NULL);
-    buf_free(&b);
-}
-
-static void render_repo_issues(struct yloop_stream *s, uint32_t uid,
-                               const char *uname,
-                               const char *account, const char *name,
-                               const char *filter, int keep_alive)
-{
-    uint32_t repo_id = hash_repo(account, name);
-    if (!repo_exists(repo_id)) {
-        send_html(s, 404, "<p>repo not found</p>", 21, keep_alive, NULL);
-        return;
-    }
-
-    struct buf b; buf_init(&b);
-    char title[160];
-    snprintf(title, sizeof(title), "Issues — %s/%s", account, name);
-    render_head(&b, title, uid, uname);
-
-    int show_closed = filter && strcmp(filter, "closed") == 0;
-    int show_open   = !filter || strcmp(filter, "open") == 0;
-
-    int64_t open_in_repo = -1;
-    SVC_OPEN(iss, "issues", issues_store_create);
-    if (iss.ok) {
-        struct picomesh_size_result o = issues_store_count_open_in_repo(&iss.c, iss.obj, NULL, repo_id);
-        if (PICOMESH_IS_OK(o)) open_in_repo = (int64_t)o.value; else picomesh_error_destroy(o.error);
-        SVC_CLOSE(iss);
-    }
-
-    render_repo_tabs(&b, account, name, "issues", open_in_repo, -1);
-    buf_printf(&b,
-        "<header class=\"page-header\">"
-        "<div><h1>Issues</h1>"
-        "<p class=\"muted small\"><a href=\"/%s/%s\">← %s/%s</a></p></div>"
-        "<a class=\"btn primary\" href=\"#new\">New issue</a>"
-        "</header>"
-        "<nav class=\"filters\">"
-        "<a class=\"%s\" href=\"/%s/%s/issues?status=open\">Open</a>"
-        "<a class=\"%s\" href=\"/%s/%s/issues?status=closed\">Closed</a>"
-        "<a href=\"/%s/%s/issues\">All</a>"
-        "</nav>",
-        account, name, account, name,
-        show_open   ? "active" : "", account, name,
-        show_closed ? "active" : "", account, name,
-        account, name);
-
-    buf_puts(&b, "<section class=\"card\">");
-    if (open_in_repo >= 0) {
-        buf_printf(&b, "<p>%lld open issue%s in this repo.</p>",
-                   (long long)open_in_repo, open_in_repo == 1 ? "" : "s");
-    } else {
-        buf_puts(&b, "<p class=\"muted\">issues service unreachable.</p>");
-    }
-    buf_puts(&b, "</section>");
-
-    buf_printf(&b,
-        "<section class=\"card\" id=\"new\">"
-        "<header class=\"card-header\"><h2>File a new issue</h2></header>"
-        "<form method=\"post\" action=\"/%s/%s/issues/new\">"
-        "<button type=\"submit\" class=\"primary\">Open issue as you</button>"
-        "</form></section>"
-        "<section class=\"card\">"
-        "<header class=\"card-header\"><h2>Close an issue</h2></header>"
-        "<form method=\"post\" action=\"/%s/%s/issues/close\">"
-        "<label>Issue id"
-        "<input type=\"number\" name=\"issue_id\" required>"
-        "</label>"
-        "<button type=\"submit\">Close</button>"
-        "</form></section>",
-        account, name, account, name);
-
-    render_foot(&b);
-    send_html(s, 200, b.data, b.len, keep_alive, NULL);
-    buf_free(&b);
-}
-
-static void route_repo_issues_new_post(struct yloop_stream *s, uint32_t uid,
-                                       const char *account, const char *name,
-                                       const char *body, size_t body_len,
-                                       int keep_alive)
-{
-    (void)body; (void)body_len;
-    uint32_t repo_id = hash_repo(account, name);
-    if (!repo_exists(repo_id)) { send_html(s, 404, "<p>no such repo</p>", 19, keep_alive, NULL); return; }
-    SVC_OPEN(iss, "issues", issues_store_create);
-    if (iss.ok) {
-        issues_store_open(&iss.c, iss.obj, NULL, repo_id, uid ? uid : 1);
-        SVC_CLOSE(iss);
-    }
-    char where[160];
-    snprintf(where, sizeof(where), "/%s/%s/issues", account, name);
-    send_redirect(s, where, keep_alive, NULL);
-}
-
-static void route_repo_issues_close_post(struct yloop_stream *s, uint32_t uid,
-                                         const char *account, const char *name,
-                                         const char *body, size_t body_len,
-                                         int keep_alive)
-{
-    (void)uid;
-    uint32_t repo_id = hash_repo(account, name);
-    if (!repo_exists(repo_id)) { send_html(s, 404, "<p>no such repo</p>", 19, keep_alive, NULL); return; }
-    char id_s[32];
-    if (form_get(body, body_len, "issue_id", id_s, sizeof(id_s))) {
-        uint32_t iid = (uint32_t)strtoul(id_s, NULL, 10);
-        if (iid) {
-            SVC_OPEN(iss, "issues", issues_store_create);
-            if (iss.ok) {
-                issues_store_close(&iss.c, iss.obj, NULL, iid);
-                SVC_CLOSE(iss);
-            }
-        }
-    }
-    char where[160];
-    snprintf(where, sizeof(where), "/%s/%s/issues", account, name);
-    send_redirect(s, where, keep_alive, NULL);
-}
-
-static void render_repo_runs(struct yloop_stream *s, uint32_t uid,
-                             const char *uname,
-                             const char *account, const char *name, int keep_alive)
-{
-    uint32_t repo_id = hash_repo(account, name);
-    if (!repo_exists(repo_id)) {
-        send_html(s, 404, "<p>repo not found</p>", 21, keep_alive, NULL);
-        return;
-    }
-    (void)repo_id; /* git_pipeline counts are global today */
-
-    struct buf b; buf_init(&b);
-    char title[160];
-    snprintf(title, sizeof(title), "Pipelines — %s/%s", account, name);
-    render_head(&b, title, uid, uname);
-
-    int64_t q = -1, r = -1, d = -1;
-    SVC_OPEN(gp, "git_pipeline", git_pipeline_store_create);
-    if (gp.ok) {
-        struct picomesh_size_result a = git_pipeline_store_count_pending(&gp.c, gp.obj, NULL);
-        struct picomesh_size_result b2 = git_pipeline_store_count_running(&gp.c, gp.obj, NULL);
-        struct picomesh_size_result c = git_pipeline_store_count_done(&gp.c, gp.obj, NULL);
-        if (PICOMESH_IS_OK(a)) q = (int64_t)a.value;  else picomesh_error_destroy(a.error);
-        if (PICOMESH_IS_OK(b2)) r = (int64_t)b2.value; else picomesh_error_destroy(b2.error);
-        if (PICOMESH_IS_OK(c)) d = (int64_t)c.value;  else picomesh_error_destroy(c.error);
-        SVC_CLOSE(gp);
-    }
-
-    render_repo_tabs(&b, account, name, "runs", -1,
-                     q >= 0 ? q + r : -1);
-    buf_printf(&b,
-        "<header class=\"page-header\">"
-        "<div><h1>Pipeline runs</h1>"
-        "<p class=\"muted small\"><a href=\"/%s/%s\">← %s/%s</a></p></div>"
-        "<a class=\"btn primary\" href=\"#new\">Enqueue job</a></header>"
-        "<section class=\"card\">"
-        "<table class=\"grid\"><thead><tr><th>State</th><th>Count</th></tr></thead>"
-        "<tbody>"
-        "<tr><td>queued</td>  <td><span class=\"badge queued\">%lld</span></td></tr>"
-        "<tr><td>running</td> <td><span class=\"badge running\">%lld</span></td></tr>"
-        "<tr><td>finished</td><td><span class=\"badge succeeded\">%lld</span></td></tr>"
-        "</tbody></table></section>"
-        "<section class=\"card\" id=\"new\">"
-        "<header class=\"card-header\"><h2>Enqueue a job for this repo</h2></header>"
-        "<form method=\"post\" action=\"/%s/%s/runs/new\">"
-        "<button type=\"submit\" class=\"primary\">git_pipeline_store_enqueue</button>"
-        "</form></section>"
-        "<section class=\"card\">"
-        "<header class=\"card-header\"><h2>Lease the next job</h2></header>"
-        "<form method=\"post\" action=\"/%s/%s/runs/lease\">"
-        "<label>Runner uid <input type=\"number\" name=\"runner\" value=\"1\"></label>"
-        "<button type=\"submit\">lease</button>"
-        "</form></section>",
-        account, name, account, name,
-        (long long)(q < 0 ? 0 : q),
-        (long long)(r < 0 ? 0 : r),
-        (long long)(d < 0 ? 0 : d),
-        account, name, account, name);
-
-    render_foot(&b);
-    send_html(s, 200, b.data, b.len, keep_alive, NULL);
-    buf_free(&b);
-}
-
-static void route_repo_runs_new_post(struct yloop_stream *s, uint32_t uid,
-                                     const char *account, const char *name,
-                                     int keep_alive)
-{
-    (void)uid;
-    uint32_t repo_id = hash_repo(account, name);
-    if (!repo_exists(repo_id)) { send_html(s, 404, "<p>no such repo</p>", 19, keep_alive, NULL); return; }
-    SVC_OPEN(gp, "git_pipeline", git_pipeline_store_create);
-    if (gp.ok) {
-        git_pipeline_store_enqueue(&gp.c, gp.obj, NULL, repo_id);
-        SVC_CLOSE(gp);
-    }
-    char where[160];
-    snprintf(where, sizeof(where), "/%s/%s/runs", account, name);
-    send_redirect(s, where, keep_alive, NULL);
-}
-
-static void route_repo_runs_lease_post(struct yloop_stream *s, uint32_t uid,
-                                       const char *account, const char *name,
-                                       const char *body, size_t body_len, int keep_alive)
-{
-    (void)uid;
-    uint32_t repo_id = hash_repo(account, name);
-    if (!repo_exists(repo_id)) { send_html(s, 404, "<p>no such repo</p>", 19, keep_alive, NULL); return; }
-    char runner_s[32];
-    if (form_get(body, body_len, "runner", runner_s, sizeof(runner_s))) {
-        uint32_t runner = (uint32_t)strtoul(runner_s, NULL, 10);
-        if (!runner) runner = 1;
-        SVC_OPEN(gp, "git_pipeline", git_pipeline_store_create);
-        if (gp.ok) {
-            git_pipeline_store_lease(&gp.c, gp.obj, NULL, runner);
-            SVC_CLOSE(gp);
-        }
-    }
-    char where[160];
-    snprintf(where, sizeof(where), "/%s/%s/runs", account, name);
-    send_redirect(s, where, keep_alive, NULL);
-}
-
-/* ---------- admin pages ---------- */
-
-static void render_admin_users(struct yloop_stream *s, uint32_t uid,
-                               const char *uname, int keep_alive)
-{
-    struct buf b; buf_init(&b);
-    render_head(&b, "Users", uid, uname);
-
-    int64_t total = -1;
-    SVC_OPEN(acc, "accounts", accounts_store_create);
-    if (acc.ok) {
-        struct picomesh_size_result r = accounts_store_count(&acc.c, acc.obj, NULL);
-        if (PICOMESH_IS_OK(r)) total = (int64_t)r.value;
-        else picomesh_error_destroy(r.error);
-        SVC_CLOSE(acc);
-    }
-
-    int64_t patc = -1;
-    SVC_OPEN(pat, "personal_access_tokens", personal_access_tokens_store_create);
-    if (pat.ok) {
-        struct picomesh_size_result r = personal_access_tokens_store_count_active(&pat.c, pat.obj, NULL);
-        if (PICOMESH_IS_OK(r)) patc = (int64_t)r.value;
-        else picomesh_error_destroy(r.error);
-        SVC_CLOSE(pat);
-    }
-
-    buf_printf(&b,
-        "<header class=\"page-header\"><h1>Users</h1></header>"
-        "<section class=\"card\"><header class=\"card-header\">"
-        "<h2>accounts</h2></header>"
-        "<p>Total registered users: <strong>%s</strong></p>"
-        "<form method=\"post\" action=\"/admin/users/register\">"
-        "<label>uid <input type=\"number\" name=\"uid\" value=\"100\"></label>"
-        "<button type=\"submit\" class=\"primary\">register</button>"
-        "</form></section>"
-        "<section class=\"card\"><header class=\"card-header\">"
-        "<h2>personal access tokens</h2></header>"
-        "<p>Active PATs: <strong>%s</strong></p>"
-        "<form method=\"post\" action=\"/admin/users/mint_pat\">"
-        "<label>uid <input type=\"number\" name=\"uid\" value=\"100\"></label>"
-        "<button type=\"submit\">mint</button>"
-        "</form></section>",
-        total < 0 ? "—" : ({static char x[32]; snprintf(x, sizeof(x), "%lld", (long long)total); x;}),
-        patc  < 0 ? "—" : ({static char x[32]; snprintf(x, sizeof(x), "%lld", (long long)patc);  x;}));
-    render_foot(&b);
-    send_html(s, 200, b.data, b.len, keep_alive, NULL);
-    buf_free(&b);
-}
-
-static void route_admin_users_register(struct yloop_stream *s,
-                                       const char *body, size_t body_len, int keep_alive)
-{
-    char uid_s[32];
-    if (form_get(body, body_len, "uid", uid_s, sizeof(uid_s))) {
-        uint32_t uid = (uint32_t)strtoul(uid_s, NULL, 10);
-        SVC_OPEN(acc, "accounts", accounts_store_create);
-        if (acc.ok && uid) {
-            accounts_store_register(&acc.c, acc.obj, NULL, uid);
-            SVC_CLOSE(acc);
-        }
-    }
-    send_redirect(s, "/admin/users", keep_alive, NULL);
-}
-
-static void route_admin_users_mint_pat(struct yloop_stream *s,
-                                       const char *body, size_t body_len, int keep_alive)
+/* Mint a personal access token for an existing uid. (There is deliberately
+ * NO admin "register account id" action: a bare numeric account with no
+ * username/credential/role is not a user — real users sign up via
+ * /register.) */
+static void route_admin_tokens_mint_pat(struct yloop_stream *s,
+                                        const char *body, size_t body_len, int keep_alive)
 {
     char uid_s[32];
     if (form_get(body, body_len, "uid", uid_s, sizeof(uid_s))) {
@@ -1867,7 +1281,7 @@ static void route_admin_users_mint_pat(struct yloop_stream *s,
             SVC_CLOSE(pat);
         }
     }
-    send_redirect(s, "/admin/users", keep_alive, NULL);
+    send_redirect(s, "/admin/tokens", keep_alive, NULL);
 }
 
 /* `/admin/storage` was removed: backend kv state isn't a UI concern,
@@ -1882,33 +1296,6 @@ static int path_eq(const char *p, const char *target)
     const char *q = strchr(p, '?');
     size_t n = q ? (size_t)(q - p) : strlen(p);
     return n == strlen(target) && memcmp(p, target, n) == 0;
-}
-
-static const char *query_get(const char *path, const char *key,
-                             char *out, size_t cap)
-{
-    const char *q = strchr(path, '?');
-    if (!q) { out[0] = 0; return NULL; }
-    const char *p = q + 1;
-    size_t kl = strlen(key);
-    while (*p) {
-        const char *eq = strchr(p, '=');
-        if (!eq) break;
-        if ((size_t)(eq - p) == kl && strncmp(p, key, kl) == 0) {
-            const char *vstart = eq + 1;
-            const char *end = strchr(vstart, '&');
-            size_t vlen = end ? (size_t)(end - vstart) : strlen(vstart);
-            if (vlen >= cap) vlen = cap - 1;
-            memcpy(out, vstart, vlen);
-            out[vlen] = 0;
-            return out;
-        }
-        const char *nxt = strchr(p, '&');
-        if (!nxt) break;
-        p = nxt + 1;
-    }
-    out[0] = 0;
-    return NULL;
 }
 
 /* ---------- yaapp-compatible gateway API (/_rpc, /_describe) ---------- */
@@ -2189,6 +1576,56 @@ static void route_json_rpc(struct yloop_stream *s,
     yjson_doc_free(doc);
 }
 
+/* GET|POST /_whoami — resolve the caller's opaque session token (cookie /
+ * picomesh-sid header / Bearer) to its authenticated claims:
+ *   {"uid":N,"username":"…","is_admin":true|false}
+ * uid 0 ⇒ anonymous. This is the gateway's external→internal identity
+ * translation, exposed so the webapp can gate admin space and derive
+ * ownership from the live session instead of a forgeable cookie. The
+ * payload carries only non-sensitive claims (uid, username, admin bit) —
+ * never the internal JWT or any secret. The username comes from the
+ * server-side accounts/name:<uid> index, not from anything client-supplied. */
+static void route_whoami(struct yloop_stream *s,
+                         const char *headers_raw, size_t headers_raw_len,
+                         int keep_alive)
+{
+    char token[64];
+    uint32_t uid = 0;
+    if (extract_session_token(headers_raw, headers_raw_len, token, sizeof(token)))
+        uid = uid_for_sid((uint32_t)strtoul(token, NULL, 10));
+
+    char uname[64] = {0};
+    if (uid) {
+        struct svc_ctx st = {0};
+        if (repo_storage_open(&st)) {
+            char k[64];
+            snprintf(k, sizeof(k), "name:%u", uid);
+            struct picomesh_string_result r =
+                sharded_storage_db_get(&st.c, st.obj, NULL, "accounts", k);
+            if (PICOMESH_IS_OK(r)) {
+                if (r.value) {
+                    snprintf(uname, sizeof(uname), "%s", r.value);
+                    free(r.value);
+                }
+            } else {
+                picomesh_error_destroy(r.error);
+            }
+            SVC_CLOSE(st);
+        }
+    }
+
+    struct yjson_writer *w = yjson_writer_new();
+    yjson_w_begin_object(w);
+    yjson_w_key(w, "uid");      yjson_w_int(w, (int64_t)uid);
+    yjson_w_key(w, "username"); yjson_w_string(w, uname);
+    yjson_w_key(w, "is_admin"); yjson_w_bool(w, uid ? is_site_admin(uid) : 0);
+    yjson_w_end_object(w);
+    size_t len;
+    const char *data = yjson_w_data(w, &len);
+    send_json(s, 200, data, len, keep_alive);
+    yjson_writer_free(w);
+}
+
 struct describe_emit_ctx { struct yjson_writer *w; };
 
 static void describe_slot_cb(const char *name, method_slot slot, void *ud)
@@ -2443,6 +1880,7 @@ int yhttp_frontend_try(struct yloop_stream *s,
         if (is_get || is_post) {
             if (path_eq(path, "/_describe"))      { route_describe(s, NULL, 0, keep_alive); return 1; }
             if (path_eq(path, "/_describe_tree")) { route_describe(s, NULL, 1, keep_alive); return 1; }
+            if (path_eq(path, "/_whoami"))        { route_whoami(s, headers_raw, headers_raw_len, keep_alive); return 1; }
             if (try_hierarchical_describe(s, path, keep_alive)) return 1;
         }
 
@@ -2490,10 +1928,9 @@ int yhttp_frontend_try(struct yloop_stream *s,
         if (is_post && path_eq(path, "/repos/new"))
             { route_repos_new_post(s, uid, uname, body, body_len, keep_alive); return 1; }
         if (strncmp(path, "/admin/", 7) == 0 && is_site_admin(uid)) {
-            if (is_post && path_eq(path, "/admin/users/register"))
-                { route_admin_users_register(s, body, body_len, keep_alive); return 1; }
-            if (is_post && path_eq(path, "/admin/users/mint_pat"))
-                { route_admin_users_mint_pat(s, body, body_len, keep_alive); return 1; }
+            /* Token administration lives in its own admin section. */
+            if (is_post && path_eq(path, "/admin/tokens/mint_pat"))
+                { route_admin_tokens_mint_pat(s, body, body_len, keep_alive); return 1; }
         }
     }
 

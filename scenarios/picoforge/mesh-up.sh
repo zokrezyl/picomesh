@@ -50,9 +50,12 @@ echo "[1/6] starting parent picomesh (yhttp control) on :${CTRL}"
     > tmp/mesh-parent.log 2>&1 &
 PARENT=$!
 cleanup() {
-    pkill -9 -f 'picoforge-webapp' 2>/dev/null || true
-    pkill -9 -f 'picomesh.*serve' 2>/dev/null || true
-    kill -KILL $PARENT 2>/dev/null || true
+    # The mesh owns its children: SIGTERM the control parent and its reaper
+    # takes the spawned backends down. The webapp sidecar is started by THIS
+    # script (a pid we own), so signal that one too. Never pkill, never kill
+    # a backend child directly — see CLAUDE.md "Process lifecycle & teardown".
+    [ -n "${SIDECAR:-}" ] && kill -TERM "$SIDECAR" 2>/dev/null || true
+    kill -TERM "$PARENT" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 sleep 0.5
@@ -235,20 +238,40 @@ expect_contains 'webapp GET /<acct>/<repo>/issues'        "$out" '<strong>Issues
 expect_contains 'webapp issues page active tab'           "$out" 'class="active" href="/alice/website/issues"'
 out=$(curl -sS --max-time 10 -b tmp/side-cookies.txt "http://127.0.0.1:${SIDE}/alice/website/runs")
 expect_contains 'webapp GET /<acct>/<repo>/runs'          "$out" '<strong>Pipeline runs</strong>'
+# Admin space is gated on a signed-in SITE ADMIN, enforced BEFORE any
+# admin content renders. alice is a regular user → 403; an anonymous
+# caller → 303 to /login. Only root (the site-owner bootstrapped at the
+# first /register) may see the admin pages.
+code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
+            "http://127.0.0.1:${SIDE}/admin")
+[ "$code" = "303" ] && note_pass "anonymous /admin → 303 (redirect to login)" \
+                    || note_fail "anonymous /admin returned $code (want 303)"
+code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
+            -b tmp/side-cookies.txt "http://127.0.0.1:${SIDE}/admin")
+[ "$code" = "403" ] && note_pass "non-admin alice /admin → 403 (forbidden before render)" \
+                    || note_fail "non-admin alice /admin returned $code (want 403)"
+
+# Sign in as root (the site owner) to view the admin area.
+rm -f tmp/root-cookies.txt
+curl -sS --max-time 10 -c tmp/root-cookies.txt -o /dev/null -XPOST \
+     "http://127.0.0.1:${SIDE}/login" \
+     --data-urlencode 'username=root' --data-urlencode 'password=rootpw'
+
 # The Admin area is its OWN section with its OWN left menu (distinct from
 # the project nav). /admin is the overview; each aspect is a page; every
 # admin page shows the "Admin area" sidebar, not the project sidebar.
-out=$(curl -sS --max-time 10 -b tmp/side-cookies.txt "http://127.0.0.1:${SIDE}/admin")
-expect_contains 'webapp GET /admin (overview)'            "$out" '<h1>Admin</h1>'
+out=$(curl -sS --max-time 10 -b tmp/root-cookies.txt "http://127.0.0.1:${SIDE}/admin")
+expect_contains 'webapp GET /admin (overview, as admin)'  "$out" '<h1>Admin</h1>'
 expect_contains 'admin area has its own sidebar'          "$out" 'Admin area'
 expect_contains 'admin overview links to Repositories'    "$out" 'href="/admin/repos"'
-out=$(curl -sS --max-time 10 -b tmp/side-cookies.txt "http://127.0.0.1:${SIDE}/admin/users")
+out=$(curl -sS --max-time 10 -b tmp/root-cookies.txt "http://127.0.0.1:${SIDE}/admin/users")
 expect_contains 'webapp GET /admin/users'                 "$out" '<h1>Users</h1>'
 expect_contains 'admin/users uses admin sidebar'          "$out" 'class="active" href="/admin/users"'
+expect_contains 'admin/users lists real registered users' "$out" 'alice'
 expect_contains 'admin sidebar excludes Projects nav'     "$out" 'href="/admin/services"'
-out=$(curl -sS --max-time 10 -b tmp/side-cookies.txt "http://127.0.0.1:${SIDE}/admin/repos")
+out=$(curl -sS --max-time 10 -b tmp/root-cookies.txt "http://127.0.0.1:${SIDE}/admin/repos")
 expect_contains 'webapp GET /admin/repos'                 "$out" '<h1>Repositories</h1>'
-out=$(curl -sS --max-time 10 -b tmp/side-cookies.txt "http://127.0.0.1:${SIDE}/admin/tokens")
+out=$(curl -sS --max-time 10 -b tmp/root-cookies.txt "http://127.0.0.1:${SIDE}/admin/tokens")
 expect_contains 'webapp GET /admin/tokens'                "$out" '<h1>Tokens</h1>'
 
 # New GitLab-like shell additions (gh#10): repo settings tab, services
@@ -256,7 +279,7 @@ expect_contains 'webapp GET /admin/tokens'                "$out" '<h1>Tokens</h1
 # all sourced from the gateway, all inside the same shell.
 out=$(curl -sS --max-time 10 -b tmp/side-cookies.txt "http://127.0.0.1:${SIDE}/alice/website/settings")
 expect_contains 'webapp GET /<acct>/<repo>/settings'      "$out" 'class="active" href="/alice/website/settings"'
-out=$(curl -sS --max-time 10 -b tmp/side-cookies.txt "http://127.0.0.1:${SIDE}/admin/services")
+out=$(curl -sS --max-time 10 -b tmp/root-cookies.txt "http://127.0.0.1:${SIDE}/admin/services")
 expect_contains 'webapp GET /admin/services lists services' "$out" 'service-table'
 expect_contains 'webapp /admin/services shows git_repo'   "$out" 'git_repo'
 out=$(curl -sS --max-time 10 -b tmp/side-cookies.txt "http://127.0.0.1:${SIDE}/dashboard/issues")

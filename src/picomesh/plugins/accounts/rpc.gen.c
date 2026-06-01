@@ -318,6 +318,69 @@ _short_body:
     return _resp_max >= 1 ? 1 : 0;
 }
 
+static size_t accounts_store_list_skel(const void *_body, size_t _body_len,
+                          void *_resp, size_t _resp_max)
+{
+    size_t _off = 0;
+    struct ctx _local = {0};
+    /* The framework header section is first on every CALL body — parse
+     * it back into the `hdrs` argument before the packed business args. */
+    struct yheaders *_hdrs = NULL;
+    {
+        size_t _hconsumed = 0;
+        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
+        if (!_hdrs) goto _short_body;
+        _off = _hconsumed;
+    }
+    struct object *_obj = NULL;
+    {
+        if (_off + 8 > _body_len) goto _short_body;
+        uint64_t _h;
+        memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
+        _obj = (struct object *)rpc_handle_resolve(_h);
+    }
+    double span_start = picomesh_ytime_monotonic_sec();
+    struct picomesh_string_result _r = accounts_store_list(&_local, _obj, _hdrs);
+    {
+        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
+        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
+        ydebug("span trace=%s op=skel.accounts_store_list dur_us=%.0f", span_trace ? span_trace : "-", span_us);
+        yspan_record("skel.accounts_store_list", span_us);
+    }
+    yheaders_free(_hdrs); _hdrs = NULL;
+    if (_resp_max < 1) return 0;
+    if (PICOMESH_IS_ERR(_r)) {
+        picomesh_error_print(stderr, "[skel] accounts_store_list", _r.error);
+        const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
+        uint32_t _ml = (uint32_t)strlen(_msg);
+        if (_ml > 256) _ml = 256;
+        if (_resp_max < 1 + 4 + _ml) {
+            picomesh_error_destroy(_r.error);
+            ((uint8_t *)_resp)[0] = 1;
+            return _resp_max >= 1 ? 1 : 0;
+        }
+        ((uint8_t *)_resp)[0] = 1;
+        memcpy((uint8_t *)_resp + 1, &_ml, 4);
+        memcpy((uint8_t *)_resp + 5, _msg, _ml);
+        picomesh_error_destroy(_r.error);
+        return 1 + 4 + _ml;
+    }
+    {
+        const char *_sv = _r.value ? _r.value : "";
+        uint32_t _svlen = (uint32_t)strlen(_sv);
+        if (_resp_max < 1 + 4 + (size_t)_svlen) { free(_r.value); return 0; }
+        ((uint8_t *)_resp)[0] = 0;
+        memcpy((uint8_t *)_resp + 1, &_svlen, 4);
+        if (_svlen) memcpy((uint8_t *)_resp + 5, _sv, _svlen);
+        free(_r.value);
+        return 1 + 4 + (size_t)_svlen;
+    }
+_short_body:
+    yheaders_free(_hdrs);
+    if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
+    return _resp_max >= 1 ? 1 : 0;
+}
+
 static int accounts_store_register_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
@@ -408,6 +471,24 @@ static int accounts_store_count_jinvoke(struct ctx *ctx, struct object *obj, str
     return 0;
 }
 
+static int accounts_store_list_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
+{
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_string_result call_result = accounts_store_list(call_ctx, obj, hdrs);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "accounts_store_list",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    yjson_w_string(result, call_result.value ? call_result.value : "");
+    free(call_result.value);
+    return 0;
+}
+
 struct object_ptr_result accounts_store_create(struct ctx *ctx)
 {
     ydebug("class=accounts_store");
@@ -429,7 +510,8 @@ static const struct accounts_jinvoke_row accounts_jinvoke_rows[] = {
     {"accounts_store_exists", accounts_store_exists_jinvoke},
     {"accounts_store_set_balance", accounts_store_set_balance_jinvoke},
     {"accounts_store_balance", accounts_store_balance_jinvoke},
-    {"accounts_store_count", accounts_store_count_jinvoke}
+    {"accounts_store_count", accounts_store_count_jinvoke},
+    {"accounts_store_list", accounts_store_list_jinvoke}
 };
 
 static jinvoke_fn accounts_jinvoke_lookup(const char *qname)
@@ -457,7 +539,8 @@ static const struct accounts_skel_row accounts_skel_rows[] = {
     {"accounts_store_exists", accounts_store_exists_skel},
     {"accounts_store_set_balance", accounts_store_set_balance_skel},
     {"accounts_store_balance", accounts_store_balance_skel},
-    {"accounts_store_count", accounts_store_count_skel}
+    {"accounts_store_count", accounts_store_count_skel},
+    {"accounts_store_list", accounts_store_list_skel}
 };
 
 static rpc_skel_fn accounts_skel_lookup(method_slot slot)

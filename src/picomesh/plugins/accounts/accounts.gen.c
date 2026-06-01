@@ -11,6 +11,8 @@ __attribute__((unused))
 static accounts_store_balance_fn _accounts_store_accounts_store_balance_check = accounts_store_balance_impl;
 __attribute__((unused))
 static accounts_store_count_fn _accounts_store_accounts_store_count_check = accounts_store_count_impl;
+__attribute__((unused))
+static accounts_store_list_fn _accounts_store_accounts_store_list_check = accounts_store_list_impl;
 
 struct class_ptr_result accounts_store_class_get(void)
 {
@@ -29,6 +31,7 @@ struct class_ptr_result accounts_store_class_get(void)
         {"accounts", "store_set_balance", (method_id_t)accounts_store_set_balance, (impl_t)accounts_store_set_balance_impl},
         {"accounts", "store_balance", (method_id_t)accounts_store_balance, (impl_t)accounts_store_balance_impl},
         {"accounts", "store_count", (method_id_t)accounts_store_count, (impl_t)accounts_store_count_impl},
+        {"accounts", "store_list", (method_id_t)accounts_store_list, (impl_t)accounts_store_list_impl},
     };
     struct class_ptr_result _r =
         class_register(&desc, ops, sizeof(ops) / sizeof(ops[0]),

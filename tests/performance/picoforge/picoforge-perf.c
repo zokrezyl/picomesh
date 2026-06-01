@@ -57,6 +57,22 @@ enum scenario_id {
     SCENARIO_FULL,
     SCENARIO_STORE_SET,   /* storage.db.set, unique key/iter (single-env write) */
     SCENARIO_SHARD_SET,   /* sharded_storage.db.set, unique key/iter (sharded write) */
+    SCENARIO_MIXED,       /* each worker = a user doing a random op stream */
+};
+
+/* Op kinds the `mixed` scenario draws from, each a real user action through
+ * the gateway. Order matters: it indexes the weight table + the per-op
+ * tally + the OP_NAMES strings. */
+enum mixed_op {
+    OP_READ_COUNT = 0,  /* /_rpc git_repo.store.count_total       (read)  */
+    OP_READ_LIST,       /* /_rpc git_repo.store.list_for_owner    (read)  */
+    OP_KV_SET,          /* /_rpc sharded_storage.db.set           (write) */
+    OP_PUT_FILE,        /* /_rpc git_repo.store.put_file          (commit)*/
+    OP_OPEN_ISSUE,      /* /_rpc issues.store.open                (write) */
+    OP_ENQUEUE_RUN,     /* /_rpc git_pipeline.store.enqueue       (write) */
+    OP_MAKE_REPO,       /* /_rpc git_repo.store.make              (write) */
+    OP_LOGIN,           /* /login                                 (auth)  */
+    OP__COUNT,
 };
 
 struct perf_config {
@@ -68,6 +84,8 @@ struct perf_config {
     enum scenario_id scenario;
     const char *scenario_name;
     long run_nonce;         /* keeps usernames unique across runs */
+    long seed_users;        /* mixed: stage-1 population to pre-create */
+    int  repos_per_worker;  /* mixed: cap on repos a worker creates */
 };
 
 /* ---- monotonic clock ------------------------------------------------- */
@@ -77,6 +95,66 @@ static uint64_t now_ns(void)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+/* ---- FNV-1a (MUST match the gateway's hash_username/hash_repo) ------- *
+ * The mixed scenario calls backend methods directly over /_rpc, so it has
+ * to derive the same uid (owner id) and repo_id the gateway would, from
+ * the account/repo names it controls. uid==0 means anonymous, so a zero
+ * hash is bumped to 1 — exactly as the gateway does. */
+static uint32_t hash_username(const char *s)
+{
+    uint32_t h = 2166136261u;
+    if (s) for (const unsigned char *p = (const unsigned char *)s; *p; ++p) {
+        h ^= *p; h *= 16777619u;
+    }
+    return h ? h : 1u;
+}
+
+static uint32_t hash_repo(const char *account, const char *name)
+{
+    uint32_t h = 2166136261u;
+    if (account) for (const unsigned char *p = (const unsigned char *)account; *p; ++p) {
+        h ^= *p; h *= 16777619u;
+    }
+    h ^= '/'; h *= 16777619u;
+    if (name) for (const unsigned char *p = (const unsigned char *)name; *p; ++p) {
+        h ^= *p; h *= 16777619u;
+    }
+    return h ? h : 1u;
+}
+
+/* Per-worker xorshift RNG — independent streams, no shared state/locks. */
+static uint32_t rng_next(uint64_t *state)
+{
+    uint64_t x = *state;
+    x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+    *state = x;
+    return (uint32_t)(x >> 32);
+}
+
+static const char *const OP_NAMES[OP__COUNT] = {
+    "read_count", "read_list", "kv_set", "put_file",
+    "open_issue", "enqueue_run", "make_repo", "login",
+};
+
+/* Weighted op mix for `mixed`, summing to 100. Reads + a cheap KV write
+ * dominate (real users browse far more than they write); the heavy libgit2
+ * commit (put_file) and repo creation are rarer. Index by enum mixed_op. */
+static const int OP_WEIGHTS[OP__COUNT] = {
+    /*read_count*/ 25, /*read_list*/ 15, /*kv_set*/ 20, /*put_file*/ 15,
+    /*open_issue*/ 10, /*enqueue_run*/ 7, /*make_repo*/ 5, /*login*/ 3,
+};
+
+static enum mixed_op pick_op(uint64_t *rng)
+{
+    int r = (int)(rng_next(rng) % 100);
+    int acc = 0;
+    for (int i = 0; i < OP__COUNT; ++i) {
+        acc += OP_WEIGHTS[i];
+        if (r < acc) return (enum mixed_op)i;
+    }
+    return OP_READ_COUNT;
 }
 
 /* ---- a keep-alive connection to the gateway -------------------------- */
@@ -190,7 +268,7 @@ static int http_request(struct conn *c, const char *method, const char *path,
                 strncasecmp(p, "set-cookie:", 11) == 0) {
                 char *v = strstr(p, "picomesh-sid=");
                 if (v && v < hdr_end) {
-                    v += 10;
+                    v = strchr(v, '=') + 1; /* skip "picomesh-sid=" to value */
                     size_t i = 0;
                     while (v[i] && v[i] != ';' && v[i] != '\r' && v[i] != '\n'
                            && i < out_sid_cap - 1) { out_sid[i] = v[i]; i++; }
@@ -270,12 +348,21 @@ struct worker {
 
     struct conn conn;
     char sid[64];           /* session token for this worker */
+    char uname[40];         /* this worker's account name (for picomesh-uname) */
     int session_ok;
+
+    /* mixed-scenario per-worker state */
+    uint64_t rng;           /* independent xorshift stream */
+    uint32_t uid;           /* hash_username(uname) — owner id for /_rpc */
+    int n_repos;            /* repos this worker has created (≤ cap) */
 
     /* results */
     struct latencies lat;
     uint64_t ok;
     uint64_t errors;
+    uint64_t seed_ok, seed_err;        /* stage-1 population pre-create */
+    uint64_t op_ok[OP__COUNT];         /* mixed: per-op success tally */
+    uint64_t op_err[OP__COUNT];        /* mixed: per-op failure tally */
 };
 
 /* Build a username unique to (run, worker[, counter]); fits the
@@ -294,6 +381,7 @@ static int worker_establish_session(struct worker *w)
 {
     char user[40];
     make_user(user, sizeof(user), w->cfg->run_nonce, w->id, -1);
+    snprintf(w->uname, sizeof(w->uname), "%s", user);
     char body[128];
     int bn = snprintf(body, sizeof(body), "username=%s&password=x", user);
 
@@ -339,11 +427,16 @@ static int scenario_step(struct worker *w, long counter)
         /* Needs a real session — otherwise /repos/new just 303s back to
          * /login and we'd be timing redirects, not repo creation. Treat
          * a missing session as a failure so it shows up honestly. */
-        if (!w->sid[0]) return 0;
+        if (!w->sid[0] || !w->uname[0]) return 0;
         char body[64];
         int bn = snprintf(body, sizeof(body), "name=r%ld", counter);
+        /* The gateway's /repos/new picks the target account namespace from
+         * the picomesh-uname cookie; with only picomesh-sid it 303s to
+         * /login and creates nothing. Send both cookies, like a browser. */
+        char cookie[128];
+        snprintf(cookie, sizeof(cookie), "%s; picomesh-uname=%s", w->sid, w->uname);
         int st = http_try(c, "POST", "/repos/new",
-                          "application/x-www-form-urlencoded", w->sid,
+                          "application/x-www-form-urlencoded", cookie,
                           body, (size_t)bn, NULL, 0);
         /* A real create lands on the repo page (303 to /<acct>/<name>).
          * A 303 to /login means the session was rejected → not a success. */
@@ -370,9 +463,12 @@ static int scenario_step(struct worker *w, long counter)
         if (!(st == 303 || st == 200) || !sid[0]) return 0;
         char rbody[64];
         int rn = snprintf(rbody, sizeof(rbody), "name=r%ld", counter);
+        /* Same cookie pair the gateway needs to resolve the namespace. */
+        char cookie[128];
+        snprintf(cookie, sizeof(cookie), "%s; picomesh-uname=%s", sid, user);
         if (http_try(c, "POST", "/repos/new", "application/x-www-form-urlencoded",
-                     sid, rbody, (size_t)rn, NULL, 0) < 0) return 0;
-        st = http_try(c, "GET", "/repos", NULL, sid, "", 0, NULL, 0);
+                     cookie, rbody, (size_t)rn, NULL, 0) < 0) return 0;
+        st = http_try(c, "GET", "/repos", NULL, cookie, "", 0, NULL, 0);
         return st == 200;
     }
     case SCENARIO_STORE_SET:
@@ -390,13 +486,108 @@ static int scenario_step(struct worker *w, long counter)
                           body, (size_t)bn, NULL, 0);
         return st == 200;
     }
+    case SCENARIO_MIXED: {
+        /* One random user action through the gateway, carrying the worker's
+         * session cookie (so the gateway resolves sid→uid per call — the real
+         * hot-path cost). Backend methods are addressed directly over /_rpc;
+         * the owner uid and repo_id are derived with the same FNV hashes the
+         * gateway uses. r0 is pre-created at setup, so a repo always exists. */
+        enum mixed_op op = pick_op(&w->rng);
+        enum mixed_op did = op;
+        char body[512];
+        int st = -1;
+        if (op == OP_PUT_FILE || op == OP_OPEN_ISSUE || op == OP_ENQUEUE_RUN) {
+            if (w->n_repos <= 0) { op = OP_READ_COUNT; did = OP_READ_COUNT; }
+        }
+        if (op == OP_MAKE_REPO && w->n_repos >= w->cfg->repos_per_worker) {
+            op = OP_READ_LIST; did = OP_READ_LIST;  /* "enough repos" → browse */
+        }
+        switch (op) {
+        case OP_READ_COUNT: {
+            static const char b[] = "{\"path\":\"git_repo.store.count_total\",\"args\":[]}";
+            st = http_try(c, "POST", "/_rpc", "application/json", w->sid,
+                          b, sizeof(b) - 1, NULL, 0);
+            break;
+        }
+        case OP_READ_LIST: {
+            int bn = snprintf(body, sizeof(body),
+                "{\"path\":\"git_repo.store.list_for_owner\",\"args\":[%u]}", w->uid);
+            st = http_try(c, "POST", "/_rpc", "application/json", w->sid,
+                          body, (size_t)bn, NULL, 0);
+            break;
+        }
+        case OP_KV_SET: {
+            int bn = snprintf(body, sizeof(body),
+                "{\"path\":\"sharded_storage.db.set\",\"args\":[\"bench\",\"w%d_%ld\",%ld]}",
+                w->id, counter, counter);
+            st = http_try(c, "POST", "/_rpc", "application/json", w->sid,
+                          body, (size_t)bn, NULL, 0);
+            break;
+        }
+        case OP_MAKE_REPO: {
+            int bn = snprintf(body, sizeof(body),
+                "{\"path\":\"git_repo.store.make\",\"args\":[%u,\"%s\",\"r%d\"]}",
+                w->uid, w->uname, w->n_repos);
+            st = http_try(c, "POST", "/_rpc", "application/json", w->sid,
+                          body, (size_t)bn, NULL, 0);
+            if (st == 200) w->n_repos++;
+            break;
+        }
+        case OP_PUT_FILE: {
+            uint32_t idx = rng_next(&w->rng) % (uint32_t)w->n_repos;
+            char repo[16]; snprintf(repo, sizeof(repo), "r%u", idx);
+            uint32_t rid = hash_repo(w->uname, repo);
+            int bn = snprintf(body, sizeof(body),
+                "{\"path\":\"git_repo.store.put_file\",\"args\":"
+                "[%u,\"f%ld.txt\",\"hello %ld\",\"commit %ld\",\"\",\"\"]}",
+                rid, counter, counter, counter);
+            st = http_try(c, "POST", "/_rpc", "application/json", w->sid,
+                          body, (size_t)bn, NULL, 0);
+            break;
+        }
+        case OP_OPEN_ISSUE: {
+            uint32_t idx = rng_next(&w->rng) % (uint32_t)w->n_repos;
+            char repo[16]; snprintf(repo, sizeof(repo), "r%u", idx);
+            uint32_t rid = hash_repo(w->uname, repo);
+            int bn = snprintf(body, sizeof(body),
+                "{\"path\":\"issues.store.open\",\"args\":[%u,%u]}", rid, w->uid);
+            st = http_try(c, "POST", "/_rpc", "application/json", w->sid,
+                          body, (size_t)bn, NULL, 0);
+            break;
+        }
+        case OP_ENQUEUE_RUN: {
+            uint32_t idx = rng_next(&w->rng) % (uint32_t)w->n_repos;
+            char repo[16]; snprintf(repo, sizeof(repo), "r%u", idx);
+            uint32_t rid = hash_repo(w->uname, repo);
+            int bn = snprintf(body, sizeof(body),
+                "{\"path\":\"git_pipeline.store.enqueue\",\"args\":[%u]}", rid);
+            st = http_try(c, "POST", "/_rpc", "application/json", w->sid,
+                          body, (size_t)bn, NULL, 0);
+            break;
+        }
+        case OP_LOGIN: {
+            char lbody[128];
+            int bn = snprintf(lbody, sizeof(lbody),
+                              "username=%s&password=x", w->uname);
+            char sid[64];
+            st = http_try(c, "POST", "/login",
+                          "application/x-www-form-urlencoded", NULL,
+                          lbody, (size_t)bn, sid, sizeof(sid));
+            break;
+        }
+        case OP__COUNT: break; /* unreachable */
+        }
+        int is_ok = (op == OP_LOGIN) ? (st == 303 || st == 200) : (st == 200);
+        if (is_ok) w->op_ok[did]++; else w->op_err[did]++;
+        return is_ok;
+    }
     }
     return 0;
 }
 
 static int scenario_needs_session(enum scenario_id s)
 {
-    return s == SCENARIO_RPC_COUNT || s == SCENARIO_REPO_CREATE;
+    return s == SCENARIO_RPC_COUNT || s == SCENARIO_REPO_CREATE || s == SCENARIO_MIXED;
 }
 
 static void *worker_main(void *arg)
@@ -420,6 +611,23 @@ static void *worker_main(void *arg)
         worker_establish_session(w); /* best-effort; cookie still useful */
     }
 
+    /* mixed: derive the owner uid the gateway would, seed the RNG with an
+     * independent stream, and pre-create r0 so repo-scoped ops always have a
+     * target (this one-off make is setup, not part of the timed loop). */
+    if (w->cfg->scenario == SCENARIO_MIXED) {
+        w->uid = hash_username(w->uname);
+        w->rng = (uint64_t)(w->cfg->run_nonce) * 0x9e3779b97f4a7c15ull
+               ^ ((uint64_t)(w->id + 1) << 32) ^ now_ns();
+        if (!w->rng) w->rng = 0x123456789abcdefull;
+        char body[160];
+        int bn = snprintf(body, sizeof(body),
+            "{\"path\":\"git_repo.store.make\",\"args\":[%u,\"%s\",\"r0\"]}",
+            w->uid, w->uname);
+        int st = http_try(&w->conn, "POST", "/_rpc", "application/json", w->sid,
+                          body, (size_t)bn, NULL, 0);
+        if (st == 200) w->n_repos = 1;
+    }
+
     long counter = 0;
     if (w->cfg->requests_per_worker > 0) {
         for (long i = 0; i < w->cfg->requests_per_worker; ++i) {
@@ -435,6 +643,38 @@ static void *worker_main(void *arg)
             lat_push(&w->lat, now_ns() - t0);
             if (ok) w->ok++; else w->errors++;
         }
+    }
+    conn_close(&w->conn);
+    return NULL;
+}
+
+/* Stage-1 population seed: register a slice of [1..seed_users] account
+ * records directly via /_rpc accounts.store.register. This is an O(1) KV
+ * write per account (it does NOT touch the gateway's user-name index, so it
+ * scales to tens of thousands), giving the mixed phase a realistic user
+ * population to run against. */
+static void *seed_main(void *arg)
+{
+    struct worker *w = arg;
+    w->conn.fd = -1;
+    w->conn.host = w->cfg->host;
+    w->conn.port = w->cfg->port;
+    if (conn_open(&w->conn) != 0) return NULL;
+
+    long total = w->cfg->seed_users;
+    int n = w->cfg->connections;
+    long per = (total + n - 1) / n;
+    long start = (long)w->id * per;
+    long end = start + per;
+    if (end > total) end = total;
+    for (long i = start; i < end; ++i) {
+        uint32_t uid = (uint32_t)(i + 1);   /* 1-based → never the anon uid 0 */
+        char body[96];
+        int bn = snprintf(body, sizeof(body),
+            "{\"path\":\"accounts.store.register\",\"args\":[%u]}", uid);
+        int st = http_try(&w->conn, "POST", "/_rpc", "application/json", NULL,
+                          body, (size_t)bn, NULL, 0);
+        if (st == 200) w->seed_ok++; else w->seed_err++;
     }
     conn_close(&w->conn);
     return NULL;
@@ -467,6 +707,7 @@ static enum scenario_id scenario_lookup(const char *name, const char **canonical
         {"full",        SCENARIO_FULL},
         {"store_set",   SCENARIO_STORE_SET},
         {"shard_set",   SCENARIO_SHARD_SET},
+        {"mixed",       SCENARIO_MIXED},
     };
     for (size_t i = 0; i < sizeof(SCENARIOS) / sizeof(SCENARIOS[0]); ++i) {
         if (strcmp(name, SCENARIOS[i].name) == 0) {
@@ -487,8 +728,14 @@ static void usage(const char *prog)
         "  --connections N     concurrent worker threads (default 8)\n"
         "  --duration SECS     run for this many seconds (default 10)\n"
         "  --requests R        fixed requests PER WORKER (overrides --duration)\n"
-        "  --scenario NAME     rpc_count | login | repo_create | register | full\n"
-        "                      (default rpc_count)\n",
+        "  --scenario NAME     rpc_count | login | repo_create | register | full |\n"
+        "                      store_set | shard_set | mixed (default rpc_count)\n"
+        "  --seed-users N      mixed: pre-create N account records (stage 1)\n"
+        "  --repos-per-worker K  mixed: cap repos a worker creates (default 8)\n"
+        "\n"
+        "  scenario 'mixed': each worker logs in as its own user, then issues a\n"
+        "  weighted-random stream of real actions (read, KV write, file commit,\n"
+        "  issue, pipeline run, repo create, re-login) — emulating a live user.\n",
         prog);
 }
 
@@ -503,6 +750,8 @@ int main(int argc, char **argv)
         .scenario = SCENARIO_RPC_COUNT,
         .scenario_name = "rpc_count",
         .run_nonce = (long)time(NULL),
+        .seed_users = 0,
+        .repos_per_worker = 8,
     };
 
     for (int i = 1; i < argc; ++i) {
@@ -513,6 +762,8 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--connections") && next) { cfg.connections = atoi(next); i++; }
         else if (!strcmp(a, "--duration") && next) { cfg.duration_secs = atof(next); i++; }
         else if (!strcmp(a, "--requests") && next) { cfg.requests_per_worker = atol(next); i++; }
+        else if (!strcmp(a, "--seed-users") && next) { cfg.seed_users = atol(next); i++; }
+        else if (!strcmp(a, "--repos-per-worker") && next) { cfg.repos_per_worker = atoi(next); i++; }
         else if (!strcmp(a, "--scenario") && next) {
             const char *canon = NULL;
             cfg.scenario = scenario_lookup(next, &canon);
@@ -524,6 +775,13 @@ int main(int argc, char **argv)
         else { fprintf(stderr, "unknown arg '%s'\n", a); usage(argv[0]); return 2; }
     }
     if (cfg.connections < 1) cfg.connections = 1;
+    if (cfg.repos_per_worker < 1) cfg.repos_per_worker = 1;
+    /* Keep the total repos a mixed run can create within the git_repo
+     * metadata table (REPOS_MAX) so creates don't silently saturate. */
+    if ((long)cfg.connections * cfg.repos_per_worker > 4000) {
+        cfg.repos_per_worker = 4000 / cfg.connections;
+        if (cfg.repos_per_worker < 1) cfg.repos_per_worker = 1;
+    }
 
     struct worker *workers = calloc((size_t)cfg.connections, sizeof(*workers));
     if (!workers) { fprintf(stderr, "oom\n"); return 1; }
@@ -535,6 +793,31 @@ int main(int argc, char **argv)
         fprintf(stderr, "requests=%ld/worker\n", cfg.requests_per_worker);
     else
         fprintf(stderr, "duration=%.1fs\n", cfg.duration_secs);
+
+    /* ---- stage 1: population seed (mixed only) ----------------------- */
+    uint64_t seed_ok_total = 0, seed_err_total = 0;
+    double seed_wall = 0.0;
+    if (cfg.scenario == SCENARIO_MIXED && cfg.seed_users > 0) {
+        fprintf(stderr, "seeding %ld account records (stage 1)…\n", cfg.seed_users);
+        uint64_t seed0 = now_ns();
+        int spawned = cfg.connections;
+        for (int i = 0; i < cfg.connections; ++i) {
+            workers[i].id = i;
+            workers[i].cfg = &cfg;
+            workers[i].stop = &stop;
+            if (pthread_create(&workers[i].thread, NULL, seed_main, &workers[i]) != 0) {
+                spawned = i; break;
+            }
+        }
+        for (int i = 0; i < spawned; ++i) pthread_join(workers[i].thread, NULL);
+        seed_wall = (double)(now_ns() - seed0) / 1e9;
+        for (int i = 0; i < spawned; ++i) {
+            seed_ok_total += workers[i].seed_ok;
+            seed_err_total += workers[i].seed_err;
+        }
+        fprintf(stderr, "seed done: %llu accounts in %.2fs\n",
+                (unsigned long long)seed_ok_total, seed_wall);
+    }
 
     uint64_t wall0 = now_ns();
     for (int i = 0; i < cfg.connections; ++i) {
@@ -592,6 +875,12 @@ int main(int argc, char **argv)
 
     printf("\n");
     printf("scenario       : %s\n", cfg.scenario_name);
+    if (cfg.scenario == SCENARIO_MIXED && cfg.seed_users > 0) {
+        printf("seed stage     : %llu accounts in %.3f s (%.0f reg/s, %llu errors)\n",
+               (unsigned long long)seed_ok_total, seed_wall,
+               seed_wall > 0 ? (double)seed_ok_total / seed_wall : 0.0,
+               (unsigned long long)seed_err_total);
+    }
     printf("connections    : %d (%d sessions established)\n", cfg.connections, sessions_ok);
     printf("wall time      : %.3f s\n", wall_s);
     printf("requests       : %llu ok, %llu errors\n",
@@ -605,9 +894,32 @@ int main(int argc, char **argv)
                pctl_ms(all, off, 99), pctl_ms(all, off, 99.9),
                (double)all[off - 1] / 1e6);
     }
+    if (cfg.scenario == SCENARIO_MIXED) {
+        uint64_t op_ok_tot[OP__COUNT] = {0}, op_err_tot[OP__COUNT] = {0};
+        for (int i = 0; i < cfg.connections; ++i)
+            for (int o = 0; o < OP__COUNT; ++o) {
+                op_ok_tot[o] += workers[i].op_ok[o];
+                op_err_tot[o] += workers[i].op_err[o];
+            }
+        printf("op breakdown   : (op = ok / err, share of total)\n");
+        for (int o = 0; o < OP__COUNT; ++o) {
+            uint64_t n = op_ok_tot[o] + op_err_tot[o];
+            double share = total_req ? 100.0 * (double)n / (double)total_req : 0.0;
+            printf("    %-12s : %8llu ok / %llu err  (%.1f%%, %.0f/s)\n",
+                   OP_NAMES[o], (unsigned long long)op_ok_tot[o],
+                   (unsigned long long)op_err_tot[o], share,
+                   wall_s > 0 ? (double)n / wall_s : 0.0);
+        }
+    }
     printf("\n");
 
-    int exit_code = (total_err > 0 || total_ok == 0) ? 1 : 0;
+    /* A load test reports errors but only FAILS if nothing succeeded — unlike
+     * the single-op CI scenarios where any error is a hard fault. */
+    int exit_code;
+    if (cfg.scenario == SCENARIO_MIXED)
+        exit_code = (total_ok == 0) ? 1 : 0;
+    else
+        exit_code = (total_err > 0 || total_ok == 0) ? 1 : 0;
     free(all);
     for (int i = 0; i < cfg.connections; ++i) free(workers[i].lat.v);
     free(workers);

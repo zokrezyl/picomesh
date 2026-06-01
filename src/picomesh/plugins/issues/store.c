@@ -16,7 +16,10 @@
 
 #include <stdint.h>
 
-#define ISSUES_MAX 1024
+/* In-memory metadata slots, scanned linearly per op. Sized for headroom
+ * under load (a tiny 1024 saturated almost immediately); a few ×10k entries
+ * keep the scan in the tens of microseconds, well under a network RTT. */
+#define ISSUES_MAX 65536
 
 struct issue_entry {
     uint32_t issue_id;

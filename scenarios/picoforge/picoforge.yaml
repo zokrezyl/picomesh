@@ -24,6 +24,16 @@ name: mesh
 # top-level `plugins:` because the parent runs with no `--name`.)
 plugins:
   - mesh
+  # The parent also activates `storage` for its OWN bookkeeping: mesh_store
+  # records the pids of the children it spawns (and its own pid) here so it
+  # can reap them on shutdown, and so the stack can be stopped by signalling
+  # the recorded parent pid — never by pkill. Private parent state, separate
+  # from the `sharded_storage` backend the app uses.
+  - storage
+
+storage:
+  backend: sqlite
+  db_path: /tmp/picoforge/mesh-state.db
 
 # Parent process control port — clients (including the smoke script)
 # talk to the mesh here.

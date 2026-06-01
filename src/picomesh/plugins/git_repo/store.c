@@ -45,7 +45,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define REPOS_MAX     256
+/* Metadata slots for live repos. The table is scanned linearly per op, so
+ * this balances headroom (a load test creates many repos) against scan cost;
+ * a few thousand entries cost only microseconds per op — far below a network
+ * round-trip. */
+#define REPOS_MAX     4096
 #define REPO_NAME_MAX 64
 
 struct repo_entry {
