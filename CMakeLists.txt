@@ -65,6 +65,7 @@ add_library(picomesh_runtime STATIC
     src/picomesh/frontends/yttp/yttp.c
     src/picomesh/frontends/yhttp/yhttp.c
     src/picomesh/frontends/yhttp/frontend.c
+    src/picomesh/frontends/alpine/alpine.c
     src/picomesh/frontends/cli/cli.c
     src/picohttpparser/picohttpparser.c
     src/picomesh/yconfig/yconfig.c

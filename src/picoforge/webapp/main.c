@@ -12,8 +12,8 @@
  * JWT ever passes through.
  *
  * Usage:
- *   picoforge-webapp --gateway-url http://127.0.0.1:8080 \
- *                  --host 0.0.0.0 --port 8081 \
+ *   picoforge-webapp --gateway-url http://127.0.0.1:8090 \
+ *                  --host 0.0.0.0 --port 8080 \
  *                  [--templates assets/picoforge/templates] \
  *                  [--static assets/picoforge/static]
  */
@@ -35,7 +35,7 @@ static const struct yargv_option_def WEBAPP_OPTIONS[] = {
      YARGV_VALUE, 0},
     {"--host",        NULL, "host",         "Bind address (default 0.0.0.0)",
      YARGV_VALUE, 0},
-    {"--port",        NULL, "port",         "Bind port (default 8081)",
+    {"--port",        NULL, "port",         "Bind port (default 8080)",
      YARGV_VALUE, 0},
     {"--templates",   NULL, "templates",    "Template directory (default ./templates)",
      YARGV_VALUE, 0},
@@ -97,7 +97,7 @@ int main(int argc, char **argv)
         return die("config", "--gateway-url is required");
     }
     const char *host = yargv_get_string(cli, "host", "0.0.0.0");
-    int port = (int)yargv_get_int(cli, "port", 8081);
+    int port = (int)yargv_get_int(cli, "port", 8080);
     const char *templates_dir = yargv_get_string(cli, "templates", "templates");
     const char *static_dir    = yargv_get_string(cli, "static_dir", "static");
 

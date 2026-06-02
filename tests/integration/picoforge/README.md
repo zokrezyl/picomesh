@@ -38,12 +38,12 @@ Pass pytest args through: `./run.sh -k full_ui_flow -s`.
 ### Driving an already-running stack
 
 By default the suite spawns the control parent, reconciles the mesh, and
-launches the webapp on `:8081` against a wiped `/tmp/picoforge`, then cleans
+launches the webapp on `:8080` against a wiped `/tmp/picoforge`, then cleans
 up. To instead drive a stack you already have running (e.g. a dev
 `tools/picoforge/stack-up.sh`):
 
 ```sh
-PICOFORGE_WEBAPP_URL=http://127.0.0.1:8081 ./run.sh
+PICOFORGE_WEBAPP_URL=http://127.0.0.1:8080 ./run.sh
 ```
 
 ## Notes

@@ -7,7 +7,7 @@
 #     ↳ mesh_store_reconcile_from_config spawns one child per service
 #       in mesh.services.* on the service's own port. Each backend
 #       child uses --frontend yrpc (binary, for inter-service RPC).
-#       The 'gateway' service (port 8080) overrides this with
+#       The 'gateway' service (port 8090) overrides this with
 #       `frontend: yhttp` in its YAML block — it serves the HTML UI
 #       that browsers / curl can hit, and it opens yrpc client
 #       sessions to every backend via its `remotes:` block.
@@ -25,8 +25,8 @@ PICOMESH=./build-desktop-release/picomesh
 WEBAPP=./build-desktop-release/picoforge-webapp
 CONFIG=assets/picoforge/config/picoforge.yaml
 CTRL=8800
-WEB=8080
-SIDE=8081
+WEB=8090
+SIDE=8080
 DB=/tmp/picoforge/central.db
 
 # Start from a clean slate. Wipe the ENTIRE /tmp/picoforge tree, not just
@@ -328,7 +328,39 @@ expect_contains 'gateway GET /_describe lists services' "$out" '"services":\['
 out=$(curl -sS --max-time 10 "http://127.0.0.1:${WEB}/git_repo.store/_describe")
 expect_contains 'gateway /<class>/_describe lists methods' "$out" 'git_repo_store_count_total'
 
-# Legacy public surface retired on the gateway (8080)…
+# gh#15: generic service-console tooling. Two SEPARATE, app-agnostic nodes
+# (no picoforge routes): a yrpc->yhttp transport bridge on :8230 (NOT the
+# gateway — it does not front `session`, so it is not the auth boundary)
+# and the standalone /_alpine console frontend on :8231 that proxies to it.
+# The bridge fronts its configured remotes over the generic JSON API; the
+# console builds its UI from /_describe and invokes through JSON /_rpc.
+# See docs/service-console.md.
+BRIDGE=8230
+CONSOLE=8231
+
+out=$(curl -sS --max-time 10 "http://127.0.0.1:${BRIDGE}/_describe")
+expect_contains 'bridge GET /_describe lists active services' "$out" '"services":\['
+expect_contains 'bridge /_describe enriches services with classes/methods' "$out" 'git_repo_store_count_total'
+out=$(curl -sS --max-time 10 -XPOST "http://127.0.0.1:${BRIDGE}/_rpc" \
+           -H 'Content-Type: application/json' -d '{"path":"git_repo.store.count_total","args":[]}')
+expect_contains 'bridge POST /_rpc forwards to the yrpc backend' "$out" '"result":'
+# The bridge is pure transport: NO console, NO HTML/auth surface.
+code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${BRIDGE}/_alpine")
+[ "$code" = "404" ] && note_pass "bridge does not serve /_alpine (separation invariant)" \
+                     || note_fail "bridge GET /_alpine returned $code (want 404)"
+code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${BRIDGE}/login")
+[ "$code" = "404" ] && note_pass "bridge serves no auth/HTML route (404 /login)" \
+                     || note_fail "bridge GET /login returned $code (want 404)"
+
+out=$(curl -sS --max-time 10 "http://127.0.0.1:${CONSOLE}/_alpine")
+expect_contains 'console GET /_alpine serves the generic page' "$out" 'picomesh service console'
+out=$(curl -sS --max-time 10 -XPOST "http://127.0.0.1:${CONSOLE}/_describe" -d '{}')
+expect_contains 'console proxies /_describe to the upstream bridge' "$out" '"services":\['
+out=$(curl -sS --max-time 10 -XPOST "http://127.0.0.1:${CONSOLE}/_rpc" \
+           -H 'Content-Type: application/json' -d '{"path":"git_repo.store.count_total","args":[]}')
+expect_contains 'console proxies POST /_rpc to the upstream bridge' "$out" '"result":'
+
+# Legacy public surface retired on the gateway (8090)…
 code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
             -XPOST "http://127.0.0.1:${WEB}/create" -d '{"class":"git_repo_store"}')
 [ "$code" = "410" ] && note_pass "gateway retired POST /create (410)" \
@@ -437,6 +469,8 @@ echo "    Browser:"
 echo "      open http://127.0.0.1:${WEB}/login   (server-side HTML)"
 echo "    Control plane:"
 echo "      curl http://127.0.0.1:${CTRL}/        (mesh REST)"
+echo "    Service console (gh#15 — generic, app-agnostic):"
+echo "      open http://127.0.0.1:8231/_alpine    (console -> yhttp bridge :8230 -> yrpc backends)"
 echo "    Tracing:"
 echo "      curl http://127.0.0.1:${WEB}/_perf    (local op-latency aggregate)"
 echo "      curl -XPOST http://127.0.0.1:${WEB}/_rpc -d '{\"path\":\"trace_collector.store.services\",\"args\":[]}'"

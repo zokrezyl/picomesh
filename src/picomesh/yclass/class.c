@@ -432,6 +432,17 @@ void class_for_each_slot(const struct class *cls,
     }
 }
 
+void class_for_each(void (*cb)(const struct class *cls, const char *name, void *ud),
+                    void *userdata)
+{
+    if (!cb) return;
+    struct class_registry *reg = class_registry_get();
+    for (size_t i = 0; i < reg->count; ++i) {
+        struct class *cls = reg->by_index[i];
+        if (cls && cls->desc && cls->desc->name) cb(cls, cls->desc->name, userdata);
+    }
+}
+
 struct object_ptr_result object_alloc(const struct class *cls)
 {
     ydebug("cls=%s size=%zu", cls && cls->desc ? cls->desc->name : "(null)",

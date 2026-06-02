@@ -28,7 +28,7 @@ make build-desktop-release            # produces build-desktop-release/picoforge
 Bring the mesh up, then point the tool at it:
 
 ```sh
-./tools/picoforge/mesh-up.sh &    # gateway on :8080
+./tools/picoforge/mesh-up.sh &    # gateway on :8090
 ./build-desktop-release/picoforge-perf --scenario rpc_count --connections 16 --duration 10
 ```
 
@@ -37,7 +37,7 @@ Bring the mesh up, then point the tool at it:
 | option | default | meaning |
 |---|---|---|
 | `--host H` | `127.0.0.1` | gateway host |
-| `--port P` | `8080` | gateway port |
+| `--port P` | `8090` | gateway port |
 | `--connections N` | `8` | concurrent worker threads |
 | `--duration SECS` | `10` | run for this long |
 | `--requests R` | — | fixed requests **per worker** (overrides `--duration`) |

@@ -42,6 +42,7 @@
 #include <picomesh/frontends/yrpc/yrpc.h>
 #include <picomesh/frontends/yttp/yttp.h>
 #include <picomesh/frontends/yhttp/yhttp.h>
+#include <picomesh/frontends/alpine/alpine.h>
 #include <picomesh/frontends/cli/cli.h>
 #include <picomesh/ycore/result.h>
 #include <picomesh/ycore/ytrace.h>
@@ -65,7 +66,7 @@ static const struct yargv_option_def PICOMESH_OPTIONS[] = {
     {"--port",        "-p", "port",        "bind/connect port",               YARGV_VALUE,     0},
     {"--app-name",    NULL, "app_name",    "app name (drives XDG path)",      YARGV_VALUE,     0},
     {"--name",        NULL, "name",        "instance name",                   YARGV_VALUE,     0},
-    {"--frontend",    NULL, "frontend",    "frontend: yrpc (default) or yttp",YARGV_VALUE,     0},
+    {"--frontend",    NULL, "frontend",    "frontend: yrpc (default), yttp, yhttp or alpine",YARGV_VALUE, 0},
     {"--workers",     NULL, "workers",     "in-process worker threads (default 1)", YARGV_VALUE, 0},
     {"--plugins",     NULL, "plugins",     "comma-sep plugin list (yaapp compat)", YARGV_VALUE, 0},
 };
@@ -234,7 +235,7 @@ static void usage(const char *argv0)
     fprintf(stderr,
             "usage:\n"
             "  %s [--config-file PATH] [--config K=V]... [--env K=V]...\n"
-            "      [--host H] [--port P] [--frontend yrpc|yttp]\n"
+            "      [--host H] [--port P] [--frontend yrpc|yttp|yhttp|alpine]\n"
             "      [--verbose] [--app-name N]\n"
             "      (serve | client | config-dump | invoke <method> [arg...])\n",
             argv0);
@@ -383,6 +384,10 @@ static struct picomesh_void_result serve_worker_setup(struct picomesh_engine *e,
         struct yttp_config cfg = {.host = ss->host, .port = ss->port};
         struct yttp_frontend_ptr_result fr = yttp_start(e, &cfg);
         PICOMESH_RETURN_IF_ERR(picomesh_void, fr, "serve_worker_setup: yttp_start failed");
+    } else if (strcmp(ss->frontend, "alpine") == 0) {
+        struct alpine_config cfg = {.host = ss->host, .port = ss->port};
+        struct alpine_frontend_ptr_result fr = alpine_start(e, &cfg);
+        PICOMESH_RETURN_IF_ERR(picomesh_void, fr, "serve_worker_setup: alpine_start failed");
     } else {
         struct yrpc_config cfg = {.host = ss->host, .port = ss->port};
         struct yrpc_frontend_ptr_result fr = yrpc_start(e, &cfg);
@@ -404,8 +409,8 @@ static int cmd_serve(struct picomesh_engine *e)
 
     /* Reject an unknown frontend up front, before spinning any worker. */
     if (strcmp(frontend, "yrpc") != 0 && strcmp(frontend, "yttp") != 0 &&
-        strcmp(frontend, "yhttp") != 0) {
-        fprintf(stderr, "unknown --frontend '%s' (try yrpc | yttp | yhttp)\n", frontend);
+        strcmp(frontend, "yhttp") != 0 && strcmp(frontend, "alpine") != 0) {
+        fprintf(stderr, "unknown --frontend '%s' (try yrpc | yttp | yhttp | alpine)\n", frontend);
         return 2;
     }
 

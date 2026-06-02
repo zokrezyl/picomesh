@@ -236,7 +236,7 @@ mesh:
     # standalone `picoforge-webapp` sidecar (src/picoforge/webapp/), NOT a
     # combined gateway. The sidecar links no plugins and reaches every
     # backend only through this gateway's /_rpc — see mesh-up.sh, which
-    # launches it on :8081. The HTML routes still compiled into the
+    # launches it on :8080. The HTML routes still compiled into the
     # gateway (src/picomesh/frontends/yhttp/frontend.c) are LEGACY, kept
     # only until the sidecar renders the full page set.
     #
@@ -246,7 +246,7 @@ mesh:
     # The `frontend:` key below is the TRANSPORT selector (yhttp |
     # yrpc | yttp), NOT a service name.
     gateway:
-      port: 8080
+      port: 8090
       # 0.0.0.0 so the gateway is reachable from outside the host the
       # mesh runs on — required for the qemu hostfwd and the wasm/slirp
       # bridge inside the in-browser VM. Backends stay 127.0.0.1 (their
@@ -313,3 +313,63 @@ mesh:
             port: 8210
           - service: personal_access_tokens
             port: 8211
+
+    # ---- gh#15: generic service-console tooling ------------------------
+    #
+    # Two SEPARATE, app-agnostic nodes that know nothing about picoforge
+    # accounts/repos/issues pages. They demonstrate the framework's
+    # transport-bridge + service-console pieces; the picoforge browser UI
+    # (picoforge-webapp) stays entirely separate from both.
+
+    # yrpc->yhttp transport bridge: a plain yhttp node (NOT the gateway —
+    # it deliberately does NOT front `session`, so it is not the auth
+    # boundary) that exposes its configured remote yrpc backends through
+    # the generic JSON service API and nothing else:
+    #   GET|POST /_describe
+    #   GET|POST /<service.class>/_describe
+    #   POST     /_rpc {"path":"service.class.method","args":[],"kwargs":{}}
+    # It serves NO /_alpine console and NO HTML pages. Backends stay yrpc.
+    #
+    # Ports stay in the 8xxx range on purpose: the perf harness derives its
+    # mesh by a uniform 8xxx->9xxx shift and assumes the 9xxx space is
+    # otherwise unused, so these must shift with everything else.
+    internal_yhttp_bridge:
+      port: 8230
+      host: 127.0.0.1
+      frontend: yhttp
+      plugins: []
+      config:
+        remotes:
+          - service: sharded_storage
+            port: 8212
+          - service: trace_collector
+            port: 8220
+          - service: accounts
+            port: 8204
+          - service: issues
+            port: 8208
+          - service: git_repo
+            port: 8209
+          - service: git_pipeline
+            port: 8210
+          - service: personal_access_tokens
+            port: 8211
+
+    # Generic /_alpine service console: its OWN frontend (`frontend:
+    # alpine`), a separate Picomesh application/tool. It serves the static
+    # console page and proxies the page's /_describe + JSON /_rpc calls to
+    # the configured upstream yhttp endpoint (the bridge above). It builds
+    # its whole UI from /_describe — no picoforge route knowledge. Open
+    # http://127.0.0.1:8231/_alpine in a browser to inspect/invoke the
+    # bridged services. Bind stays loopback; set `token` to gate access.
+    service_console:
+      port: 8231
+      host: 127.0.0.1
+      frontend: alpine
+      plugins: []
+      config:
+        alpine:
+          upstream:
+            host: 127.0.0.1
+            port: 8230
+          # token: "change-me"   # optional: require ?token= / Bearer

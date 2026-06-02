@@ -709,7 +709,7 @@ static void usage(const char *prog)
     fprintf(stderr,
         "usage: %s [options]\n"
         "  --host H              gateway host (default 127.0.0.1)\n"
-        "  --port P              gateway port (default 8080)\n"
+        "  --port P              gateway port (default 8090)\n"
         "  --threads M           OS threads, each a loop+coroutine scheduler (default: ncpu)\n"
         "  --connections N       total virtual connections, spread across --threads (default 64)\n"
         "  --coros-per-thread K  coroutines per thread (overrides --connections; total = M×K)\n"
@@ -733,7 +733,7 @@ int main(int argc, char **argv)
 
     struct perf_config cfg = {
         .host = "127.0.0.1",
-        .port = 8080,
+        .port = 8090,
         .threads = (int)(ncpu > 32 ? 32 : ncpu),
         .connections = 64,
         .duration_secs = 10.0,

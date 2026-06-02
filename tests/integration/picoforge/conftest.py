@@ -4,7 +4,7 @@ Two things are provisioned:
 
   * `base_url` — a live picoforge webapp to drive. By default the fixture
     brings the WHOLE stack up itself (control parent -> reconcile spawns the
-    gateway + backends -> picoforge-webapp on :8081) against a fresh,
+    gateway + backends -> picoforge-webapp on :8080) against a fresh,
     wiped /tmp/picoforge, and tears it all down afterwards. Set
     PICOFORGE_WEBAPP_URL=http://host:port to instead drive an already-running
     stack (e.g. a dev `stack-up.sh`) and skip lifecycle management.
@@ -28,9 +28,9 @@ import pytest
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 PICOMESH = os.path.join(REPO_ROOT, "build-desktop-release", "picomesh")
 WEBAPP = os.path.join(REPO_ROOT, "build-desktop-release", "picoforge-webapp")
-CONFIG = os.path.join(REPO_ROOT, "scenarios", "picoforge", "picoforge.yaml")
-STATIC = os.path.join(REPO_ROOT, "scenarios", "picoforge", "webapp", "static")
-CTRL, WEB, SIDE = 8800, 8080, 8081
+CONFIG = os.path.join(REPO_ROOT, "assets", "picoforge", "config", "picoforge.yaml")
+STATIC = os.path.join(REPO_ROOT, "assets", "picoforge", "static")
+CTRL, WEB, SIDE = 8800, 8090, 8080
 
 
 def _port_open(port, host="127.0.0.1"):

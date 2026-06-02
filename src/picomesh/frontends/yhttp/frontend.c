@@ -1660,7 +1660,46 @@ struct describe_services_ctx {
     size_t seen_n;
 };
 
-/* Emit one {service, source} object, deduped by name. */
+/* While emitting a service's `classes[]`: match registered classes whose
+ * qualified name is `<service>_<class>` and emit {class, qname, methods}.
+ * The service name is the plugin domain, so the qname prefix `<service>_`
+ * selects exactly that service's classes; the remainder is the class part
+ * of the dotted path the console feeds back to /_rpc and /<svc.class>/_describe. */
+struct describe_class_ctx {
+    struct yjson_writer *w;
+    const char *service;
+    const char *prefix;   /* "<service>_" */
+    size_t prefix_len;
+};
+
+static void describe_method_cb(const char *name, method_slot slot, void *ud)
+{
+    (void)slot;
+    yjson_w_string((struct yjson_writer *)ud, name);
+}
+
+static void describe_class_cb(const struct class *cls, const char *qname, void *ud)
+{
+    struct describe_class_ctx *cc = ud;
+    if (strncmp(qname, cc->prefix, cc->prefix_len) != 0) return;
+    const char *class_part = qname + cc->prefix_len;
+    if (!*class_part) return;
+    char dotpath[192];
+    snprintf(dotpath, sizeof(dotpath), "%s.%s", cc->service, class_part);
+    yjson_w_begin_object(cc->w);
+    yjson_w_key(cc->w, "class");   yjson_w_string(cc->w, dotpath);
+    yjson_w_key(cc->w, "qname");   yjson_w_string(cc->w, qname);
+    yjson_w_key(cc->w, "methods"); yjson_w_begin_array(cc->w);
+    class_for_each_slot(cls, describe_method_cb, cc->w);
+    yjson_w_end_array(cc->w);
+    yjson_w_end_object(cc->w);
+}
+
+/* Emit one {service, source, classes:[...]} object, deduped by name. The
+ * service list stays config-driven (active plugins + remotes); `classes`
+ * just enriches each ACTIVE service with the method tree the generic
+ * console renders — pulled from the registry, which in this process holds
+ * only the activated/proxied service classes (gh#15). */
 static void describe_emit_service(struct describe_services_ctx *dc, const char *name)
 {
     if (!name || !*name) return;
@@ -1672,6 +1711,15 @@ static void describe_emit_service(struct describe_services_ctx *dc, const char *
     yjson_w_begin_object(dc->w);
     yjson_w_key(dc->w, "service"); yjson_w_string(dc->w, name);
     yjson_w_key(dc->w, "source");  yjson_w_string(dc->w, remote ? "remote" : "local");
+    yjson_w_key(dc->w, "classes"); yjson_w_begin_array(dc->w);
+    char prefix[80];
+    int pl = snprintf(prefix, sizeof(prefix), "%s_", name);
+    struct describe_class_ctx cc = {
+        .w = dc->w, .service = name, .prefix = prefix,
+        .prefix_len = pl > 0 ? (size_t)pl : 0,
+    };
+    class_for_each(describe_class_cb, &cc);
+    yjson_w_end_array(dc->w);
     yjson_w_end_object(dc->w);
 }
 
@@ -1834,6 +1882,15 @@ static int try_hierarchical_describe(struct yloop_stream *s, const char *path,
     return 1;
 }
 
+/* A non-gateway yhttp node with a non-empty `remotes:` list is a
+ * yrpc->yhttp transport bridge (gh#15): it fronts its configured remote
+ * yrpc services with the generic JSON API and nothing else. */
+static int yhttp_node_has_remotes(struct picomesh_engine *e)
+{
+    const struct yconfig_node *r = describe_node_list(e, "config.remotes", "remotes");
+    return r && yconfig_node_kind(r) == YCONFIG_LIST && yconfig_node_size(r) > 0;
+}
+
 int yhttp_frontend_try(struct yloop_stream *s,
                        const char *method, const char *path,
                        const char *headers_raw, size_t headers_raw_len,
@@ -1857,7 +1914,15 @@ int yhttp_frontend_try(struct yloop_stream *s,
         yconfig_get(picomesh_engine_config(e), "yhttp.serve_app");
     int serve_app = PICOMESH_IS_OK(serve_app_r) && serve_app_r.value &&
                     yconfig_node_as_bool(serve_app_r.value, 0);
-    if (!has_session_remote && !serve_app) return 0;
+    /* The picoforge gateway (auth boundary): `session` wired as a remote, or
+     * the collocated all-in-one `yhttp.serve_app`. It owns the auth/HTML
+     * POSTs below. A non-gateway yhttp node with remotes is a generic
+     * transport bridge that serves ONLY the JSON API block below (gh#15). A
+     * node with neither (the mesh control parent, a standalone backend on
+     * yhttp) is none of our business — fall through to the yhttp serve layer. */
+    int is_gateway = has_session_remote || serve_app;
+    int is_bridge = !is_gateway && yhttp_node_has_remotes(e);
+    if (!is_gateway && !is_bridge) return 0;
 
     int is_get = strcmp(method, "GET") == 0;
     int is_post = strcmp(method, "POST") == 0;
@@ -1924,6 +1989,12 @@ int yhttp_frontend_try(struct yloop_stream *s,
             return 1;
         }
     }
+
+    /* A transport bridge stops here: the generic JSON API above is the
+     * whole contract. The picoforge auth/HTML POSTs below belong only to
+     * the gateway. Returning 0 lets the yhttp serve layer answer the
+     * remaining transport-compat ops (binary /_rpc?op=, /create, /invoke). */
+    if (!is_gateway) return 0;
 
     /* ---- AUTH + ACTION POSTs (the only non-API surface the gateway
      * keeps). These mint/clear the picomesh-sid cookie or mutate state and

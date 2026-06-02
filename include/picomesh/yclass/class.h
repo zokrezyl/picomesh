@@ -149,6 +149,15 @@ struct picomesh_void_result class_add_accessor_lookup(accessor_lookup_fn fn);
 void class_for_each_slot(const struct class *cls,
                          void (*cb)(const char *name, method_slot slot, void *ud), void *userdata);
 
+/* Enumerate every class in the registry. The callback gets each class and
+ * its qualified name. Registration is activation in this runtime (a process
+ * only registers the classes it activates locally + the ones it proxies as
+ * remotes), so this enumerates exactly the ACTIVE service classes — it is
+ * NOT a window onto every compiled-in plugin. Used to enrich the /_describe
+ * service tree with each active service's classes/methods. */
+void class_for_each(void (*cb)(const struct class *cls, const char *name, void *ud),
+                    void *userdata);
+
 struct object_ptr_result object_alloc(const struct class *cls);
 void object_free(struct object *obj);
 

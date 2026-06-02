@@ -266,7 +266,7 @@ def test_gateway_serves_no_html(base_url):
     """The webapp owns pages; the gateway must 404 HTML GETs. Cross-checks
     the gh#5 invariant from the browser's side, via urllib."""
     host = base_url.rsplit(":", 1)[0]
-    gateway = f"{host}:8080"
+    gateway = f"{host}:8090"
     for path in ("/", "/login", "/repos"):
         try:
             code = urllib.request.urlopen(gateway + path, timeout=8).getcode()
@@ -280,7 +280,7 @@ def test_gateway_whoami_anonymous(base_url):
     session token is presented — and never leaks a JWT."""
     import json
     host = base_url.rsplit(":", 1)[0]
-    gateway = f"{host}:8080"
+    gateway = f"{host}:8090"
     body = urllib.request.urlopen(gateway + "/_whoami", timeout=8).read()
     claims = json.loads(body)
     assert claims.get("uid") == 0, f"anon /_whoami should be uid 0, got {claims}"

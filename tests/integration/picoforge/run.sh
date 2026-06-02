@@ -12,7 +12,7 @@
 #   google-chrome-stable            (Playwright uses it via channel="chrome")
 #
 # To drive an already-running stack instead of spawning one:
-#   PICOFORGE_WEBAPP_URL=http://127.0.0.1:8081 ./run.sh
+#   PICOFORGE_WEBAPP_URL=http://127.0.0.1:8080 ./run.sh
 #
 # Extra args are passed through to pytest, e.g. ./run.sh -k full_ui_flow -s
 set -euo pipefail

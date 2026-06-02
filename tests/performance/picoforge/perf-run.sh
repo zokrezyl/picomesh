@@ -23,7 +23,7 @@ SRC_CONFIG=assets/picoforge/config/picoforge.yaml
 CONFIG=/tmp/picoforge-perf.yaml
 DATADIR=/tmp/picoforge-perf
 CTRL=9800
-GW=9080
+GW=9090
 
 SEED_USERS=${SEED_USERS:-50000}
 CONNECTIONS=${CONNECTIONS:-32}
