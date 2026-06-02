@@ -53,6 +53,7 @@
 #include <picomesh/ycore/result.h>
 #include <picomesh/ycore/ytrace.h>
 #include <picomesh/ycore/yspan.h>
+#include <picomesh/ycore/ytelemetry.h>
 
 /* Each service header brings in its create() + method stubs. */
 #include <picomesh/plugin/sharded_storage/sharded_storage.h>
@@ -1308,8 +1309,9 @@ static int path_eq(const char *p, const char *target)
 
 /* ---------- yaapp-compatible gateway API (/_rpc, /_describe) ---------- */
 
-static void send_json(struct yloop_stream *s, int status,
-                      const char *body, size_t body_len, int keep_alive)
+static void send_json_ex(struct yloop_stream *s, int status,
+                         const char *body, size_t body_len, int keep_alive,
+                         const char *extra_headers)
 {
     const char *reason = "OK";
     if (status == 400) reason = "Bad Request";
@@ -1318,19 +1320,27 @@ static void send_json(struct yloop_stream *s, int status,
     else if (status == 500) reason = "Internal Server Error";
     else if (status == 502) reason = "Bad Gateway";
 
-    char hdr[512];
+    char hdr[640];
     int n = snprintf(hdr, sizeof(hdr),
         "HTTP/1.1 %d %s\r\n"
         "Content-Type: application/json\r\n"
         "Content-Length: %zu\r\n"
         "Connection: %s\r\n"
         "Access-Control-Allow-Origin: *\r\n"
+        "%s"
         "\r\n",
         status, reason, body_len,
-        keep_alive ? "keep-alive" : "close");
+        keep_alive ? "keep-alive" : "close",
+        extra_headers ? extra_headers : "");
     if (n <= 0) return;
     yloop_write(s, hdr, (size_t)n);
     if (body_len) yloop_write(s, body, body_len);
+}
+
+static void send_json(struct yloop_stream *s, int status,
+                      const char *body, size_t body_len, int keep_alive)
+{
+    send_json_ex(s, status, body, body_len, keep_alive, NULL);
 }
 
 static void send_json_error(struct yloop_stream *s, int status,
@@ -1461,20 +1471,6 @@ static int path_to_qnames(const char *path,
     return 1;
 }
 
-/* Mint a fresh 64-bit correlation id. getrandom() needs no process
- * state (so no file-scope counter); the rare failure path falls back to
- * a clock/pid mix so an id is always produced. */
-static uint64_t mint_trace_id(void)
-{
-    uint64_t id = 0;
-    if (getrandom(&id, sizeof(id), 0) == (ssize_t)sizeof(id) && id)
-        return id;
-    struct timespec ts = {0};
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    id = ((uint64_t)ts.tv_sec << 32) ^ (uint64_t)ts.tv_nsec ^ ((uint64_t)getpid() << 16);
-    return id ? id : 1;
-}
-
 /* POST /_rpc — yaapp-style public gateway dispatch. Body:
  *   {"path":"service.class.method","args":[...],"kwargs":{...}}
  * Resolves the opaque session token to a uid, builds a REMOTE ctx for
@@ -1537,36 +1533,33 @@ static void route_json_rpc(struct yloop_stream *s,
     }
 
     /* Request-header bag handed to the backend: resolved auth identity
-     * (uid) + correlation id (honour inbound X-Trace-Id, else mint).
-     * Only the resolved uid crosses to the backend — the opaque session
-     * token never leaves the gateway. */
-    uint64_t trace_id = 0;
+     * (uid) + distributed-trace context. The gateway is the trace root:
+     * it continues an inbound W3C `traceparent` (or mints a fresh trace)
+     * and opens the root SERVER span; downstream client stubs read
+     * parent_span_id from the bag and nest beneath it. Only the resolved
+     * uid + trace context cross to the backend — the opaque session token
+     * never leaves the gateway. */
+    char span_name[96];
+    snprintf(span_name, sizeof(span_name), "gateway.%s", path);
     struct yheaders *hdrs = yheaders_new();
+    struct ytelemetry_span sp;
+    memset(&sp, 0, sizeof(sp));
     if (hdrs) {
         yheaders_set_u32(hdrs, "uid", uid);
-        char tbuf[24] = {0};
-        if (header_value(headers_raw, headers_raw_len, "x-trace-id", tbuf, sizeof(tbuf)))
-            trace_id = strtoull(tbuf, NULL, 10);
-        if (!trace_id) trace_id = mint_trace_id();
-        yheaders_set_u64(hdrs, "trace_id", trace_id);
-        yinfo("[gateway] _rpc trace=%llu path=%s uid=%u",
-              (unsigned long long)trace_id, path, uid);
+        char traceparent[128] = {0};
+        header_value(headers_raw, headers_raw_len, "traceparent",
+                     traceparent, sizeof(traceparent));
+        ytelemetry_hdrs_seed_root(hdrs, traceparent[0] ? traceparent : NULL);
+        ytelemetry_server_span_begin(&sp, hdrs, span_name);
+        yinfo("[gateway] _rpc trace=%s path=%s uid=%u", sp.trace_id, path, uid);
     }
 
     struct yjson_writer *w = yjson_writer_new();
     yjson_w_begin_object(w);
     yjson_w_key(w, "result");
     char err[256] = {0};
-    double span_start = picomesh_ytime_monotonic_sec();
     int rc = fn(&c, obj_r.value, hdrs, args, w, err, sizeof(err));
-    double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-    ydebug("span trace=%llu op=gateway.%s dur_us=%.0f", (unsigned long long)trace_id,
-           path, span_us);
-    {
-        char span_op[96];
-        snprintf(span_op, sizeof(span_op), "gateway.%s", path);
-        yspan_record(span_op, span_us);
-    }
+    if (hdrs) ytelemetry_span_end(&sp, rc == 0, rc != 0 ? err : NULL);
     yheaders_free(hdrs);
     object_release_in_ctx(&c, obj_r.value);
     if (rc != 0) {
@@ -1578,7 +1571,15 @@ static void route_json_rpc(struct yloop_stream *s,
     yjson_w_end_object(w);
     size_t len;
     const char *data = yjson_w_data(w, &len);
-    send_json(s, 200, data, len, keep_alive);
+    /* Echo the trace context (W3C traceparent) so clients/tests/UI can
+     * correlate the response with the trace stored by the collector. */
+    char tp_header[160] = {0};
+    if (sp.trace_id[0]) {
+        char tpval[64];
+        ytelemetry_traceparent_format(tpval, sizeof(tpval), sp.trace_id, sp.span_id, sp.sampled);
+        snprintf(tp_header, sizeof(tp_header), "traceparent: %s\r\n", tpval);
+    }
+    send_json_ex(s, 200, data, len, keep_alive, tp_header[0] ? tp_header : NULL);
     yjson_writer_free(w);
     yjson_doc_free(doc);
 }
@@ -1885,14 +1886,28 @@ int yhttp_frontend_try(struct yloop_stream *s,
             if (try_hierarchical_describe(s, path, keep_alive)) return 1;
         }
 
-        /* GET /_trace — dump the in-memory span collector (this
-         * process's spans aggregated by op: count + p50/p90/p99/max us).
-         * `?reset` clears the ring first so you can measure a window. */
-        if (is_get && path_eq(path, "/_trace")) {
+        /* GET /_perf — dump this process's LOCAL latency aggregate (op →
+         * count + p50/p90/p99/max us). This is NOT distributed tracing:
+         * it is a per-process op-latency table. `?reset` clears the ring
+         * so you can measure a fresh window. Real per-request traces
+         * (trace_id/span_id/parent_span_id, cross-process) live on the
+         * trace collector — query GET /traces/<trace_id> there. */
+        if (is_get && path_eq(path, "/_perf")) {
             if (strstr(path, "reset")) yspan_reset();
             char dump[32768];
             size_t n = yspan_dump(dump, sizeof(dump));
             send_html(s, 200, dump, n, keep_alive, NULL);
+            return 1;
+        }
+        /* /_trace was a misnomer for the local op aggregate above; it is
+         * not a trace query. Point callers at /_perf and the collector. */
+        if (is_get && path_eq(path, "/_trace")) {
+            const char *moved =
+                "/_trace is retired: it was a local op-latency aggregate, not "
+                "distributed tracing.\n"
+                "  - local latency table  -> GET /_perf\n"
+                "  - a request's trace     -> GET /traces/<trace_id> on the trace collector\n";
+            send_html(s, 200, moved, strlen(moved), keep_alive, NULL);
             return 1;
         }
 
@@ -1923,7 +1938,7 @@ int yhttp_frontend_try(struct yloop_stream *s,
     if (is_post && path_eq(path, "/logout"))   { route_logout(s, headers_raw, headers_raw_len, keep_alive); return 1; }
 
     /* Resolve identity only here, for the authenticated action POSTs — the
-     * API routes above (/_rpc, /_describe, /_whoami, /_trace) and the
+     * API routes above (/_rpc, /_describe, /_whoami, /_perf) and the
      * login/register/logout POSTs either resolve sid→uid themselves or
      * don't need it. Resolving up front would charge every /_rpc a second,
      * redundant session.store.lookup (the dominant per-call cost). */

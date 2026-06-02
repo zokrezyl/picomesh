@@ -6,6 +6,7 @@
 #include <picomesh/ycore/result.h>
 #include <picomesh/ycore/ytrace.h>
 #include <picomesh/ycore/yspan.h>
+#include <picomesh/ycore/ytelemetry.h>
 #include <picomesh/yclass/class.h>
 #include "git_pipeline.internal.h"
 #include <stdint.h>
@@ -38,14 +39,10 @@ static size_t git_pipeline_store_enqueue_skel(const void *_body, size_t _body_le
     if (_off + sizeof(_v1) > _body_len) goto _short_body;
     memcpy(&_v1, (const uint8_t *)_body + _off, sizeof(_v1));
     _off += sizeof(_v1);
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.git_pipeline_store_enqueue");
     struct picomesh_uint32_result _r = git_pipeline_store_enqueue(&_local, _obj, _hdrs, _v1);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.git_pipeline_store_enqueue dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.git_pipeline_store_enqueue", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -99,14 +96,10 @@ static size_t git_pipeline_store_lease_skel(const void *_body, size_t _body_len,
     if (_off + sizeof(_v1) > _body_len) goto _short_body;
     memcpy(&_v1, (const uint8_t *)_body + _off, sizeof(_v1));
     _off += sizeof(_v1);
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.git_pipeline_store_lease");
     struct picomesh_uint32_result _r = git_pipeline_store_lease(&_local, _obj, _hdrs, _v1);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.git_pipeline_store_lease dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.git_pipeline_store_lease", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -164,14 +157,10 @@ static size_t git_pipeline_store_complete_skel(const void *_body, size_t _body_l
     if (_off + sizeof(_v2) > _body_len) goto _short_body;
     memcpy(&_v2, (const uint8_t *)_body + _off, sizeof(_v2));
     _off += sizeof(_v2);
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.git_pipeline_store_complete");
     struct picomesh_int_result _r = git_pipeline_store_complete(&_local, _obj, _hdrs, _v1, _v2);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.git_pipeline_store_complete dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.git_pipeline_store_complete", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -221,14 +210,10 @@ static size_t git_pipeline_store_count_pending_skel(const void *_body, size_t _b
         memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
         _obj = (struct object *)rpc_handle_resolve(_h);
     }
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.git_pipeline_store_count_pending");
     struct picomesh_size_result _r = git_pipeline_store_count_pending(&_local, _obj, _hdrs);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.git_pipeline_store_count_pending dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.git_pipeline_store_count_pending", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -278,14 +263,10 @@ static size_t git_pipeline_store_count_running_skel(const void *_body, size_t _b
         memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
         _obj = (struct object *)rpc_handle_resolve(_h);
     }
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.git_pipeline_store_count_running");
     struct picomesh_size_result _r = git_pipeline_store_count_running(&_local, _obj, _hdrs);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.git_pipeline_store_count_running dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.git_pipeline_store_count_running", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -335,14 +316,10 @@ static size_t git_pipeline_store_count_done_skel(const void *_body, size_t _body
         memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
         _obj = (struct object *)rpc_handle_resolve(_h);
     }
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.git_pipeline_store_count_done");
     struct picomesh_size_result _r = git_pipeline_store_count_done(&_local, _obj, _hdrs);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.git_pipeline_store_count_done dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.git_pipeline_store_count_done", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {

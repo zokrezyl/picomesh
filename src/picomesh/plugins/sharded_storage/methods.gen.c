@@ -3,6 +3,7 @@
 #include <picomesh/ycore/result.h>
 #include <picomesh/ycore/ytrace.h>
 #include <picomesh/ycore/yspan.h>
+#include <picomesh/ycore/ytelemetry.h>
 #include <picomesh/yclass/rpc.h>
 #include <picomesh/yclass/yheaders.h>
 #include <stdint.h>
@@ -29,13 +30,18 @@ struct picomesh_int_result sharded_storage_db_set(struct ctx * ctx, struct objec
             return PICOMESH_ERR(picomesh_int, "sharded_storage_db_set: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* Client span for this downstream call. Minted BEFORE the header
+         * bag is serialized so the wire carries this span as the remote
+         * peer's parent. */
+        struct ytelemetry_span _tsp;
+        ytelemetry_client_span_begin(&_tsp, hdrs, "rpc.sharded_storage_db_set");
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace context, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
-         * into the `hdrs` argument. The codegen never inspects the
-         * contents — it just lets the framework (de)serialize the bag. */
+         * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
+         * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
             if (_hn == 0)
                 return PICOMESH_ERR(picomesh_int, "sharded_storage_db_set: header serialize overflow");
             _off = _hn;
@@ -67,15 +73,10 @@ struct picomesh_int_result sharded_storage_db_set(struct ctx * ctx, struct objec
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, value, _slen); _off += _slen; }
         }
-        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
-        if (!span_trace) span_trace = "-";
-        double span_start = picomesh_ytime_monotonic_sec();
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        ydebug("span trace=%s op=rpc.sharded_storage_db_set dur_us=%.0f", span_trace, span_us);
-        yspan_record("rpc.sharded_storage_db_set", span_us);
+        ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
         if (_wn < 1) return PICOMESH_ERR(picomesh_int, "sharded_storage_db_set: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -117,13 +118,18 @@ struct picomesh_string_result sharded_storage_db_get(struct ctx * ctx, struct ob
             return PICOMESH_ERR(picomesh_string, "sharded_storage_db_get: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* Client span for this downstream call. Minted BEFORE the header
+         * bag is serialized so the wire carries this span as the remote
+         * peer's parent. */
+        struct ytelemetry_span _tsp;
+        ytelemetry_client_span_begin(&_tsp, hdrs, "rpc.sharded_storage_db_get");
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace context, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
-         * into the `hdrs` argument. The codegen never inspects the
-         * contents — it just lets the framework (de)serialize the bag. */
+         * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
+         * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
             if (_hn == 0)
                 return PICOMESH_ERR(picomesh_string, "sharded_storage_db_get: header serialize overflow");
             _off = _hn;
@@ -148,15 +154,10 @@ struct picomesh_string_result sharded_storage_db_get(struct ctx * ctx, struct ob
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, key, _slen); _off += _slen; }
         }
-        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
-        if (!span_trace) span_trace = "-";
-        double span_start = picomesh_ytime_monotonic_sec();
         uint8_t _wbuf[4101];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        ydebug("span trace=%s op=rpc.sharded_storage_db_get dur_us=%.0f", span_trace, span_us);
-        yspan_record("rpc.sharded_storage_db_get", span_us);
+        ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
         if (_wn < 1) return PICOMESH_ERR(picomesh_string, "sharded_storage_db_get: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -203,13 +204,18 @@ struct picomesh_int_result sharded_storage_db_exists(struct ctx * ctx, struct ob
             return PICOMESH_ERR(picomesh_int, "sharded_storage_db_exists: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* Client span for this downstream call. Minted BEFORE the header
+         * bag is serialized so the wire carries this span as the remote
+         * peer's parent. */
+        struct ytelemetry_span _tsp;
+        ytelemetry_client_span_begin(&_tsp, hdrs, "rpc.sharded_storage_db_exists");
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace context, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
-         * into the `hdrs` argument. The codegen never inspects the
-         * contents — it just lets the framework (de)serialize the bag. */
+         * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
+         * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
             if (_hn == 0)
                 return PICOMESH_ERR(picomesh_int, "sharded_storage_db_exists: header serialize overflow");
             _off = _hn;
@@ -234,15 +240,10 @@ struct picomesh_int_result sharded_storage_db_exists(struct ctx * ctx, struct ob
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, key, _slen); _off += _slen; }
         }
-        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
-        if (!span_trace) span_trace = "-";
-        double span_start = picomesh_ytime_monotonic_sec();
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        ydebug("span trace=%s op=rpc.sharded_storage_db_exists dur_us=%.0f", span_trace, span_us);
-        yspan_record("rpc.sharded_storage_db_exists", span_us);
+        ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
         if (_wn < 1) return PICOMESH_ERR(picomesh_int, "sharded_storage_db_exists: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -284,13 +285,18 @@ struct picomesh_int_result sharded_storage_db_del(struct ctx * ctx, struct objec
             return PICOMESH_ERR(picomesh_int, "sharded_storage_db_del: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* Client span for this downstream call. Minted BEFORE the header
+         * bag is serialized so the wire carries this span as the remote
+         * peer's parent. */
+        struct ytelemetry_span _tsp;
+        ytelemetry_client_span_begin(&_tsp, hdrs, "rpc.sharded_storage_db_del");
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace context, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
-         * into the `hdrs` argument. The codegen never inspects the
-         * contents — it just lets the framework (de)serialize the bag. */
+         * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
+         * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
             if (_hn == 0)
                 return PICOMESH_ERR(picomesh_int, "sharded_storage_db_del: header serialize overflow");
             _off = _hn;
@@ -315,15 +321,10 @@ struct picomesh_int_result sharded_storage_db_del(struct ctx * ctx, struct objec
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, key, _slen); _off += _slen; }
         }
-        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
-        if (!span_trace) span_trace = "-";
-        double span_start = picomesh_ytime_monotonic_sec();
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        ydebug("span trace=%s op=rpc.sharded_storage_db_del dur_us=%.0f", span_trace, span_us);
-        yspan_record("rpc.sharded_storage_db_del", span_us);
+        ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
         if (_wn < 1) return PICOMESH_ERR(picomesh_int, "sharded_storage_db_del: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -365,13 +366,18 @@ struct picomesh_size_result sharded_storage_db_count(struct ctx * ctx, struct ob
             return PICOMESH_ERR(picomesh_size, "sharded_storage_db_count: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* Client span for this downstream call. Minted BEFORE the header
+         * bag is serialized so the wire carries this span as the remote
+         * peer's parent. */
+        struct ytelemetry_span _tsp;
+        ytelemetry_client_span_begin(&_tsp, hdrs, "rpc.sharded_storage_db_count");
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace context, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
-         * into the `hdrs` argument. The codegen never inspects the
-         * contents — it just lets the framework (de)serialize the bag. */
+         * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
+         * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
             if (_hn == 0)
                 return PICOMESH_ERR(picomesh_size, "sharded_storage_db_count: header serialize overflow");
             _off = _hn;
@@ -389,15 +395,10 @@ struct picomesh_size_result sharded_storage_db_count(struct ctx * ctx, struct ob
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, context, _slen); _off += _slen; }
         }
-        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
-        if (!span_trace) span_trace = "-";
-        double span_start = picomesh_ytime_monotonic_sec();
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        ydebug("span trace=%s op=rpc.sharded_storage_db_count dur_us=%.0f", span_trace, span_us);
-        yspan_record("rpc.sharded_storage_db_count", span_us);
+        ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
         if (_wn < 1) return PICOMESH_ERR(picomesh_size, "sharded_storage_db_count: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -439,13 +440,18 @@ struct picomesh_int64_result sharded_storage_db_incr(struct ctx * ctx, struct ob
             return PICOMESH_ERR(picomesh_int64, "sharded_storage_db_incr: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* Client span for this downstream call. Minted BEFORE the header
+         * bag is serialized so the wire carries this span as the remote
+         * peer's parent. */
+        struct ytelemetry_span _tsp;
+        ytelemetry_client_span_begin(&_tsp, hdrs, "rpc.sharded_storage_db_incr");
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace context, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
-         * into the `hdrs` argument. The codegen never inspects the
-         * contents — it just lets the framework (de)serialize the bag. */
+         * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
+         * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
             if (_hn == 0)
                 return PICOMESH_ERR(picomesh_int64, "sharded_storage_db_incr: header serialize overflow");
             _off = _hn;
@@ -473,15 +479,10 @@ struct picomesh_int64_result sharded_storage_db_incr(struct ctx * ctx, struct ob
         if (_off + sizeof(delta) > sizeof(_a))
             return PICOMESH_ERR(picomesh_int64, "sharded_storage_db_incr: pack overflow");
         memcpy(_a + _off, &delta, sizeof(delta)); _off += sizeof(delta);
-        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
-        if (!span_trace) span_trace = "-";
-        double span_start = picomesh_ytime_monotonic_sec();
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        ydebug("span trace=%s op=rpc.sharded_storage_db_incr dur_us=%.0f", span_trace, span_us);
-        yspan_record("rpc.sharded_storage_db_incr", span_us);
+        ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
         if (_wn < 1) return PICOMESH_ERR(picomesh_int64, "sharded_storage_db_incr: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -523,13 +524,18 @@ struct picomesh_int_result sharded_storage_db_put_if_absent(struct ctx * ctx, st
             return PICOMESH_ERR(picomesh_int, "sharded_storage_db_put_if_absent: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* Client span for this downstream call. Minted BEFORE the header
+         * bag is serialized so the wire carries this span as the remote
+         * peer's parent. */
+        struct ytelemetry_span _tsp;
+        ytelemetry_client_span_begin(&_tsp, hdrs, "rpc.sharded_storage_db_put_if_absent");
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace context, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
-         * into the `hdrs` argument. The codegen never inspects the
-         * contents — it just lets the framework (de)serialize the bag. */
+         * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
+         * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
             if (_hn == 0)
                 return PICOMESH_ERR(picomesh_int, "sharded_storage_db_put_if_absent: header serialize overflow");
             _off = _hn;
@@ -561,15 +567,10 @@ struct picomesh_int_result sharded_storage_db_put_if_absent(struct ctx * ctx, st
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, value, _slen); _off += _slen; }
         }
-        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
-        if (!span_trace) span_trace = "-";
-        double span_start = picomesh_ytime_monotonic_sec();
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        ydebug("span trace=%s op=rpc.sharded_storage_db_put_if_absent dur_us=%.0f", span_trace, span_us);
-        yspan_record("rpc.sharded_storage_db_put_if_absent", span_us);
+        ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
         if (_wn < 1) return PICOMESH_ERR(picomesh_int, "sharded_storage_db_put_if_absent: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -611,13 +612,18 @@ struct picomesh_int_result sharded_storage_db_compare_and_set(struct ctx * ctx, 
             return PICOMESH_ERR(picomesh_int, "sharded_storage_db_compare_and_set: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* Client span for this downstream call. Minted BEFORE the header
+         * bag is serialized so the wire carries this span as the remote
+         * peer's parent. */
+        struct ytelemetry_span _tsp;
+        ytelemetry_client_span_begin(&_tsp, hdrs, "rpc.sharded_storage_db_compare_and_set");
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace context, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
-         * into the `hdrs` argument. The codegen never inspects the
-         * contents — it just lets the framework (de)serialize the bag. */
+         * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
+         * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
             if (_hn == 0)
                 return PICOMESH_ERR(picomesh_int, "sharded_storage_db_compare_and_set: header serialize overflow");
             _off = _hn;
@@ -656,15 +662,10 @@ struct picomesh_int_result sharded_storage_db_compare_and_set(struct ctx * ctx, 
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, replacement, _slen); _off += _slen; }
         }
-        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
-        if (!span_trace) span_trace = "-";
-        double span_start = picomesh_ytime_monotonic_sec();
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        ydebug("span trace=%s op=rpc.sharded_storage_db_compare_and_set dur_us=%.0f", span_trace, span_us);
-        yspan_record("rpc.sharded_storage_db_compare_and_set", span_us);
+        ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
         if (_wn < 1) return PICOMESH_ERR(picomesh_int, "sharded_storage_db_compare_and_set: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;

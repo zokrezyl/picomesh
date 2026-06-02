@@ -30,6 +30,7 @@
 #include <picomesh/plugin/git_repo/git_repo.h>
 #include <picomesh/plugin/git_pipeline/git_pipeline.h>
 #include <picomesh/plugin/personal_access_tokens/personal_access_tokens.h>
+#include <picomesh/plugin/trace_collector/trace_collector.h>
 #include <picomesh/plugin/mesh/mesh.h>
 
 #include <picomesh/yengine/engine.h>
@@ -108,6 +109,7 @@ static const struct plugin_reg *plugin_registry(size_t *count)
         {"git_repo",               picomesh_plugin_git_repo_register},
         {"git_pipeline",           picomesh_plugin_git_pipeline_register},
         {"personal_access_tokens", picomesh_plugin_personal_access_tokens_register},
+        {"trace_collector",        picomesh_plugin_trace_collector_register},
         {"mesh",                   picomesh_plugin_mesh_register},
     };
     *count = sizeof(ROWS) / sizeof(ROWS[0]);

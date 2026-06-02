@@ -45,6 +45,21 @@ mesh:
   auto_reconcile: true
   services:
 
+    # The trace collector (issue #11): an ordinary yrpc backend plugin that
+    # RECEIVES spans on its exposed `store_ingest` method and answers the
+    # query methods (store_get_trace / store_services / store_operations /
+    # store_latency / store_errors). Every other service lists it as a remote
+    # and ships finished spans to it over its OWN per-worker connection,
+    # fire-and-forget (see ytelemetry). State is an in-memory bounded store —
+    # no durable storage in v1. Reached for queries like any backend, through
+    # the gateway's /_rpc + /_describe (service-driven, no bespoke routes).
+    # Listed first so it binds before the services that emit to it.
+    trace_collector:
+      port: 8220
+      plugins: [trace_collector]
+      config:
+        remotes: []
+
     portalloc:
       port: 8201
       plugins: [portalloc]
@@ -73,6 +88,11 @@ mesh:
         sharded_storage:
           shards: 8
           path: /tmp/picoforge/sharded
+        # sharded_storage calls no backend, but its skels emit server spans,
+        # so it still needs a connection to ship them to the collector.
+        remotes:
+          - service: trace_collector
+            port: 8220
 
     session:
       port: 8203
@@ -86,6 +106,8 @@ mesh:
         remotes:
           - service: sharded_storage
             port: 8212
+          - service: trace_collector
+            port: 8220
           - service: token_issuer
             port: 8207
 
@@ -96,6 +118,8 @@ mesh:
         remotes:
           - service: sharded_storage
             port: 8212
+          - service: trace_collector
+            port: 8220
 
     password_authn:
       port: 8205
@@ -104,6 +128,8 @@ mesh:
         remotes:
           - service: sharded_storage
             port: 8212
+          - service: trace_collector
+            port: 8220
           - service: accounts
             port: 8204
 
@@ -114,6 +140,8 @@ mesh:
         remotes:
           - service: sharded_storage
             port: 8212
+          - service: trace_collector
+            port: 8220
 
     token_issuer:
       port: 8207
@@ -122,6 +150,8 @@ mesh:
         remotes:
           - service: sharded_storage
             port: 8212
+          - service: trace_collector
+            port: 8220
           - service: accounts
             port: 8204
 
@@ -132,6 +162,8 @@ mesh:
         remotes:
           - service: sharded_storage
             port: 8212
+          - service: trace_collector
+            port: 8220
 
     git_repo:
       port: 8209
@@ -151,6 +183,8 @@ mesh:
         remotes:
           - service: sharded_storage
             port: 8212
+          - service: trace_collector
+            port: 8220
 
     git_pipeline:
       port: 8210
@@ -159,6 +193,8 @@ mesh:
         remotes:
           - service: sharded_storage
             port: 8212
+          - service: trace_collector
+            port: 8220
 
     personal_access_tokens:
       port: 8211
@@ -167,6 +203,8 @@ mesh:
         remotes:
           - service: sharded_storage
             port: 8212
+          - service: trace_collector
+            port: 8220
 
     # The gateway. Per CLAUDE.md: this is the ONE service that
     # listens yhttp — it's the auth boundary. External clients
@@ -222,6 +260,8 @@ mesh:
         remotes:
           - service: sharded_storage
             port: 8212
+          - service: trace_collector
+            port: 8220
           - service: session
             port: 8203
           - service: accounts

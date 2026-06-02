@@ -334,8 +334,12 @@ static void rpc_async_reader_entry(void *arg)
         struct pending_call *p = NULL;
         HASH_FIND(hh, c->pending, &req_id, sizeof(req_id), p);
         if (!p) {
-            /* No waiter (e.g. a caller that already gave up) — drop it. */
-            ywarn("yrpc-reader: response for unknown req_id=%u, draining %u", req_id, resp_len);
+            /* No waiter. req_id 0 is the reserved fire-and-forget id
+             * (telemetry span ship-out): the reply is expected and
+             * unwanted, so drain it silently. Any other unknown id means a
+             * caller gave up — worth a warning. */
+            if (req_id != 0)
+                ywarn("yrpc-reader: response for unknown req_id=%u, draining %u", req_id, resp_len);
             if (!rpc_async_drain(stream, resp_len)) break;
             continue;
         }
@@ -481,6 +485,30 @@ static size_t rpc_async_client_call(void *vc, enum rpc_op op, uint32_t id,
     return result_len;
 }
 
+/* Fire-and-forget: write the request frame and return. No pending entry,
+ * no park — the caller never waits for a reply. The frame carries req_id 0
+ * (reserved); the reader drains the peer's reply silently. Used for
+ * telemetry span ship-out so it never adds a round-trip to a request. */
+static void rpc_async_client_oneway(void *vc, enum rpc_op op, uint32_t id,
+                                    const void *body, size_t body_len)
+{
+    struct rpc_async_client *c = vc;
+    if (!rpc_async_ensure_connected(c)) return;
+
+    uint32_t header = RPC_HDR_MAKE(op, id);
+    uint32_t req_id = 0; /* reserved: "no reply expected" */
+    uint32_t blen = (uint32_t)body_len;
+    size_t frame_len = 12 + body_len;
+    uint8_t *frame = malloc(frame_len);
+    if (!frame) return;
+    memcpy(frame, &header, 4);
+    memcpy(frame + 4, &req_id, 4);
+    memcpy(frame + 8, &blen, 4);
+    if (body_len) memcpy(frame + 12, body, body_len);
+    yloop_write(c->stream, frame, frame_len); /* yields; result ignored */
+    free(frame);
+}
+
 static void rpc_async_client_destroy(void *vc)
 {
     struct rpc_async_client *c = vc;
@@ -521,6 +549,7 @@ static struct peer_channel *open_async_session(struct yloop *loop,
     if (!s) { rpc_async_client_destroy(c); return NULL; }
     c->owner = s; /* so reconnects can flush the channel's proxy cache */
     peer_channel_set_async(s, c, rpc_async_client_call, rpc_async_client_destroy);
+    peer_channel_set_async_oneway(s, rpc_async_client_oneway);
     return s;
 }
 

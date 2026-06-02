@@ -6,6 +6,7 @@
 #include <picomesh/ycore/result.h>
 #include <picomesh/ycore/ytrace.h>
 #include <picomesh/ycore/yspan.h>
+#include <picomesh/ycore/ytelemetry.h>
 #include <picomesh/yclass/class.h>
 #include "session.internal.h"
 #include <stdint.h>
@@ -42,14 +43,10 @@ static size_t session_store_start_skel(const void *_body, size_t _body_len,
     if (_off + sizeof(_v2) > _body_len) goto _short_body;
     memcpy(&_v2, (const uint8_t *)_body + _off, sizeof(_v2));
     _off += sizeof(_v2);
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.session_store_start");
     struct picomesh_string_result _r = session_store_start(&_local, _obj, _hdrs, _v1, _v2);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.session_store_start dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.session_store_start", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -115,14 +112,10 @@ static size_t session_store_lookup_skel(const void *_body, size_t _body_len,
         if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
         _s1[_slen] = 0; _off += _slen;
     }
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.session_store_lookup");
     struct picomesh_uint32_result _r = session_store_lookup(&_local, _obj, _hdrs, _s1);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.session_store_lookup dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.session_store_lookup", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -182,14 +175,10 @@ static size_t session_store_destroy_skel(const void *_body, size_t _body_len,
         if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
         _s1[_slen] = 0; _off += _slen;
     }
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.session_store_destroy");
     struct picomesh_int_result _r = session_store_destroy(&_local, _obj, _hdrs, _s1);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.session_store_destroy dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.session_store_destroy", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -239,14 +228,10 @@ static size_t session_store_count_active_skel(const void *_body, size_t _body_le
         memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
         _obj = (struct object *)rpc_handle_resolve(_h);
     }
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.session_store_count_active");
     struct picomesh_size_result _r = session_store_count_active(&_local, _obj, _hdrs);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.session_store_count_active dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.session_store_count_active", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {

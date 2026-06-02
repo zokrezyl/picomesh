@@ -636,26 +636,20 @@ def emit_dispatch_body(m: dict) -> str:
     # Wire response: u8 status; status==0 → value_bytes; status==1 →
     # u32 msg_len + msg_bytes (gh#2: preserve structured remote errors).
     # The buffer is sized to hold the bigger of value or error payload.
-    # The outbound call, wrapped in a tracing span: the trace id comes
-    # from the header bag, so `ydebug` (gated — zero IO when tracing is
-    # off) emits `trace=<id> op=rpc.<slot> dur_us=<n>`, and grepping a
-    # trace id reconstructs the end-to-end latency timeline. This span
-    # measures the full round trip (transport + remote execution); the
-    # skel emits a matching `op=skel.<slot>` span for the remote half.
+    # The outbound call is wrapped in a CLIENT span (begun above, before the
+    # header bag was serialized so the remote peer parents its server span to
+    # it). ytelemetry_span_end records duration + status, ships the span to the
+    # collector (best-effort, non-blocking) and feeds the local /_perf
+    # aggregate. The remote peer emits the matching `skel.<slot>` server span.
     # String returns can be long, so the response buffer must hold
     # u8 status + u32 len + up to WIRE_STRING_MAX value bytes. Scalar /
     # error responses fit comfortably in the small buffer.
     wbuf_sz = (1 + 4 + WIRE_STRING_MAX) if is_string_ret(vt) else (1 + 4 + 256)
     timed_rpc = f"""\
-        const char *span_trace = {hdrs_name} ? yheaders_get({hdrs_name}, "trace_id") : "-";
-        if (!span_trace) span_trace = "-";
-        double span_start = picomesh_ytime_monotonic_sec();
         uint8_t _wbuf[{wbuf_sz}];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        ydebug("span trace=%s op=rpc.{slot_qname} dur_us=%.0f", span_trace, span_us);
-        yspan_record("rpc.{slot_qname}", span_us);
+        ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
 """
     err_parse = f"""\
         if (_wn < 1) return PICOMESH_ERR({rid}, "{slot_qname}: short RPC response");
@@ -711,13 +705,18 @@ def emit_dispatch_body(m: dict) -> str:
             return PICOMESH_ERR({rid}, "{slot_qname}: remote id unresolved");
         uint8_t _a[{WIRE_ARG_BUFFER_BYTES}];
         size_t _off = 0;
+        /* Client span for this downstream call. Minted BEFORE the header
+         * bag is serialized so the wire carries this span as the remote
+         * peer's parent. */
+        struct ytelemetry_span _tsp;
+        ytelemetry_client_span_begin(&_tsp, {hdrs_name}, "rpc.{slot_qname}");
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace context, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
-         * into the `hdrs` argument. The codegen never inspects the
-         * contents — it just lets the framework (de)serialize the bag. */
+         * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
+         * this client span's id as parent_span_id across the serialize. */
         {{
-            size_t _hn = yheaders_serialize({hdrs_name}, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, {hdrs_name}, _a, sizeof(_a));
             if (_hn == 0)
                 return PICOMESH_ERR({rid}, "{slot_qname}: header serialize overflow");
             _off = _hn;
@@ -738,6 +737,7 @@ def emit_methods_c(model: dict, module: str, out_path: Path):
              '#include <picomesh/ycore/result.h>\n',
              '#include <picomesh/ycore/ytrace.h>\n',
              '#include <picomesh/ycore/yspan.h>\n',
+             '#include <picomesh/ycore/ytelemetry.h>\n',
              '#include <picomesh/yclass/rpc.h>\n',
              '#include <picomesh/yclass/yheaders.h>\n',
              '#include <stdint.h>\n#include <stdlib.h>\n#include <string.h>\n\n']
@@ -976,20 +976,18 @@ def emit_skel(m: dict) -> str:
         picomesh_error_destroy(_r.error);
         return 1 + 4 + _ml;
 """
-    # Server-half tracing span: time the impl execution and emit
-    # `trace=<id> op=skel.<slot> dur_us=<n>` (gated ydebug). Paired with
-    # the caller's `op=rpc.<slot>` span, the difference is transport +
-    # queueing time. The trace id is read after the call (still before
-    # the bag is freed) so it reflects whatever the impl saw/injected.
+    # Server-half tracing span: ytelemetry_server_span_begin reads the inbound
+    # trace context (trace_id + parent_span_id) from the header bag, mints
+    # this hop's span_id and rewrites the bag's parent_span_id to it so the
+    # impl's downstream calls nest beneath this span. ytelemetry_span_end records
+    # duration + status, ships the span to the collector and feeds the local
+    # /_perf aggregate. Paired with the caller's `rpc.<slot>` client span,
+    # the difference is transport + queueing time.
     invoke_and_span = f"""\
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.{slot}");
     {rt} _r = {slot}({call});
-    {{
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.{slot} dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.{slot}", span_us);
-    }}
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
 """
     if vt is None:
@@ -1299,6 +1297,7 @@ def emit_rpc_c(model: dict, module: str, out_path: Path):
              '#include <picomesh/ycore/result.h>\n',
              '#include <picomesh/ycore/ytrace.h>\n',
              '#include <picomesh/ycore/yspan.h>\n',
+             '#include <picomesh/ycore/ytelemetry.h>\n',
              '#include <picomesh/yclass/class.h>\n',
              f'#include "{module}.internal.h"\n',
              '#include <stdint.h>\n#include <stdio.h>\n#include <stdlib.h>\n'

@@ -6,6 +6,7 @@
 #include <picomesh/ycore/result.h>
 #include <picomesh/ycore/ytrace.h>
 #include <picomesh/ycore/yspan.h>
+#include <picomesh/ycore/ytelemetry.h>
 #include <picomesh/yclass/class.h>
 #include "git_repo.internal.h"
 #include <stdint.h>
@@ -58,14 +59,10 @@ static size_t git_repo_store_make_skel(const void *_body, size_t _body_len,
         if (_slen) memcpy(_s3, (const uint8_t *)_body + _off, _slen);
         _s3[_slen] = 0; _off += _slen;
     }
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.git_repo_store_make");
     struct picomesh_uint32_result _r = git_repo_store_make(&_local, _obj, _hdrs, _v1, _s2, _s3);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.git_repo_store_make dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.git_repo_store_make", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -119,14 +116,10 @@ static size_t git_repo_store_delete_skel(const void *_body, size_t _body_len,
     if (_off + sizeof(_v1) > _body_len) goto _short_body;
     memcpy(&_v1, (const uint8_t *)_body + _off, sizeof(_v1));
     _off += sizeof(_v1);
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.git_repo_store_delete");
     struct picomesh_int_result _r = git_repo_store_delete(&_local, _obj, _hdrs, _v1);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.git_repo_store_delete dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.git_repo_store_delete", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -180,14 +173,10 @@ static size_t git_repo_store_owner_of_skel(const void *_body, size_t _body_len,
     if (_off + sizeof(_v1) > _body_len) goto _short_body;
     memcpy(&_v1, (const uint8_t *)_body + _off, sizeof(_v1));
     _off += sizeof(_v1);
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.git_repo_store_owner_of");
     struct picomesh_uint32_result _r = git_repo_store_owner_of(&_local, _obj, _hdrs, _v1);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.git_repo_store_owner_of dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.git_repo_store_owner_of", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -241,14 +230,10 @@ static size_t git_repo_store_count_for_owner_skel(const void *_body, size_t _bod
     if (_off + sizeof(_v1) > _body_len) goto _short_body;
     memcpy(&_v1, (const uint8_t *)_body + _off, sizeof(_v1));
     _off += sizeof(_v1);
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.git_repo_store_count_for_owner");
     struct picomesh_size_result _r = git_repo_store_count_for_owner(&_local, _obj, _hdrs, _v1);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.git_repo_store_count_for_owner dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.git_repo_store_count_for_owner", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -298,14 +283,10 @@ static size_t git_repo_store_count_total_skel(const void *_body, size_t _body_le
         memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
         _obj = (struct object *)rpc_handle_resolve(_h);
     }
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.git_repo_store_count_total");
     struct picomesh_size_result _r = git_repo_store_count_total(&_local, _obj, _hdrs);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.git_repo_store_count_total dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.git_repo_store_count_total", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -359,14 +340,10 @@ static size_t git_repo_store_list_for_owner_skel(const void *_body, size_t _body
     if (_off + sizeof(_v1) > _body_len) goto _short_body;
     memcpy(&_v1, (const uint8_t *)_body + _off, sizeof(_v1));
     _off += sizeof(_v1);
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.git_repo_store_list_for_owner");
     struct picomesh_string_result _r = git_repo_store_list_for_owner(&_local, _obj, _hdrs, _v1);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.git_repo_store_list_for_owner dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.git_repo_store_list_for_owner", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -446,14 +423,10 @@ static size_t git_repo_store_read_tree_skel(const void *_body, size_t _body_len,
         if (_slen) memcpy(_s3, (const uint8_t *)_body + _off, _slen);
         _s3[_slen] = 0; _off += _slen;
     }
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.git_repo_store_read_tree");
     struct picomesh_string_result _r = git_repo_store_read_tree(&_local, _obj, _hdrs, _v1, _s2, _s3);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.git_repo_store_read_tree dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.git_repo_store_read_tree", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -533,14 +506,10 @@ static size_t git_repo_store_read_file_skel(const void *_body, size_t _body_len,
         if (_slen) memcpy(_s3, (const uint8_t *)_body + _off, _slen);
         _s3[_slen] = 0; _off += _slen;
     }
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.git_repo_store_read_file");
     struct picomesh_string_result _r = git_repo_store_read_file(&_local, _obj, _hdrs, _v1, _s2, _s3);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.git_repo_store_read_file dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.git_repo_store_read_file", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -650,14 +619,10 @@ static size_t git_repo_store_put_file_skel(const void *_body, size_t _body_len,
         if (_slen) memcpy(_s6, (const uint8_t *)_body + _off, _slen);
         _s6[_slen] = 0; _off += _slen;
     }
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.git_repo_store_put_file");
     struct picomesh_string_result _r = git_repo_store_put_file(&_local, _obj, _hdrs, _v1, _s2, _s3, _s4, _s5, _s6);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.git_repo_store_put_file dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.git_repo_store_put_file", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -717,14 +682,10 @@ static size_t git_repo_store_is_public_skel(const void *_body, size_t _body_len,
     if (_off + sizeof(_v1) > _body_len) goto _short_body;
     memcpy(&_v1, (const uint8_t *)_body + _off, sizeof(_v1));
     _off += sizeof(_v1);
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.git_repo_store_is_public");
     struct picomesh_int_result _r = git_repo_store_is_public(&_local, _obj, _hdrs, _v1);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.git_repo_store_is_public dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.git_repo_store_is_public", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -782,14 +743,10 @@ static size_t git_repo_store_set_public_skel(const void *_body, size_t _body_len
     if (_off + sizeof(_v2) > _body_len) goto _short_body;
     memcpy(&_v2, (const uint8_t *)_body + _off, sizeof(_v2));
     _off += sizeof(_v2);
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.git_repo_store_set_public");
     struct picomesh_int_result _r = git_repo_store_set_public(&_local, _obj, _hdrs, _v1, _v2);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.git_repo_store_set_public dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.git_repo_store_set_public", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {

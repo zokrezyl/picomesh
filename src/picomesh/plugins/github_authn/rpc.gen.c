@@ -6,6 +6,7 @@
 #include <picomesh/ycore/result.h>
 #include <picomesh/ycore/ytrace.h>
 #include <picomesh/ycore/yspan.h>
+#include <picomesh/ycore/ytelemetry.h>
 #include <picomesh/yclass/class.h>
 #include "github_authn.internal.h"
 #include <stdint.h>
@@ -42,14 +43,10 @@ static size_t github_authn_store_set_credentials_skel(const void *_body, size_t 
     if (_off + sizeof(_v2) > _body_len) goto _short_body;
     memcpy(&_v2, (const uint8_t *)_body + _off, sizeof(_v2));
     _off += sizeof(_v2);
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.github_authn_store_set_credentials");
     struct picomesh_int_result _r = github_authn_store_set_credentials(&_local, _obj, _hdrs, _v1, _v2);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.github_authn_store_set_credentials dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.github_authn_store_set_credentials", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -107,14 +104,10 @@ static size_t github_authn_store_register_code_skel(const void *_body, size_t _b
     if (_off + sizeof(_v2) > _body_len) goto _short_body;
     memcpy(&_v2, (const uint8_t *)_body + _off, sizeof(_v2));
     _off += sizeof(_v2);
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.github_authn_store_register_code");
     struct picomesh_int_result _r = github_authn_store_register_code(&_local, _obj, _hdrs, _v1, _v2);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.github_authn_store_register_code dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.github_authn_store_register_code", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -168,14 +161,10 @@ static size_t github_authn_store_resolve_skel(const void *_body, size_t _body_le
     if (_off + sizeof(_v1) > _body_len) goto _short_body;
     memcpy(&_v1, (const uint8_t *)_body + _off, sizeof(_v1));
     _off += sizeof(_v1);
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.github_authn_store_resolve");
     struct picomesh_uint32_result _r = github_authn_store_resolve(&_local, _obj, _hdrs, _v1);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.github_authn_store_resolve dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.github_authn_store_resolve", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -225,14 +214,10 @@ static size_t github_authn_store_count_codes_skel(const void *_body, size_t _bod
         memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
         _obj = (struct object *)rpc_handle_resolve(_h);
     }
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.github_authn_store_count_codes");
     struct picomesh_size_result _r = github_authn_store_count_codes(&_local, _obj, _hdrs);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.github_authn_store_count_codes dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.github_authn_store_count_codes", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {

@@ -6,6 +6,7 @@
 #include <picomesh/ycore/result.h>
 #include <picomesh/ycore/ytrace.h>
 #include <picomesh/ycore/yspan.h>
+#include <picomesh/ycore/ytelemetry.h>
 #include <picomesh/yclass/class.h>
 #include "personal_access_tokens.internal.h"
 #include <stdint.h>
@@ -38,14 +39,10 @@ static size_t personal_access_tokens_store_mint_skel(const void *_body, size_t _
     if (_off + sizeof(_v1) > _body_len) goto _short_body;
     memcpy(&_v1, (const uint8_t *)_body + _off, sizeof(_v1));
     _off += sizeof(_v1);
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.personal_access_tokens_store_mint");
     struct picomesh_uint32_result _r = personal_access_tokens_store_mint(&_local, _obj, _hdrs, _v1);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.personal_access_tokens_store_mint dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.personal_access_tokens_store_mint", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -99,14 +96,10 @@ static size_t personal_access_tokens_store_lookup_skel(const void *_body, size_t
     if (_off + sizeof(_v1) > _body_len) goto _short_body;
     memcpy(&_v1, (const uint8_t *)_body + _off, sizeof(_v1));
     _off += sizeof(_v1);
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.personal_access_tokens_store_lookup");
     struct picomesh_uint32_result _r = personal_access_tokens_store_lookup(&_local, _obj, _hdrs, _v1);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.personal_access_tokens_store_lookup dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.personal_access_tokens_store_lookup", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -160,14 +153,10 @@ static size_t personal_access_tokens_store_revoke_skel(const void *_body, size_t
     if (_off + sizeof(_v1) > _body_len) goto _short_body;
     memcpy(&_v1, (const uint8_t *)_body + _off, sizeof(_v1));
     _off += sizeof(_v1);
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.personal_access_tokens_store_revoke");
     struct picomesh_int_result _r = personal_access_tokens_store_revoke(&_local, _obj, _hdrs, _v1);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.personal_access_tokens_store_revoke dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.personal_access_tokens_store_revoke", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -221,14 +210,10 @@ static size_t personal_access_tokens_store_list_for_user_skel(const void *_body,
     if (_off + sizeof(_v1) > _body_len) goto _short_body;
     memcpy(&_v1, (const uint8_t *)_body + _off, sizeof(_v1));
     _off += sizeof(_v1);
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.personal_access_tokens_store_list_for_user");
     struct picomesh_size_result _r = personal_access_tokens_store_list_for_user(&_local, _obj, _hdrs, _v1);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.personal_access_tokens_store_list_for_user dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.personal_access_tokens_store_list_for_user", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -278,14 +263,10 @@ static size_t personal_access_tokens_store_count_active_skel(const void *_body, 
         memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
         _obj = (struct object *)rpc_handle_resolve(_h);
     }
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.personal_access_tokens_store_count_active");
     struct picomesh_size_result _r = personal_access_tokens_store_count_active(&_local, _obj, _hdrs);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.personal_access_tokens_store_count_active dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.personal_access_tokens_store_count_active", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {

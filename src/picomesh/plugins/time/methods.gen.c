@@ -3,6 +3,7 @@
 #include <picomesh/ycore/result.h>
 #include <picomesh/ycore/ytrace.h>
 #include <picomesh/ycore/yspan.h>
+#include <picomesh/ycore/ytelemetry.h>
 #include <picomesh/yclass/rpc.h>
 #include <picomesh/yclass/yheaders.h>
 #include <stdint.h>
@@ -29,13 +30,18 @@ struct picomesh_int64_result time_clock_now_ms(struct ctx * ctx, struct object *
             return PICOMESH_ERR(picomesh_int64, "time_clock_now_ms: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* Client span for this downstream call. Minted BEFORE the header
+         * bag is serialized so the wire carries this span as the remote
+         * peer's parent. */
+        struct ytelemetry_span _tsp;
+        ytelemetry_client_span_begin(&_tsp, hdrs, "rpc.time_clock_now_ms");
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace context, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
-         * into the `hdrs` argument. The codegen never inspects the
-         * contents — it just lets the framework (de)serialize the bag. */
+         * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
+         * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
             if (_hn == 0)
                 return PICOMESH_ERR(picomesh_int64, "time_clock_now_ms: header serialize overflow");
             _off = _hn;
@@ -46,15 +52,10 @@ struct picomesh_int64_result time_clock_now_ms(struct ctx * ctx, struct object *
                 return PICOMESH_ERR(picomesh_int64, "time_clock_now_ms: pack overflow");
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
-        if (!span_trace) span_trace = "-";
-        double span_start = picomesh_ytime_monotonic_sec();
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        ydebug("span trace=%s op=rpc.time_clock_now_ms dur_us=%.0f", span_trace, span_us);
-        yspan_record("rpc.time_clock_now_ms", span_us);
+        ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
         if (_wn < 1) return PICOMESH_ERR(picomesh_int64, "time_clock_now_ms: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -96,13 +97,18 @@ struct picomesh_int64_result time_clock_sleep_ms(struct ctx * ctx, struct object
             return PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* Client span for this downstream call. Minted BEFORE the header
+         * bag is serialized so the wire carries this span as the remote
+         * peer's parent. */
+        struct ytelemetry_span _tsp;
+        ytelemetry_client_span_begin(&_tsp, hdrs, "rpc.time_clock_sleep_ms");
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace context, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
-         * into the `hdrs` argument. The codegen never inspects the
-         * contents — it just lets the framework (de)serialize the bag. */
+         * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
+         * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
             if (_hn == 0)
                 return PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: header serialize overflow");
             _off = _hn;
@@ -116,15 +122,10 @@ struct picomesh_int64_result time_clock_sleep_ms(struct ctx * ctx, struct object
         if (_off + sizeof(ms) > sizeof(_a))
             return PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: pack overflow");
         memcpy(_a + _off, &ms, sizeof(ms)); _off += sizeof(ms);
-        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
-        if (!span_trace) span_trace = "-";
-        double span_start = picomesh_ytime_monotonic_sec();
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        ydebug("span trace=%s op=rpc.time_clock_sleep_ms dur_us=%.0f", span_trace, span_us);
-        yspan_record("rpc.time_clock_sleep_ms", span_us);
+        ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
         if (_wn < 1) return PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;

@@ -340,6 +340,67 @@ expect_contains 'control parent :8800 still serves /create' "$out" '"handle":[0-
 kill -KILL $SIDECAR 2>/dev/null || true
 
 echo
+echo "[5c] distributed tracing — the trace collector reconstructs a request tree"
+# Issue #11: a request entering the gateway accepts/continues a W3C trace
+# context; each hop records a span with trace_id/span_id/parent_span_id and
+# ships it (fire-and-forget) to the trace_collector backend plugin. The
+# collector is reached for queries like any backend — through the gateway's
+# /_rpc (service-driven), NOT a bespoke port.
+TRACE_ID=0123456789abcdef0123456789abcdef
+PARENT_SPAN=1122334455667788
+
+# Issue a traced request through the gateway. It continues our inbound
+# traceparent, opens the root span, and forwards to git_repo (which reads
+# sharded_storage) — so one trace_id fans out into a gateway → git_repo →
+# sharded_storage span chain.
+traced=$(curl -sS --max-time 10 -D - -o /dev/null -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+    -H "traceparent: 00-${TRACE_ID}-${PARENT_SPAN}-01" \
+    -H 'Content-Type: application/json' \
+    -d '{"path":"git_repo.store.count_total","args":[]}')
+expect_contains 'gateway echoes a traceparent for our trace' "$traced" "traceparent: 00-${TRACE_ID}-"
+
+# Spans ship fire-and-forget — give the collector a moment to ingest.
+sleep 1.5
+
+# Query the trace back through the gateway: trace_collector.store.get_trace
+# returns the whole trace as a JSON string in the /_rpc "result" field.
+trace_rpc=$(curl -sS --max-time 10 -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+    -H 'Content-Type: application/json' \
+    -d "{\"path\":\"trace_collector.store.get_trace\",\"args\":[\"${TRACE_ID}\"]}")
+# Reconstruct the tree: >= 2 spans across >1 service, with a child whose
+# parent_span_id resolves to another span (a real parent/child tree).
+tree_ok=$(printf '%s' "$trace_rpc" | python3 -c '
+import sys, json
+outer = json.load(sys.stdin)
+d = json.loads(outer["result"])           # result is a JSON string
+spans = d.get("spans", [])
+ids = {s["span_id"] for s in spans}
+linked = any(s.get("parent_span_id") and s["parent_span_id"] in ids for s in spans)
+svcs = {s["service_name"] for s in spans}
+names = " ".join(s.get("name","") for s in spans)
+ok = len(spans) >= 2 and linked and len(svcs) >= 2 and "gateway." in names
+print("OK" if ok else "NO len=%d linked=%s svcs=%s" % (len(spans), linked, sorted(svcs)))
+' 2>/dev/null)
+expect_contains 'collector reconstructs a linked cross-service span tree' "$tree_ok" 'OK'
+
+# Service + latency aggregates are queryable through the gateway too.
+svc=$(curl -sS --max-time 10 -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+    -H 'Content-Type: application/json' \
+    -d '{"path":"trace_collector.store.services","args":[]}')
+expect_contains 'collector services() lists the gateway'  "$svc" 'gateway'
+expect_contains 'collector services() lists git_repo'     "$svc" 'git_repo'
+lat=$(curl -sS --max-time 10 -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+    -H 'Content-Type: application/json' \
+    -d '{"path":"trace_collector.store.latency","args":["gateway","",0]}')
+expect_contains 'collector latency() returns an aggregate' "$lat" 'p50_ns'
+
+# The local op aggregate moved to /_perf; /_trace is demoted to a pointer.
+perf=$(curl -sS --max-time 10 "http://127.0.0.1:${WEB}/_perf")
+expect_contains 'gateway /_perf shows the local latency aggregate' "$perf" 'p50_us'
+moved=$(curl -sS --max-time 10 "http://127.0.0.1:${WEB}/_trace")
+expect_contains 'gateway /_trace is demoted, points at /_perf' "$moved" '/_perf'
+
+echo
 # Storage migrated from the single-env sqlite `storage` plugin to the
 # write-parallel `sharded_storage` (mdbx) backend — see picoforge.yaml. The
 # persistence proof checks the live backend: the register/login flow
@@ -376,6 +437,10 @@ echo "    Browser:"
 echo "      open http://127.0.0.1:${WEB}/login   (server-side HTML)"
 echo "    Control plane:"
 echo "      curl http://127.0.0.1:${CTRL}/        (mesh REST)"
+echo "    Tracing:"
+echo "      curl http://127.0.0.1:${WEB}/_perf    (local op-latency aggregate)"
+echo "      curl -XPOST http://127.0.0.1:${WEB}/_rpc -d '{\"path\":\"trace_collector.store.services\",\"args\":[]}'"
+echo "                                            (trace collector via gateway — see docs/tracing.md)"
 echo "    Press Ctrl-C to tear everything down."
 
 # Honour the message above: stay alive until the user kills us, or until

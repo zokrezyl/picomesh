@@ -3,6 +3,7 @@
 #include <picomesh/ycore/result.h>
 #include <picomesh/ycore/ytrace.h>
 #include <picomesh/ycore/yspan.h>
+#include <picomesh/ycore/ytelemetry.h>
 #include <picomesh/yclass/rpc.h>
 #include <picomesh/yclass/yheaders.h>
 #include <stdint.h>
@@ -29,13 +30,18 @@ struct picomesh_uint32_result git_pipeline_store_enqueue(struct ctx * ctx, struc
             return PICOMESH_ERR(picomesh_uint32, "git_pipeline_store_enqueue: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* Client span for this downstream call. Minted BEFORE the header
+         * bag is serialized so the wire carries this span as the remote
+         * peer's parent. */
+        struct ytelemetry_span _tsp;
+        ytelemetry_client_span_begin(&_tsp, hdrs, "rpc.git_pipeline_store_enqueue");
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace context, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
-         * into the `hdrs` argument. The codegen never inspects the
-         * contents — it just lets the framework (de)serialize the bag. */
+         * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
+         * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
             if (_hn == 0)
                 return PICOMESH_ERR(picomesh_uint32, "git_pipeline_store_enqueue: header serialize overflow");
             _off = _hn;
@@ -49,15 +55,10 @@ struct picomesh_uint32_result git_pipeline_store_enqueue(struct ctx * ctx, struc
         if (_off + sizeof(repo_id) > sizeof(_a))
             return PICOMESH_ERR(picomesh_uint32, "git_pipeline_store_enqueue: pack overflow");
         memcpy(_a + _off, &repo_id, sizeof(repo_id)); _off += sizeof(repo_id);
-        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
-        if (!span_trace) span_trace = "-";
-        double span_start = picomesh_ytime_monotonic_sec();
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        ydebug("span trace=%s op=rpc.git_pipeline_store_enqueue dur_us=%.0f", span_trace, span_us);
-        yspan_record("rpc.git_pipeline_store_enqueue", span_us);
+        ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
         if (_wn < 1) return PICOMESH_ERR(picomesh_uint32, "git_pipeline_store_enqueue: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -99,13 +100,18 @@ struct picomesh_uint32_result git_pipeline_store_lease(struct ctx * ctx, struct 
             return PICOMESH_ERR(picomesh_uint32, "git_pipeline_store_lease: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* Client span for this downstream call. Minted BEFORE the header
+         * bag is serialized so the wire carries this span as the remote
+         * peer's parent. */
+        struct ytelemetry_span _tsp;
+        ytelemetry_client_span_begin(&_tsp, hdrs, "rpc.git_pipeline_store_lease");
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace context, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
-         * into the `hdrs` argument. The codegen never inspects the
-         * contents — it just lets the framework (de)serialize the bag. */
+         * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
+         * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
             if (_hn == 0)
                 return PICOMESH_ERR(picomesh_uint32, "git_pipeline_store_lease: header serialize overflow");
             _off = _hn;
@@ -119,15 +125,10 @@ struct picomesh_uint32_result git_pipeline_store_lease(struct ctx * ctx, struct 
         if (_off + sizeof(runner_id) > sizeof(_a))
             return PICOMESH_ERR(picomesh_uint32, "git_pipeline_store_lease: pack overflow");
         memcpy(_a + _off, &runner_id, sizeof(runner_id)); _off += sizeof(runner_id);
-        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
-        if (!span_trace) span_trace = "-";
-        double span_start = picomesh_ytime_monotonic_sec();
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        ydebug("span trace=%s op=rpc.git_pipeline_store_lease dur_us=%.0f", span_trace, span_us);
-        yspan_record("rpc.git_pipeline_store_lease", span_us);
+        ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
         if (_wn < 1) return PICOMESH_ERR(picomesh_uint32, "git_pipeline_store_lease: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -169,13 +170,18 @@ struct picomesh_int_result git_pipeline_store_complete(struct ctx * ctx, struct 
             return PICOMESH_ERR(picomesh_int, "git_pipeline_store_complete: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* Client span for this downstream call. Minted BEFORE the header
+         * bag is serialized so the wire carries this span as the remote
+         * peer's parent. */
+        struct ytelemetry_span _tsp;
+        ytelemetry_client_span_begin(&_tsp, hdrs, "rpc.git_pipeline_store_complete");
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace context, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
-         * into the `hdrs` argument. The codegen never inspects the
-         * contents — it just lets the framework (de)serialize the bag. */
+         * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
+         * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
             if (_hn == 0)
                 return PICOMESH_ERR(picomesh_int, "git_pipeline_store_complete: header serialize overflow");
             _off = _hn;
@@ -192,15 +198,10 @@ struct picomesh_int_result git_pipeline_store_complete(struct ctx * ctx, struct 
         if (_off + sizeof(status) > sizeof(_a))
             return PICOMESH_ERR(picomesh_int, "git_pipeline_store_complete: pack overflow");
         memcpy(_a + _off, &status, sizeof(status)); _off += sizeof(status);
-        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
-        if (!span_trace) span_trace = "-";
-        double span_start = picomesh_ytime_monotonic_sec();
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        ydebug("span trace=%s op=rpc.git_pipeline_store_complete dur_us=%.0f", span_trace, span_us);
-        yspan_record("rpc.git_pipeline_store_complete", span_us);
+        ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
         if (_wn < 1) return PICOMESH_ERR(picomesh_int, "git_pipeline_store_complete: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -242,13 +243,18 @@ struct picomesh_size_result git_pipeline_store_count_pending(struct ctx * ctx, s
             return PICOMESH_ERR(picomesh_size, "git_pipeline_store_count_pending: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* Client span for this downstream call. Minted BEFORE the header
+         * bag is serialized so the wire carries this span as the remote
+         * peer's parent. */
+        struct ytelemetry_span _tsp;
+        ytelemetry_client_span_begin(&_tsp, hdrs, "rpc.git_pipeline_store_count_pending");
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace context, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
-         * into the `hdrs` argument. The codegen never inspects the
-         * contents — it just lets the framework (de)serialize the bag. */
+         * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
+         * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
             if (_hn == 0)
                 return PICOMESH_ERR(picomesh_size, "git_pipeline_store_count_pending: header serialize overflow");
             _off = _hn;
@@ -259,15 +265,10 @@ struct picomesh_size_result git_pipeline_store_count_pending(struct ctx * ctx, s
                 return PICOMESH_ERR(picomesh_size, "git_pipeline_store_count_pending: pack overflow");
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
-        if (!span_trace) span_trace = "-";
-        double span_start = picomesh_ytime_monotonic_sec();
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        ydebug("span trace=%s op=rpc.git_pipeline_store_count_pending dur_us=%.0f", span_trace, span_us);
-        yspan_record("rpc.git_pipeline_store_count_pending", span_us);
+        ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
         if (_wn < 1) return PICOMESH_ERR(picomesh_size, "git_pipeline_store_count_pending: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -309,13 +310,18 @@ struct picomesh_size_result git_pipeline_store_count_running(struct ctx * ctx, s
             return PICOMESH_ERR(picomesh_size, "git_pipeline_store_count_running: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* Client span for this downstream call. Minted BEFORE the header
+         * bag is serialized so the wire carries this span as the remote
+         * peer's parent. */
+        struct ytelemetry_span _tsp;
+        ytelemetry_client_span_begin(&_tsp, hdrs, "rpc.git_pipeline_store_count_running");
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace context, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
-         * into the `hdrs` argument. The codegen never inspects the
-         * contents — it just lets the framework (de)serialize the bag. */
+         * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
+         * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
             if (_hn == 0)
                 return PICOMESH_ERR(picomesh_size, "git_pipeline_store_count_running: header serialize overflow");
             _off = _hn;
@@ -326,15 +332,10 @@ struct picomesh_size_result git_pipeline_store_count_running(struct ctx * ctx, s
                 return PICOMESH_ERR(picomesh_size, "git_pipeline_store_count_running: pack overflow");
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
-        if (!span_trace) span_trace = "-";
-        double span_start = picomesh_ytime_monotonic_sec();
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        ydebug("span trace=%s op=rpc.git_pipeline_store_count_running dur_us=%.0f", span_trace, span_us);
-        yspan_record("rpc.git_pipeline_store_count_running", span_us);
+        ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
         if (_wn < 1) return PICOMESH_ERR(picomesh_size, "git_pipeline_store_count_running: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -376,13 +377,18 @@ struct picomesh_size_result git_pipeline_store_count_done(struct ctx * ctx, stru
             return PICOMESH_ERR(picomesh_size, "git_pipeline_store_count_done: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* Client span for this downstream call. Minted BEFORE the header
+         * bag is serialized so the wire carries this span as the remote
+         * peer's parent. */
+        struct ytelemetry_span _tsp;
+        ytelemetry_client_span_begin(&_tsp, hdrs, "rpc.git_pipeline_store_count_done");
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace context, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
-         * into the `hdrs` argument. The codegen never inspects the
-         * contents — it just lets the framework (de)serialize the bag. */
+         * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
+         * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
             if (_hn == 0)
                 return PICOMESH_ERR(picomesh_size, "git_pipeline_store_count_done: header serialize overflow");
             _off = _hn;
@@ -393,15 +399,10 @@ struct picomesh_size_result git_pipeline_store_count_done(struct ctx * ctx, stru
                 return PICOMESH_ERR(picomesh_size, "git_pipeline_store_count_done: pack overflow");
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
-        if (!span_trace) span_trace = "-";
-        double span_start = picomesh_ytime_monotonic_sec();
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        ydebug("span trace=%s op=rpc.git_pipeline_store_count_done dur_us=%.0f", span_trace, span_us);
-        yspan_record("rpc.git_pipeline_store_count_done", span_us);
+        ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
         if (_wn < 1) return PICOMESH_ERR(picomesh_size, "git_pipeline_store_count_done: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;

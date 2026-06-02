@@ -51,6 +51,8 @@ add_library(picomesh_runtime STATIC
     src/picomesh/ycore/result.c
     src/picomesh/ycore/ytrace.c
     src/picomesh/ycore/yspan.c
+    src/picomesh/ycore/ytelemetry.c
+    src/picomesh/ycore/ytelemetry_store.c
     src/picomesh/yclass/class.c
     src/picomesh/yclass/rpc.c
     src/picomesh/yclass/jinvoke.c
@@ -190,6 +192,7 @@ set(PICOMESH_PLUGINS
     git_repo
     git_pipeline
     personal_access_tokens
+    trace_collector
     mesh
 )
 foreach(_p ${PICOMESH_PLUGINS})

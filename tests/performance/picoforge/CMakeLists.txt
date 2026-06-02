@@ -1,11 +1,12 @@
 # picoforge performance harness.
 #
-# Self-contained load generator: plain C + pthreads + POSIX sockets, no
-# picomesh libraries linked in (it speaks the gateway's HTTP contract, so
-# it also runs against the yaapp gateway). Built as `picoforge-perf`.
-find_package(Threads REQUIRED)
-
-add_executable(picoforge-perf picoforge-perf.c)
-target_link_libraries(picoforge-perf PRIVATE Threads::Threads)
+# Hybrid load generator: M OS threads, each running a libuv loop + libco
+# coroutine scheduler with K coroutines, so C connections cost M threads (not
+# C). It therefore links picomesh_runtime (yloop + coroutines). It still only
+# speaks the gateway's HTTP contract, so it also runs against the yaapp gateway.
+add_executable(picoforge-perf
+    picoforge-perf.c
+    ${CMAKE_SOURCE_DIR}/src/picomesh/yplatform/longjmp_chk_stub.c)
+target_link_libraries(picoforge-perf PRIVATE picomesh_runtime)
 set_target_properties(picoforge-perf PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")

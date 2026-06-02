@@ -3,6 +3,7 @@
 #include <picomesh/ycore/result.h>
 #include <picomesh/ycore/ytrace.h>
 #include <picomesh/ycore/yspan.h>
+#include <picomesh/ycore/ytelemetry.h>
 #include <picomesh/yclass/rpc.h>
 #include <picomesh/yclass/yheaders.h>
 #include <stdint.h>
@@ -29,13 +30,18 @@ struct picomesh_int_result password_authn_store_register(struct ctx * ctx, struc
             return PICOMESH_ERR(picomesh_int, "password_authn_store_register: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* Client span for this downstream call. Minted BEFORE the header
+         * bag is serialized so the wire carries this span as the remote
+         * peer's parent. */
+        struct ytelemetry_span _tsp;
+        ytelemetry_client_span_begin(&_tsp, hdrs, "rpc.password_authn_store_register");
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace context, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
-         * into the `hdrs` argument. The codegen never inspects the
-         * contents — it just lets the framework (de)serialize the bag. */
+         * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
+         * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
             if (_hn == 0)
                 return PICOMESH_ERR(picomesh_int, "password_authn_store_register: header serialize overflow");
             _off = _hn;
@@ -52,15 +58,10 @@ struct picomesh_int_result password_authn_store_register(struct ctx * ctx, struc
         if (_off + sizeof(hash) > sizeof(_a))
             return PICOMESH_ERR(picomesh_int, "password_authn_store_register: pack overflow");
         memcpy(_a + _off, &hash, sizeof(hash)); _off += sizeof(hash);
-        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
-        if (!span_trace) span_trace = "-";
-        double span_start = picomesh_ytime_monotonic_sec();
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        ydebug("span trace=%s op=rpc.password_authn_store_register dur_us=%.0f", span_trace, span_us);
-        yspan_record("rpc.password_authn_store_register", span_us);
+        ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
         if (_wn < 1) return PICOMESH_ERR(picomesh_int, "password_authn_store_register: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -102,13 +103,18 @@ struct picomesh_int_result password_authn_store_authenticate(struct ctx * ctx, s
             return PICOMESH_ERR(picomesh_int, "password_authn_store_authenticate: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* Client span for this downstream call. Minted BEFORE the header
+         * bag is serialized so the wire carries this span as the remote
+         * peer's parent. */
+        struct ytelemetry_span _tsp;
+        ytelemetry_client_span_begin(&_tsp, hdrs, "rpc.password_authn_store_authenticate");
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace context, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
-         * into the `hdrs` argument. The codegen never inspects the
-         * contents — it just lets the framework (de)serialize the bag. */
+         * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
+         * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
             if (_hn == 0)
                 return PICOMESH_ERR(picomesh_int, "password_authn_store_authenticate: header serialize overflow");
             _off = _hn;
@@ -125,15 +131,10 @@ struct picomesh_int_result password_authn_store_authenticate(struct ctx * ctx, s
         if (_off + sizeof(hash) > sizeof(_a))
             return PICOMESH_ERR(picomesh_int, "password_authn_store_authenticate: pack overflow");
         memcpy(_a + _off, &hash, sizeof(hash)); _off += sizeof(hash);
-        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
-        if (!span_trace) span_trace = "-";
-        double span_start = picomesh_ytime_monotonic_sec();
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        ydebug("span trace=%s op=rpc.password_authn_store_authenticate dur_us=%.0f", span_trace, span_us);
-        yspan_record("rpc.password_authn_store_authenticate", span_us);
+        ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
         if (_wn < 1) return PICOMESH_ERR(picomesh_int, "password_authn_store_authenticate: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -175,13 +176,18 @@ struct picomesh_int_result password_authn_store_change_password(struct ctx * ctx
             return PICOMESH_ERR(picomesh_int, "password_authn_store_change_password: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* Client span for this downstream call. Minted BEFORE the header
+         * bag is serialized so the wire carries this span as the remote
+         * peer's parent. */
+        struct ytelemetry_span _tsp;
+        ytelemetry_client_span_begin(&_tsp, hdrs, "rpc.password_authn_store_change_password");
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace context, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
-         * into the `hdrs` argument. The codegen never inspects the
-         * contents — it just lets the framework (de)serialize the bag. */
+         * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
+         * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
             if (_hn == 0)
                 return PICOMESH_ERR(picomesh_int, "password_authn_store_change_password: header serialize overflow");
             _off = _hn;
@@ -198,15 +204,10 @@ struct picomesh_int_result password_authn_store_change_password(struct ctx * ctx
         if (_off + sizeof(hash) > sizeof(_a))
             return PICOMESH_ERR(picomesh_int, "password_authn_store_change_password: pack overflow");
         memcpy(_a + _off, &hash, sizeof(hash)); _off += sizeof(hash);
-        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
-        if (!span_trace) span_trace = "-";
-        double span_start = picomesh_ytime_monotonic_sec();
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        ydebug("span trace=%s op=rpc.password_authn_store_change_password dur_us=%.0f", span_trace, span_us);
-        yspan_record("rpc.password_authn_store_change_password", span_us);
+        ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
         if (_wn < 1) return PICOMESH_ERR(picomesh_int, "password_authn_store_change_password: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
@@ -248,13 +249,18 @@ struct picomesh_size_result password_authn_store_count_registered(struct ctx * c
             return PICOMESH_ERR(picomesh_size, "password_authn_store_count_registered: remote id unresolved");
         uint8_t _a[16384];
         size_t _off = 0;
+        /* Client span for this downstream call. Minted BEFORE the header
+         * bag is serialized so the wire carries this span as the remote
+         * peer's parent. */
+        struct ytelemetry_span _tsp;
+        ytelemetry_client_span_begin(&_tsp, hdrs, "rpc.password_authn_store_count_registered");
         /* Headers section: the FRAMEWORK serializes the request-header
-         * bag (uid, trace_id, or anything a caller injected) ahead
+         * bag (uid, trace context, or anything a caller injected) ahead
          * of the packed business args. The skel parses it straight back
-         * into the `hdrs` argument. The codegen never inspects the
-         * contents — it just lets the framework (de)serialize the bag. */
+         * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
+         * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = yheaders_serialize(hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
             if (_hn == 0)
                 return PICOMESH_ERR(picomesh_size, "password_authn_store_count_registered: header serialize overflow");
             _off = _hn;
@@ -265,15 +271,10 @@ struct picomesh_size_result password_authn_store_count_registered(struct ctx * c
                 return PICOMESH_ERR(picomesh_size, "password_authn_store_count_registered: pack overflow");
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        const char *span_trace = hdrs ? yheaders_get(hdrs, "trace_id") : "-";
-        if (!span_trace) span_trace = "-";
-        double span_start = picomesh_ytime_monotonic_sec();
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        ydebug("span trace=%s op=rpc.password_authn_store_count_registered dur_us=%.0f", span_trace, span_us);
-        yspan_record("rpc.password_authn_store_count_registered", span_us);
+        ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
         if (_wn < 1) return PICOMESH_ERR(picomesh_size, "password_authn_store_count_registered: short RPC response");
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;

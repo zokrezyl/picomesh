@@ -149,8 +149,23 @@ typedef size_t (*rpc_async_call_fn)(void *ctx, enum rpc_op op, uint32_t id,
 void peer_channel_set_async(struct peer_channel *s, void *ctx,
                            rpc_async_call_fn call, void (*destroy)(void *ctx));
 
+/* Fire-and-forget transport: write the request frame and return WITHOUT
+ * waiting for (or reading) a response. Used by the telemetry sender so a
+ * span ship-out never adds a round-trip to the request path. The frame is
+ * written with the reserved req_id 0; the async reader drains the peer's
+ * (unwanted) reply silently. Installed by the yloop layer alongside the
+ * async call transport. */
+typedef void (*rpc_async_oneway_fn)(void *ctx, enum rpc_op op, uint32_t id,
+                                    const void *body, size_t body_len);
+void peer_channel_set_async_oneway(struct peer_channel *s, rpc_async_oneway_fn oneway);
+
 size_t rpc_call(struct peer_channel *s, enum rpc_op op, uint32_t id, const void *body,
                 size_t body_len, void *resp, size_t resp_max);
+
+/* Fire-and-forget send (see rpc_async_oneway_fn). No-op if the channel has
+ * no oneway transport installed. */
+void rpc_call_oneway(struct peer_channel *s, enum rpc_op op, uint32_t id,
+                     const void *body, size_t body_len);
 
 #define RPC_REMOTE_ID_UNRESOLVED UINT32_MAX
 

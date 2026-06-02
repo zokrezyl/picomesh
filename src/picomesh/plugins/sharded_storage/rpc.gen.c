@@ -6,6 +6,7 @@
 #include <picomesh/ycore/result.h>
 #include <picomesh/ycore/ytrace.h>
 #include <picomesh/ycore/yspan.h>
+#include <picomesh/ycore/ytelemetry.h>
 #include <picomesh/yclass/class.h>
 #include "sharded_storage.internal.h"
 #include <stdint.h>
@@ -64,14 +65,10 @@ static size_t sharded_storage_db_set_skel(const void *_body, size_t _body_len,
         if (_slen) memcpy(_s3, (const uint8_t *)_body + _off, _slen);
         _s3[_slen] = 0; _off += _slen;
     }
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.sharded_storage_db_set");
     struct picomesh_int_result _r = sharded_storage_db_set(&_local, _obj, _hdrs, _s1, _s2, _s3);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.sharded_storage_db_set dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.sharded_storage_db_set", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -141,14 +138,10 @@ static size_t sharded_storage_db_get_skel(const void *_body, size_t _body_len,
         if (_slen) memcpy(_s2, (const uint8_t *)_body + _off, _slen);
         _s2[_slen] = 0; _off += _slen;
     }
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.sharded_storage_db_get");
     struct picomesh_string_result _r = sharded_storage_db_get(&_local, _obj, _hdrs, _s1, _s2);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.sharded_storage_db_get dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.sharded_storage_db_get", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -224,14 +217,10 @@ static size_t sharded_storage_db_exists_skel(const void *_body, size_t _body_len
         if (_slen) memcpy(_s2, (const uint8_t *)_body + _off, _slen);
         _s2[_slen] = 0; _off += _slen;
     }
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.sharded_storage_db_exists");
     struct picomesh_int_result _r = sharded_storage_db_exists(&_local, _obj, _hdrs, _s1, _s2);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.sharded_storage_db_exists dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.sharded_storage_db_exists", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -301,14 +290,10 @@ static size_t sharded_storage_db_del_skel(const void *_body, size_t _body_len,
         if (_slen) memcpy(_s2, (const uint8_t *)_body + _off, _slen);
         _s2[_slen] = 0; _off += _slen;
     }
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.sharded_storage_db_del");
     struct picomesh_int_result _r = sharded_storage_db_del(&_local, _obj, _hdrs, _s1, _s2);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.sharded_storage_db_del dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.sharded_storage_db_del", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -368,14 +353,10 @@ static size_t sharded_storage_db_count_skel(const void *_body, size_t _body_len,
         if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
         _s1[_slen] = 0; _off += _slen;
     }
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.sharded_storage_db_count");
     struct picomesh_size_result _r = sharded_storage_db_count(&_local, _obj, _hdrs, _s1);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.sharded_storage_db_count dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.sharded_storage_db_count", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -449,14 +430,10 @@ static size_t sharded_storage_db_incr_skel(const void *_body, size_t _body_len,
     if (_off + sizeof(_v3) > _body_len) goto _short_body;
     memcpy(&_v3, (const uint8_t *)_body + _off, sizeof(_v3));
     _off += sizeof(_v3);
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.sharded_storage_db_incr");
     struct picomesh_int64_result _r = sharded_storage_db_incr(&_local, _obj, _hdrs, _s1, _s2, _v3);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.sharded_storage_db_incr dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.sharded_storage_db_incr", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -536,14 +513,10 @@ static size_t sharded_storage_db_put_if_absent_skel(const void *_body, size_t _b
         if (_slen) memcpy(_s3, (const uint8_t *)_body + _off, _slen);
         _s3[_slen] = 0; _off += _slen;
     }
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.sharded_storage_db_put_if_absent");
     struct picomesh_int_result _r = sharded_storage_db_put_if_absent(&_local, _obj, _hdrs, _s1, _s2, _s3);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.sharded_storage_db_put_if_absent dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.sharded_storage_db_put_if_absent", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
@@ -633,14 +606,10 @@ static size_t sharded_storage_db_compare_and_set_skel(const void *_body, size_t 
         if (_slen) memcpy(_s4, (const uint8_t *)_body + _off, _slen);
         _s4[_slen] = 0; _off += _slen;
     }
-    double span_start = picomesh_ytime_monotonic_sec();
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.sharded_storage_db_compare_and_set");
     struct picomesh_int_result _r = sharded_storage_db_compare_and_set(&_local, _obj, _hdrs, _s1, _s2, _s3, _s4);
-    {
-        double span_us = (picomesh_ytime_monotonic_sec() - span_start) * 1e6;
-        const char *span_trace = _hdrs ? yheaders_get(_hdrs, "trace_id") : "-";
-        ydebug("span trace=%s op=skel.sharded_storage_db_compare_and_set dur_us=%.0f", span_trace ? span_trace : "-", span_us);
-        yspan_record("skel.sharded_storage_db_compare_and_set", span_us);
-    }
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {

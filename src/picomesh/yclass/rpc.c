@@ -436,6 +436,7 @@ struct peer_channel {
      * set, rpc_call delegates here instead of doing blocking fd I/O. */
     void *async_ctx;
     rpc_async_call_fn async_call;
+    rpc_async_oneway_fn async_oneway; /* fire-and-forget (telemetry) */
     void (*async_destroy)(void *ctx);
 };
 
@@ -470,6 +471,12 @@ void peer_channel_set_async(struct peer_channel *s, void *ctx,
     s->async_ctx = ctx;
     s->async_call = call;
     s->async_destroy = destroy;
+}
+
+void peer_channel_set_async_oneway(struct peer_channel *s, rpc_async_oneway_fn oneway)
+{
+    if (!s) return;
+    s->async_oneway = oneway;
 }
 
 /* Drop every cached remote proxy. Called on reconnect (the handles
@@ -649,6 +656,28 @@ static size_t rpc_call_http(struct peer_channel *s, enum rpc_op op, uint32_t id,
     }
     if (content_length && read_full(s->fd, resp, content_length) < 0) return 0;
     return content_length;
+}
+
+void rpc_call_oneway(struct peer_channel *s, enum rpc_op op, uint32_t id,
+                     const void *body, size_t body_len)
+{
+    if (!s) return;
+    /* Async (yloop) transport: hand off the frame, never wait for a reply. */
+    if (s->async_oneway) {
+        s->async_oneway(s->async_ctx, op, id, body, body_len);
+        return;
+    }
+    /* Raw-fd fallback: write the frame with the reserved req_id 0 and do
+     * NOT read the response (the peer still frames one; it stays buffered
+     * until the next read or the socket closes). HTTP mode has no oneway. */
+    if (s->mode != RPC_MODE_TCP || s->fd < 0) return;
+    uint32_t header = RPC_HDR_MAKE(op, id);
+    uint32_t req_id = 0;
+    uint32_t bl = (uint32_t)body_len;
+    if (write_full(s->fd, &header, 4) < 0) return;
+    if (write_full(s->fd, &req_id, 4) < 0) return;
+    if (write_full(s->fd, &bl, 4) < 0) return;
+    if (body_len) write_full(s->fd, body, body_len);
 }
 
 size_t rpc_call(struct peer_channel *s, enum rpc_op op, uint32_t id, const void *body,
