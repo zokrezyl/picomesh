@@ -42,18 +42,20 @@ struct picomesh_uint32_result personal_access_tokens_store_mint(struct ctx * ctx
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "personal_access_tokens_store_mint: header serialize overflow");
                 return PICOMESH_ERR(picomesh_uint32, "personal_access_tokens_store_mint: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_uint32, "personal_access_tokens_store_mint: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "personal_access_tokens_store_mint: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "personal_access_tokens_store_mint: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(user_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_uint32, "personal_access_tokens_store_mint: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "personal_access_tokens_store_mint: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "personal_access_tokens_store_mint: pack overflow"); }
         memcpy(_a + _off, &user_id, sizeof(user_id)); _off += sizeof(user_id);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -112,18 +114,20 @@ struct picomesh_uint32_result personal_access_tokens_store_lookup(struct ctx * c
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "personal_access_tokens_store_lookup: header serialize overflow");
                 return PICOMESH_ERR(picomesh_uint32, "personal_access_tokens_store_lookup: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_uint32, "personal_access_tokens_store_lookup: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "personal_access_tokens_store_lookup: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "personal_access_tokens_store_lookup: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(pat_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_uint32, "personal_access_tokens_store_lookup: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "personal_access_tokens_store_lookup: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "personal_access_tokens_store_lookup: pack overflow"); }
         memcpy(_a + _off, &pat_id, sizeof(pat_id)); _off += sizeof(pat_id);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -182,18 +186,20 @@ struct picomesh_int_result personal_access_tokens_store_revoke(struct ctx * ctx,
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "personal_access_tokens_store_revoke: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int, "personal_access_tokens_store_revoke: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "personal_access_tokens_store_revoke: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "personal_access_tokens_store_revoke: pack overflow"); return PICOMESH_ERR(picomesh_int, "personal_access_tokens_store_revoke: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(pat_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int, "personal_access_tokens_store_revoke: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "personal_access_tokens_store_revoke: pack overflow"); return PICOMESH_ERR(picomesh_int, "personal_access_tokens_store_revoke: pack overflow"); }
         memcpy(_a + _off, &pat_id, sizeof(pat_id)); _off += sizeof(pat_id);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -252,18 +258,20 @@ struct picomesh_size_result personal_access_tokens_store_list_for_user(struct ct
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "personal_access_tokens_store_list_for_user: header serialize overflow");
                 return PICOMESH_ERR(picomesh_size, "personal_access_tokens_store_list_for_user: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_size, "personal_access_tokens_store_list_for_user: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "personal_access_tokens_store_list_for_user: pack overflow"); return PICOMESH_ERR(picomesh_size, "personal_access_tokens_store_list_for_user: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(user_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_size, "personal_access_tokens_store_list_for_user: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "personal_access_tokens_store_list_for_user: pack overflow"); return PICOMESH_ERR(picomesh_size, "personal_access_tokens_store_list_for_user: pack overflow"); }
         memcpy(_a + _off, &user_id, sizeof(user_id)); _off += sizeof(user_id);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -322,14 +330,16 @@ struct picomesh_size_result personal_access_tokens_store_count_active(struct ctx
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "personal_access_tokens_store_count_active: header serialize overflow");
                 return PICOMESH_ERR(picomesh_size, "personal_access_tokens_store_count_active: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_size, "personal_access_tokens_store_count_active: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "personal_access_tokens_store_count_active: pack overflow"); return PICOMESH_ERR(picomesh_size, "personal_access_tokens_store_count_active: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         uint8_t _wbuf[261];

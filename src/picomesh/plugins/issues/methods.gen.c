@@ -42,21 +42,23 @@ struct picomesh_uint32_result issues_store_open(struct ctx * ctx, struct object 
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "issues_store_open: header serialize overflow");
                 return PICOMESH_ERR(picomesh_uint32, "issues_store_open: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_uint32, "issues_store_open: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "issues_store_open: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "issues_store_open: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(repo_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_uint32, "issues_store_open: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "issues_store_open: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "issues_store_open: pack overflow"); }
         memcpy(_a + _off, &repo_id, sizeof(repo_id)); _off += sizeof(repo_id);
         if (_off + sizeof(author_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_uint32, "issues_store_open: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "issues_store_open: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "issues_store_open: pack overflow"); }
         memcpy(_a + _off, &author_id, sizeof(author_id)); _off += sizeof(author_id);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -115,18 +117,20 @@ struct picomesh_int_result issues_store_close(struct ctx * ctx, struct object * 
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "issues_store_close: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int, "issues_store_close: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "issues_store_close: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "issues_store_close: pack overflow"); return PICOMESH_ERR(picomesh_int, "issues_store_close: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(issue_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int, "issues_store_close: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "issues_store_close: pack overflow"); return PICOMESH_ERR(picomesh_int, "issues_store_close: pack overflow"); }
         memcpy(_a + _off, &issue_id, sizeof(issue_id)); _off += sizeof(issue_id);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -185,18 +189,20 @@ struct picomesh_int_result issues_store_status(struct ctx * ctx, struct object *
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "issues_store_status: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int, "issues_store_status: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "issues_store_status: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "issues_store_status: pack overflow"); return PICOMESH_ERR(picomesh_int, "issues_store_status: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(issue_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int, "issues_store_status: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "issues_store_status: pack overflow"); return PICOMESH_ERR(picomesh_int, "issues_store_status: pack overflow"); }
         memcpy(_a + _off, &issue_id, sizeof(issue_id)); _off += sizeof(issue_id);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -255,18 +261,20 @@ struct picomesh_size_result issues_store_count_open_in_repo(struct ctx * ctx, st
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "issues_store_count_open_in_repo: header serialize overflow");
                 return PICOMESH_ERR(picomesh_size, "issues_store_count_open_in_repo: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_size, "issues_store_count_open_in_repo: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "issues_store_count_open_in_repo: pack overflow"); return PICOMESH_ERR(picomesh_size, "issues_store_count_open_in_repo: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(repo_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_size, "issues_store_count_open_in_repo: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "issues_store_count_open_in_repo: pack overflow"); return PICOMESH_ERR(picomesh_size, "issues_store_count_open_in_repo: pack overflow"); }
         memcpy(_a + _off, &repo_id, sizeof(repo_id)); _off += sizeof(repo_id);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -325,14 +333,16 @@ struct picomesh_size_result issues_store_count_total(struct ctx * ctx, struct ob
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "issues_store_count_total: header serialize overflow");
                 return PICOMESH_ERR(picomesh_size, "issues_store_count_total: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_size, "issues_store_count_total: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "issues_store_count_total: pack overflow"); return PICOMESH_ERR(picomesh_size, "issues_store_count_total: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         uint8_t _wbuf[261];

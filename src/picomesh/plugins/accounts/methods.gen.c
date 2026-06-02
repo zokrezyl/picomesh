@@ -42,18 +42,20 @@ struct picomesh_int_result accounts_store_register(struct ctx * ctx, struct obje
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "accounts_store_register: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int, "accounts_store_register: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "accounts_store_register: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "accounts_store_register: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_store_register: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(uid) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int, "accounts_store_register: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "accounts_store_register: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_store_register: pack overflow"); }
         memcpy(_a + _off, &uid, sizeof(uid)); _off += sizeof(uid);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -112,18 +114,20 @@ struct picomesh_int_result accounts_store_exists(struct ctx * ctx, struct object
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "accounts_store_exists: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int, "accounts_store_exists: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "accounts_store_exists: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "accounts_store_exists: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_store_exists: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(uid) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int, "accounts_store_exists: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "accounts_store_exists: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_store_exists: pack overflow"); }
         memcpy(_a + _off, &uid, sizeof(uid)); _off += sizeof(uid);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -182,21 +186,23 @@ struct picomesh_int_result accounts_store_set_balance(struct ctx * ctx, struct o
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "accounts_store_set_balance: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int, "accounts_store_set_balance: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "accounts_store_set_balance: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "accounts_store_set_balance: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_store_set_balance: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(uid) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int, "accounts_store_set_balance: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "accounts_store_set_balance: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_store_set_balance: pack overflow"); }
         memcpy(_a + _off, &uid, sizeof(uid)); _off += sizeof(uid);
         if (_off + sizeof(n) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int, "accounts_store_set_balance: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "accounts_store_set_balance: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_store_set_balance: pack overflow"); }
         memcpy(_a + _off, &n, sizeof(n)); _off += sizeof(n);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -255,18 +261,20 @@ struct picomesh_int64_result accounts_store_balance(struct ctx * ctx, struct obj
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "accounts_store_balance: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int64, "accounts_store_balance: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int64, "accounts_store_balance: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "accounts_store_balance: pack overflow"); return PICOMESH_ERR(picomesh_int64, "accounts_store_balance: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(uid) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int64, "accounts_store_balance: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "accounts_store_balance: pack overflow"); return PICOMESH_ERR(picomesh_int64, "accounts_store_balance: pack overflow"); }
         memcpy(_a + _off, &uid, sizeof(uid)); _off += sizeof(uid);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -325,14 +333,16 @@ struct picomesh_size_result accounts_store_count(struct ctx * ctx, struct object
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "accounts_store_count: header serialize overflow");
                 return PICOMESH_ERR(picomesh_size, "accounts_store_count: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_size, "accounts_store_count: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "accounts_store_count: pack overflow"); return PICOMESH_ERR(picomesh_size, "accounts_store_count: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         uint8_t _wbuf[261];
@@ -392,17 +402,19 @@ struct picomesh_string_result accounts_store_list(struct ctx * ctx, struct objec
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "accounts_store_list: header serialize overflow");
                 return PICOMESH_ERR(picomesh_string, "accounts_store_list: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_string, "accounts_store_list: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "accounts_store_list: pack overflow"); return PICOMESH_ERR(picomesh_string, "accounts_store_list: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        uint8_t _wbuf[4101];
+        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);

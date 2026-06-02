@@ -424,6 +424,50 @@ void yloop_sleep_ms(struct yloop *l, unsigned int ms)
     picomesh_coro_yield();
 }
 
+/* ---- repeating timer (not coroutine-bound) -------------------------- */
+
+struct yloop_timer {
+    uv_timer_t timer;
+    yloop_timer_cb cb;
+    void *ud;
+};
+
+static void on_repeating_timer(uv_timer_t *handle)
+{
+    struct yloop_timer *t = handle->data;
+    if (t->cb) t->cb(t->ud);
+}
+
+struct yloop_timer_ptr_result yloop_timer_start(struct yloop *l, unsigned int interval_ms,
+                                                yloop_timer_cb cb, void *ud)
+{
+    if (!l) return PICOMESH_ERR(yloop_timer_ptr, "yloop_timer_start: NULL loop");
+    if (!cb) return PICOMESH_ERR(yloop_timer_ptr, "yloop_timer_start: NULL callback");
+    struct yloop_timer *t = calloc(1, sizeof(*t));
+    if (!t) return PICOMESH_ERR(yloop_timer_ptr, "yloop_timer_start: calloc failed");
+    t->cb = cb;
+    t->ud = ud;
+    uv_timer_init(&l->loop, &t->timer);
+    t->timer.data = t;
+    uv_timer_start(&t->timer, on_repeating_timer, interval_ms, interval_ms);
+    return PICOMESH_OK(yloop_timer_ptr, t);
+}
+
+/* uv_close completion: the handle (embedded in `t`) is now off the loop,
+ * so the owning struct can be released. */
+static void on_timer_closed(uv_handle_t *handle)
+{
+    free(handle->data);
+}
+
+void yloop_timer_stop(struct yloop_timer *t)
+{
+    if (!t) return;
+    t->cb = NULL; /* belt-and-braces: no callback even if a tick is mid-flight */
+    uv_timer_stop(&t->timer);
+    uv_close((uv_handle_t *)&t->timer, on_timer_closed);
+}
+
 /* ---- subprocess (uv_spawn) ----------------------------------- */
 
 struct yloop_process {

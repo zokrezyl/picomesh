@@ -42,27 +42,29 @@ struct picomesh_int_result storage_kv_set(struct ctx * ctx, struct object * obj,
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "storage_kv_set: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int, "storage_kv_set: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "storage_kv_set: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "storage_kv_set: pack overflow"); return PICOMESH_ERR(picomesh_int, "storage_kv_set: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(key ? strlen(key) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "storage_kv_set: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "storage_kv_set: pack overflow"); return PICOMESH_ERR(picomesh_int, "storage_kv_set: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, key, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(value ? strlen(value) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "storage_kv_set: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "storage_kv_set: pack overflow"); return PICOMESH_ERR(picomesh_int, "storage_kv_set: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, value, _slen); _off += _slen; }
         }
@@ -123,24 +125,26 @@ struct picomesh_string_result storage_kv_get(struct ctx * ctx, struct object * o
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "storage_kv_get: header serialize overflow");
                 return PICOMESH_ERR(picomesh_string, "storage_kv_get: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_string, "storage_kv_get: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "storage_kv_get: pack overflow"); return PICOMESH_ERR(picomesh_string, "storage_kv_get: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(key ? strlen(key) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_string, "storage_kv_get: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "storage_kv_get: pack overflow"); return PICOMESH_ERR(picomesh_string, "storage_kv_get: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, key, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[4101];
+        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
@@ -202,14 +206,16 @@ struct picomesh_size_result storage_kv_count(struct ctx * ctx, struct object * o
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "storage_kv_count: header serialize overflow");
                 return PICOMESH_ERR(picomesh_size, "storage_kv_count: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_size, "storage_kv_count: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "storage_kv_count: pack overflow"); return PICOMESH_ERR(picomesh_size, "storage_kv_count: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         uint8_t _wbuf[261];
@@ -269,34 +275,36 @@ struct picomesh_int_result storage_set(struct ctx * ctx, struct object * obj, st
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "storage_set: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int, "storage_set: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "storage_set: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "storage_set: pack overflow"); return PICOMESH_ERR(picomesh_int, "storage_set: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(context ? strlen(context) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "storage_set: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "storage_set: pack overflow"); return PICOMESH_ERR(picomesh_int, "storage_set: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, context, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(key ? strlen(key) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "storage_set: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "storage_set: pack overflow"); return PICOMESH_ERR(picomesh_int, "storage_set: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, key, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(value ? strlen(value) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "storage_set: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "storage_set: pack overflow"); return PICOMESH_ERR(picomesh_int, "storage_set: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, value, _slen); _off += _slen; }
         }
@@ -357,31 +365,33 @@ struct picomesh_string_result storage_get(struct ctx * ctx, struct object * obj,
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "storage_get: header serialize overflow");
                 return PICOMESH_ERR(picomesh_string, "storage_get: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_string, "storage_get: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "storage_get: pack overflow"); return PICOMESH_ERR(picomesh_string, "storage_get: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(context ? strlen(context) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_string, "storage_get: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "storage_get: pack overflow"); return PICOMESH_ERR(picomesh_string, "storage_get: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, context, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(key ? strlen(key) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_string, "storage_get: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "storage_get: pack overflow"); return PICOMESH_ERR(picomesh_string, "storage_get: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, key, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[4101];
+        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
@@ -443,27 +453,29 @@ struct picomesh_int_result storage_exists(struct ctx * ctx, struct object * obj,
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "storage_exists: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int, "storage_exists: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "storage_exists: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "storage_exists: pack overflow"); return PICOMESH_ERR(picomesh_int, "storage_exists: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(context ? strlen(context) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "storage_exists: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "storage_exists: pack overflow"); return PICOMESH_ERR(picomesh_int, "storage_exists: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, context, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(key ? strlen(key) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "storage_exists: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "storage_exists: pack overflow"); return PICOMESH_ERR(picomesh_int, "storage_exists: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, key, _slen); _off += _slen; }
         }
@@ -524,27 +536,29 @@ struct picomesh_int_result storage_del(struct ctx * ctx, struct object * obj, st
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "storage_del: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int, "storage_del: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "storage_del: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "storage_del: pack overflow"); return PICOMESH_ERR(picomesh_int, "storage_del: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(context ? strlen(context) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "storage_del: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "storage_del: pack overflow"); return PICOMESH_ERR(picomesh_int, "storage_del: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, context, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(key ? strlen(key) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "storage_del: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "storage_del: pack overflow"); return PICOMESH_ERR(picomesh_int, "storage_del: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, key, _slen); _off += _slen; }
         }
@@ -605,20 +619,22 @@ struct picomesh_size_result storage_count(struct ctx * ctx, struct object * obj,
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "storage_count: header serialize overflow");
                 return PICOMESH_ERR(picomesh_size, "storage_count: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_size, "storage_count: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "storage_count: pack overflow"); return PICOMESH_ERR(picomesh_size, "storage_count: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(context ? strlen(context) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_size, "storage_count: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "storage_count: pack overflow"); return PICOMESH_ERR(picomesh_size, "storage_count: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, context, _slen); _off += _slen; }
         }

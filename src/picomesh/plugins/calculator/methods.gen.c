@@ -42,21 +42,23 @@ struct picomesh_int64_result calculator_calc_add(struct ctx * ctx, struct object
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "calculator_calc_add: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int64, "calculator_calc_add: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int64, "calculator_calc_add: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "calculator_calc_add: pack overflow"); return PICOMESH_ERR(picomesh_int64, "calculator_calc_add: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(x) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int64, "calculator_calc_add: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "calculator_calc_add: pack overflow"); return PICOMESH_ERR(picomesh_int64, "calculator_calc_add: pack overflow"); }
         memcpy(_a + _off, &x, sizeof(x)); _off += sizeof(x);
         if (_off + sizeof(y) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int64, "calculator_calc_add: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "calculator_calc_add: pack overflow"); return PICOMESH_ERR(picomesh_int64, "calculator_calc_add: pack overflow"); }
         memcpy(_a + _off, &y, sizeof(y)); _off += sizeof(y);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -115,21 +117,23 @@ struct picomesh_int64_result calculator_calc_sub(struct ctx * ctx, struct object
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "calculator_calc_sub: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int64, "calculator_calc_sub: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int64, "calculator_calc_sub: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "calculator_calc_sub: pack overflow"); return PICOMESH_ERR(picomesh_int64, "calculator_calc_sub: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(x) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int64, "calculator_calc_sub: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "calculator_calc_sub: pack overflow"); return PICOMESH_ERR(picomesh_int64, "calculator_calc_sub: pack overflow"); }
         memcpy(_a + _off, &x, sizeof(x)); _off += sizeof(x);
         if (_off + sizeof(y) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int64, "calculator_calc_sub: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "calculator_calc_sub: pack overflow"); return PICOMESH_ERR(picomesh_int64, "calculator_calc_sub: pack overflow"); }
         memcpy(_a + _off, &y, sizeof(y)); _off += sizeof(y);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -188,21 +192,23 @@ struct picomesh_int64_result calculator_calc_mul(struct ctx * ctx, struct object
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "calculator_calc_mul: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int64, "calculator_calc_mul: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int64, "calculator_calc_mul: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "calculator_calc_mul: pack overflow"); return PICOMESH_ERR(picomesh_int64, "calculator_calc_mul: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(x) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int64, "calculator_calc_mul: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "calculator_calc_mul: pack overflow"); return PICOMESH_ERR(picomesh_int64, "calculator_calc_mul: pack overflow"); }
         memcpy(_a + _off, &x, sizeof(x)); _off += sizeof(x);
         if (_off + sizeof(y) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int64, "calculator_calc_mul: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "calculator_calc_mul: pack overflow"); return PICOMESH_ERR(picomesh_int64, "calculator_calc_mul: pack overflow"); }
         memcpy(_a + _off, &y, sizeof(y)); _off += sizeof(y);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -261,21 +267,23 @@ struct picomesh_int64_result calculator_calc_div(struct ctx * ctx, struct object
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "calculator_calc_div: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int64, "calculator_calc_div: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int64, "calculator_calc_div: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "calculator_calc_div: pack overflow"); return PICOMESH_ERR(picomesh_int64, "calculator_calc_div: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(x) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int64, "calculator_calc_div: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "calculator_calc_div: pack overflow"); return PICOMESH_ERR(picomesh_int64, "calculator_calc_div: pack overflow"); }
         memcpy(_a + _off, &x, sizeof(x)); _off += sizeof(x);
         if (_off + sizeof(y) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int64, "calculator_calc_div: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "calculator_calc_div: pack overflow"); return PICOMESH_ERR(picomesh_int64, "calculator_calc_div: pack overflow"); }
         memcpy(_a + _off, &y, sizeof(y)); _off += sizeof(y);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,

@@ -410,6 +410,14 @@ def is_string_arg(t: str) -> bool:
 # on the stack inside the public stub.
 WIRE_ARG_BUFFER_BYTES = 16384
 WIRE_STRING_MAX = 4096
+# String RETURN buffer (client _wbuf). Sized to the yrpc frame max so a
+# large string response (e.g. the trace collector's whole-trace JSON) is
+# not truncated by an artificially small client buffer — the only cap is
+# then the transport frame itself. Lives on the worker coroutine's 256 KiB
+# stack, so a 64 KiB buffer is free (no heap alloc on the call hot path).
+# Kept separate from WIRE_STRING_MAX (the per-arg unpack buffer) so raising
+# the response size does not bloat every string-arg stack slot.
+WIRE_STRING_RESP_MAX = 65531  # 1 (status) + 4 (len) + this == 65536 frame max
 
 
 def wire_type(t: str) -> str:
@@ -592,12 +600,16 @@ def emit_pack_arg(a: dict, slot: str, rid: str, indent: str = "        ") -> str
     signatures, so existing methods stay byte-compatible. */"""
     t = a["type"].strip()
     name = a["name"]
+    # On a pack overflow the client span was already begun; end it (ok=0)
+    # before bailing so the failed call is still recorded.
+    fail = (f"{{ ytelemetry_span_end(&_tsp, 0, \"{slot}: pack overflow\");"
+            f" return PICOMESH_ERR({rid}, \"{slot}: pack overflow\"); }}")
     if is_string_arg(t):
         return (
             f"{indent}{{\n"
             f"{indent}    uint32_t _slen = (uint32_t)({name} ? strlen({name}) : 0);\n"
             f"{indent}    if (_off + 4 + _slen > sizeof(_a))\n"
-            f"{indent}        return PICOMESH_ERR({rid}, \"{slot}: pack overflow\");\n"
+            f"{indent}        {fail}\n"
             f"{indent}    memcpy(_a + _off, &_slen, 4); _off += 4;\n"
             f"{indent}    if (_slen) {{ memcpy(_a + _off, {name}, _slen); _off += _slen; }}\n"
             f"{indent}}}\n"
@@ -608,13 +620,13 @@ def emit_pack_arg(a: dict, slot: str, rid: str, indent: str = "        ") -> str
             f"{indent}{{\n"
             f"{indent}    uint64_t _h = *(uint64_t *)((char *){name} + sizeof(*{name}));\n"
             f"{indent}    if (_off + 8 > sizeof(_a))\n"
-            f"{indent}        return PICOMESH_ERR({rid}, \"{slot}: pack overflow\");\n"
+            f"{indent}        {fail}\n"
             f"{indent}    memcpy(_a + _off, &_h, 8); _off += 8;\n"
             f"{indent}}}\n"
         )
     return (
         f"{indent}if (_off + sizeof({name}) > sizeof(_a))\n"
-        f"{indent}    return PICOMESH_ERR({rid}, \"{slot}: pack overflow\");\n"
+        f"{indent}    {fail}\n"
         f"{indent}memcpy(_a + _off, &{name}, sizeof({name})); _off += sizeof({name});\n"
     )
 
@@ -644,7 +656,7 @@ def emit_dispatch_body(m: dict) -> str:
     # String returns can be long, so the response buffer must hold
     # u8 status + u32 len + up to WIRE_STRING_MAX value bytes. Scalar /
     # error responses fit comfortably in the small buffer.
-    wbuf_sz = (1 + 4 + WIRE_STRING_MAX) if is_string_ret(vt) else (1 + 4 + 256)
+    wbuf_sz = (1 + 4 + WIRE_STRING_RESP_MAX) if is_string_ret(vt) else (1 + 4 + 256)
     timed_rpc = f"""\
         uint8_t _wbuf[{wbuf_sz}];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -717,8 +729,10 @@ def emit_dispatch_body(m: dict) -> str:
          * this client span's id as parent_span_id across the serialize. */
         {{
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, {hdrs_name}, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {{
+                ytelemetry_span_end(&_tsp, 0, "{slot_qname}: header serialize overflow");
                 return PICOMESH_ERR({rid}, "{slot_qname}: header serialize overflow");
+            }}
             _off = _hn;
         }}
 {pack_block}\

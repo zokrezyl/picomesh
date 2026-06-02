@@ -42,14 +42,16 @@ struct picomesh_int64_result time_clock_now_ms(struct ctx * ctx, struct object *
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "time_clock_now_ms: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int64, "time_clock_now_ms: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int64, "time_clock_now_ms: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "time_clock_now_ms: pack overflow"); return PICOMESH_ERR(picomesh_int64, "time_clock_now_ms: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         uint8_t _wbuf[261];
@@ -109,18 +111,20 @@ struct picomesh_int64_result time_clock_sleep_ms(struct ctx * ctx, struct object
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "time_clock_sleep_ms: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "time_clock_sleep_ms: pack overflow"); return PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(ms) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "time_clock_sleep_ms: pack overflow"); return PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: pack overflow"); }
         memcpy(_a + _off, &ms, sizeof(ms)); _off += sizeof(ms);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,

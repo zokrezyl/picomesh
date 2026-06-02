@@ -358,6 +358,23 @@ static struct picomesh_void_result serve_worker_setup(struct picomesh_engine *e,
               ss->name, worker_index, n, ss->name);
     }
 
+    /* Config-driven per-node perf profiling (gh#14). Opens this worker's
+     * counters on its own thread + loop when `perf.enabled` is set. A
+     * permission/config failure is reported loudly but does NOT take the
+     * service down — profiling must never be silently dropped, yet a host
+     * without perf access shouldn't keep the mesh from coming up. */
+    struct picomesh_void_result perf_r = picomesh_engine_perf_start(e, ss->name);
+    if (PICOMESH_IS_ERR(perf_r)) {
+        /* Unconditional (ytrace_output, not the gated yerror): a requested-but-
+         * refused profile must be loud even when tracing is off. yperf already
+         * logged the precise failing event + errno just above. */
+        ytrace_output("error", __FILE__, __LINE__, __func__,
+                      "serve[%s w%d]: perf profiling could not start (see the preceding perf "
+                      "error) — continuing without it",
+                      ss->name ? ss->name : "?", worker_index);
+        picomesh_error_destroy(perf_r.error);
+    }
+
     if (strcmp(ss->frontend, "yhttp") == 0) {
         struct yhttp_config cfg = {.host = ss->host, .port = ss->port};
         struct yhttp_frontend_ptr_result fr = yhttp_start(e, &cfg);

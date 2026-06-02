@@ -42,18 +42,20 @@ struct picomesh_uint32_result portalloc_store_allocate(struct ctx * ctx, struct 
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "portalloc_store_allocate: header serialize overflow");
                 return PICOMESH_ERR(picomesh_uint32, "portalloc_store_allocate: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_uint32, "portalloc_store_allocate: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "portalloc_store_allocate: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "portalloc_store_allocate: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(service_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_uint32, "portalloc_store_allocate: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "portalloc_store_allocate: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "portalloc_store_allocate: pack overflow"); }
         memcpy(_a + _off, &service_id, sizeof(service_id)); _off += sizeof(service_id);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -112,18 +114,20 @@ struct picomesh_int_result portalloc_store_release(struct ctx * ctx, struct obje
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "portalloc_store_release: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int, "portalloc_store_release: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "portalloc_store_release: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "portalloc_store_release: pack overflow"); return PICOMESH_ERR(picomesh_int, "portalloc_store_release: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(port) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int, "portalloc_store_release: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "portalloc_store_release: pack overflow"); return PICOMESH_ERR(picomesh_int, "portalloc_store_release: pack overflow"); }
         memcpy(_a + _off, &port, sizeof(port)); _off += sizeof(port);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -182,14 +186,16 @@ struct picomesh_size_result portalloc_store_count_used(struct ctx * ctx, struct 
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "portalloc_store_count_used: header serialize overflow");
                 return PICOMESH_ERR(picomesh_size, "portalloc_store_count_used: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_size, "portalloc_store_count_used: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "portalloc_store_count_used: pack overflow"); return PICOMESH_ERR(picomesh_size, "portalloc_store_count_used: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         uint8_t _wbuf[261];

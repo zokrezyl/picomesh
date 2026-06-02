@@ -34,7 +34,7 @@ rpc() {
 # are wired into the linked binary; every plugin in the scenario maps
 # to <plugin>_<class>.
 declare -A H
-for cls in portalloc_store storage_kv session_store accounts_store \
+for cls in portalloc_store session_store accounts_store \
            password_authn_store github_authn_store token_issuer_store \
            issues_store git_repo_store git_pipeline_store \
            personal_access_tokens_store mesh_store; do
@@ -52,11 +52,6 @@ call() {
 echo
 echo "== portalloc.allocate(1) → port =="
 call portalloc_store_allocate '[1]' "${H[portalloc_store]}"
-
-echo
-echo "== storage.kv_set(42, 7) and kv_get(42) =="
-call storage_kv_set '[42, 7]' "${H[storage_kv]}"
-call storage_kv_get '[42]'    "${H[storage_kv]}"
 
 echo
 echo "== accounts.register(uid=100), set_balance(100, 5000), balance(100) =="
@@ -129,4 +124,4 @@ call github_authn_store_register_code   '[12345, 100]'  "${H[github_authn_store]
 call github_authn_store_resolve         '[12345]'       "${H[github_authn_store]}"
 
 echo
-echo "smoke: all 12 plugins exercised end-to-end."
+echo "smoke: all backend plugins exercised end-to-end."

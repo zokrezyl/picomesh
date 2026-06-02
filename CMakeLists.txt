@@ -53,6 +53,7 @@ add_library(picomesh_runtime STATIC
     src/picomesh/ycore/yspan.c
     src/picomesh/ycore/ytelemetry.c
     src/picomesh/ycore/ytelemetry_store.c
+    src/picomesh/ycore/yperf.c
     src/picomesh/yclass/class.c
     src/picomesh/yclass/rpc.c
     src/picomesh/yclass/jinvoke.c

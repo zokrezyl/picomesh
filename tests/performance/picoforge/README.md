@@ -58,10 +58,11 @@ Bring the mesh up, then point the tool at it:
 
 `mixed` is the "lots of users doing lots of things" workload. Each worker
 logs in as its own user and then issues a **weighted-random stream of real
-actions** — `read_count`/`read_list` (reads), `kv_set`, `put_file` (libgit2
+actions** — `read_count`/`read_list` (reads), `put_file` (libgit2
 commit), `open_issue`, `enqueue_run`, `make_repo` (bounded per worker), and
-periodic re-`login` — emulating a live user session. Backend methods are
-addressed directly over `/_rpc` carrying the session cookie, so the gateway
+periodic re-`login` — emulating a live user session. Every action is a real
+business call (no raw storage access); methods are
+addressed over `/_rpc` carrying the session cookie, so the gateway
 resolves sid→uid on every call (the real per-call cost). Two extra options:
 
 | option | default | meaning |
@@ -142,7 +143,7 @@ What stands out, and motivates the §5 async track:
 - **Seed:** 50,000 account records in ~7.5 s ≈ **6.7k creates/s** (0 errors).
 - **Blended:** ~**14.4k ops/s**, 725k ok in 60 s. Latency mean 2.2 ms, p50 2.1,
   p90 2.8, p99 5.2, p99.9 7.7, max 21 ms.
-- **By op:** reads (`read_count`/`read_list`), `kv_set`, `login`, `enqueue_run`
+- **By op:** reads (`read_count`/`read_list`), `login`, `enqueue_run`
   run clean (0 errors). 
 
 Two findings the mixed load surfaces, both rooted in the inline/blocking design:
@@ -151,7 +152,7 @@ Two findings the mixed load surfaces, both rooted in the inline/blocking design:
    1–2 workers, ~60 % errors at 4, ~90 % at 16–32 — all `forbidden (not repo
    owner)`. The cause is the gateway resolving sid→uid (`session.store.lookup`,
    blocking) on every `/_rpc`: under contention it returns the wrong/zero uid,
-   so the only owner-gated op (`put_file`) is rejected. Reads/`kv_set`/`make`
+   so the only owner-gated op (`put_file`) is rejected. Reads/`make`
    don't owner-check, so they don't expose it. This is the §5 blocking-rpc
    bottleneck, now quantified.
 2. **The in-memory stores are fixed-size linear-scan tables.** `git_repo`

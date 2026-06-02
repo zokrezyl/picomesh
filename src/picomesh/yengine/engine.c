@@ -13,6 +13,7 @@
 #include <picomesh/yconfig/yconfig.h>
 #include <picomesh/yargv/yargv.h>
 #include <picomesh/ycore/ytrace.h>
+#include <picomesh/ycore/yperf.h>
 #include <picomesh/ycore/result.h>
 
 #include <uthash.h>
@@ -55,6 +56,10 @@ struct picomesh_worker {
     size_t index;
     pthread_t thread;             /* valid only when `started` */
     int started;                  /* pthread_create succeeded (index > 0) */
+    /* Per-worker perf-counter sampler (gh#14), opened against THIS worker's
+     * thread + loop when the service config enables `perf`. NULL when the
+     * feature is off. Owned here; destroyed at engine teardown. */
+    struct yperf *perf;
     /* Transient: handed to the spawned thread for its one-shot setup. */
     picomesh_worker_setup_fn setup;
     void *setup_ud;
@@ -203,6 +208,7 @@ void picomesh_engine_destroy(struct picomesh_engine *e)
 {
     if (!e) return;
     for (size_t i = 0; i < e->worker_count; ++i) {
+        yperf_destroy(e->workers[i].perf);
         struct remote_entry *r = e->workers[i].remotes;
         while (r) {
             struct remote_entry *next = r->next;
@@ -839,6 +845,31 @@ void picomesh_engine_stop(struct picomesh_engine *e)
     for (size_t i = 0; i < e->worker_count; ++i) {
         if (e->workers[i].loop) yloop_stop(e->workers[i].loop);
     }
+}
+
+struct picomesh_void_result picomesh_engine_perf_start(struct picomesh_engine *e, const char *service)
+{
+    if (!e) return PICOMESH_ERR(picomesh_void, "picomesh_engine_perf_start: NULL engine");
+    struct picomesh_worker *w = engine_current_worker(e);
+
+    /* `perf` resolves at the projected root: service projection promoted
+     * mesh.services.<name>.config onto the root at engine create, so the
+     * service's `config.perf` block is reachable here as the top-level
+     * `perf` section (and a standalone process can set `perf:` at the top
+     * level directly). */
+    const struct yconfig_node *perf_node = yconfig_section(e->config, "perf");
+
+    char label[64];
+    if (service && *service)
+        snprintf(label, sizeof(label), "%s w%zu", service, w->index);
+    else
+        snprintf(label, sizeof(label), "w%zu", w->index);
+
+    struct yperf_ptr_result pr = yperf_create(perf_node, w->loop, label);
+    if (PICOMESH_IS_ERR(pr))
+        return PICOMESH_ERR(picomesh_void, "picomesh_engine_perf_start: yperf_create failed", pr);
+    w->perf = pr.value; /* NULL when profiling is disabled */
+    return PICOMESH_OK_VOID();
 }
 
 struct yloop *picomesh_engine_loop(struct picomesh_engine *e)

@@ -42,23 +42,25 @@ struct picomesh_string_result session_store_start(struct ctx * ctx, struct objec
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "session_store_start: header serialize overflow");
                 return PICOMESH_ERR(picomesh_string, "session_store_start: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_string, "session_store_start: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "session_store_start: pack overflow"); return PICOMESH_ERR(picomesh_string, "session_store_start: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(user_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_string, "session_store_start: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "session_store_start: pack overflow"); return PICOMESH_ERR(picomesh_string, "session_store_start: pack overflow"); }
         memcpy(_a + _off, &user_id, sizeof(user_id)); _off += sizeof(user_id);
         if (_off + sizeof(provider_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_string, "session_store_start: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "session_store_start: pack overflow"); return PICOMESH_ERR(picomesh_string, "session_store_start: pack overflow"); }
         memcpy(_a + _off, &provider_id, sizeof(provider_id)); _off += sizeof(provider_id);
-        uint8_t _wbuf[4101];
+        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
@@ -120,20 +122,22 @@ struct picomesh_uint32_result session_store_lookup(struct ctx * ctx, struct obje
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "session_store_lookup: header serialize overflow");
                 return PICOMESH_ERR(picomesh_uint32, "session_store_lookup: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_uint32, "session_store_lookup: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "session_store_lookup: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "session_store_lookup: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(token ? strlen(token) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_uint32, "session_store_lookup: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "session_store_lookup: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "session_store_lookup: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, token, _slen); _off += _slen; }
         }
@@ -194,20 +198,22 @@ struct picomesh_int_result session_store_destroy(struct ctx * ctx, struct object
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "session_store_destroy: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int, "session_store_destroy: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "session_store_destroy: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "session_store_destroy: pack overflow"); return PICOMESH_ERR(picomesh_int, "session_store_destroy: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(token ? strlen(token) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "session_store_destroy: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "session_store_destroy: pack overflow"); return PICOMESH_ERR(picomesh_int, "session_store_destroy: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, token, _slen); _off += _slen; }
         }
@@ -268,14 +274,16 @@ struct picomesh_size_result session_store_count_active(struct ctx * ctx, struct 
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "session_store_count_active: header serialize overflow");
                 return PICOMESH_ERR(picomesh_size, "session_store_count_active: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_size, "session_store_count_active: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "session_store_count_active: pack overflow"); return PICOMESH_ERR(picomesh_size, "session_store_count_active: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         uint8_t _wbuf[261];

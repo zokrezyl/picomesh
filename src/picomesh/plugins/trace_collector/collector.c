@@ -1,0 +1,188 @@
+/* trace_collector — the receiver side of Picomesh tracing (issue #11).
+ *
+ * A normal yrpc backend plugin: services emit finished spans by calling
+ * `store_ingest` over yrpc (fire-and-forget, from ytelemetry); operators
+ * and the webapp read traces back through the query methods via the
+ * gateway's /_rpc + /_describe — service-driven, no hand-rolled routes.
+ *
+ * State is an in-memory, bounded span store (ycore/ytelemetry_store). No
+ * durable storage in v1. This process holds no other plugins and reaches
+ * no backends. */
+
+#include <picomesh/ycore/result.h>
+#include <picomesh/ycore/ytrace.h>
+#include <picomesh/ycore/ytelemetry_store.h>
+#include <picomesh/yclass/class.h>
+#include <picomesh/yconfig/yconfig.h>
+#include <picomesh/yengine/engine.h>
+#include <picomesh/yjson/yjson.h>
+#include <picomesh/yplatform/time.h>
+
+#include <stdlib.h>
+#include <string.h>
+
+struct PICOMESH_CLASS_ANNOTATE("class@trace_collector:store") trace_collector_store_data {
+    char placeholder;
+};
+
+static uint64_t collector_now_ns(void)
+{
+    return (uint64_t)picomesh_yplatform_time_wall_ms() * 1000000ull;
+}
+
+/* Size the in-memory store from this process's config the first time the
+ * collector is touched: telemetry.max_spans (ring size) + max_age_seconds
+ * (retention). Idempotent (ytelemetry_store_init only honours the first
+ * call); the `done` flag just skips the per-call config lookup. Safe across
+ * the collector's worker threads — same value, idempotent init. */
+static void collector_ensure_store(void)
+{
+    static int done = 0;
+    if (done) return;
+    int64_t max_spans = 0, max_age = 0;
+    struct picomesh_engine *e = picomesh_active_engine();
+    if (e) {
+        const struct yconfig *cfg = picomesh_engine_config(e);
+        struct yconfig_node_ptr_result ms = yconfig_get(cfg, "telemetry.max_spans");
+        if (PICOMESH_IS_OK(ms) && ms.value) max_spans = yconfig_node_as_int(ms.value, 0);
+        struct yconfig_node_ptr_result ma = yconfig_get(cfg, "telemetry.max_age_seconds");
+        if (PICOMESH_IS_OK(ma) && ma.value) max_age = yconfig_node_as_int(ma.value, 0);
+    }
+    ytelemetry_store_init(max_spans > 0 ? (size_t)max_spans : 0,
+                          max_age > 0 ? (uint64_t)max_age : 0);
+    done = 1;
+}
+
+/* Render a query-writer's JSON into an owned heap string the caller frees. */
+static struct picomesh_string_result render(void (*emit)(struct yjson_writer *, void *),
+                                            void *ud)
+{
+    struct yjson_writer *w = yjson_writer_new();
+    if (!w) return PICOMESH_ERR(picomesh_string, "trace_collector: writer alloc failed");
+    emit(w, ud);
+    size_t len = 0;
+    const char *data = yjson_w_data(w, &len);
+    char *out = malloc(len + 1);
+    if (out) { memcpy(out, data, len); out[len] = 0; }
+    yjson_writer_free(w);
+    if (!out) return PICOMESH_ERR(picomesh_string, "trace_collector: out of memory");
+    return PICOMESH_OK(picomesh_string, out);
+}
+
+/* ---- ingest ---------------------------------------------------------- */
+
+PICOMESH_CLASS_ANNOTATE("override@trace_collector:store:store_ingest")
+struct picomesh_void_result trace_collector_store_ingest_impl(
+    struct ctx *ctx, struct object *obj, struct yheaders *hdrs, const char *span_json)
+{
+    (void)ctx; (void)obj; (void)hdrs;
+    collector_ensure_store();
+    /* The store tallies malformed/evicted spans (queryable via store_stats),
+     * so bad input is not invisible. Ingest is fire-and-forget at the wire,
+     * so we still return OK regardless — the caller never waits on this. */
+    if (span_json && *span_json)
+        ytelemetry_store_ingest_json(span_json, strlen(span_json));
+    return PICOMESH_OK_VOID();
+}
+
+/* ---- queries --------------------------------------------------------- */
+
+struct trace_arg { const char *a; const char *b; uint64_t n; };
+
+static void emit_trace(struct yjson_writer *w, void *ud)
+{
+    ytelemetry_store_write_trace(w, ((struct trace_arg *)ud)->a);
+}
+
+PICOMESH_CLASS_ANNOTATE("override@trace_collector:store:store_get_trace")
+struct picomesh_string_result trace_collector_store_get_trace_impl(
+    struct ctx *ctx, struct object *obj, struct yheaders *hdrs, const char *trace_id)
+{
+    (void)ctx; (void)obj; (void)hdrs;
+    struct trace_arg t = {.a = trace_id};
+    return render(emit_trace, &t);
+}
+
+static void emit_services(struct yjson_writer *w, void *ud)
+{
+    (void)ud;
+    ytelemetry_store_write_services(w);
+}
+
+PICOMESH_CLASS_ANNOTATE("override@trace_collector:store:store_services")
+struct picomesh_string_result trace_collector_store_services_impl(
+    struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
+{
+    (void)ctx; (void)obj; (void)hdrs;
+    return render(emit_services, NULL);
+}
+
+static void emit_operations(struct yjson_writer *w, void *ud)
+{
+    const char *svc = ((struct trace_arg *)ud)->a;
+    ytelemetry_store_write_operations(w, (svc && *svc) ? svc : NULL);
+}
+
+PICOMESH_CLASS_ANNOTATE("override@trace_collector:store:store_operations")
+struct picomesh_string_result trace_collector_store_operations_impl(
+    struct ctx *ctx, struct object *obj, struct yheaders *hdrs, const char *service)
+{
+    (void)ctx; (void)obj; (void)hdrs;
+    struct trace_arg t = {.a = service};
+    return render(emit_operations, &t);
+}
+
+static void emit_latency(struct yjson_writer *w, void *ud)
+{
+    struct trace_arg *t = ud;
+    ytelemetry_store_write_latency(w, (t->a && *t->a) ? t->a : NULL,
+                                   (t->b && *t->b) ? t->b : NULL, t->n);
+}
+
+PICOMESH_CLASS_ANNOTATE("override@trace_collector:store:store_latency")
+struct picomesh_string_result trace_collector_store_latency_impl(
+    struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+    const char *service, const char *operation, uint32_t window_secs)
+{
+    (void)ctx; (void)obj; (void)hdrs;
+    struct trace_arg t = {.a = service, .b = operation,
+                          .n = (uint64_t)window_secs * 1000000000ull};
+    return render(emit_latency, &t);
+}
+
+static void emit_stats(struct yjson_writer *w, void *ud)
+{
+    (void)ud;
+    ytelemetry_store_write_stats(w);
+}
+
+PICOMESH_CLASS_ANNOTATE("override@trace_collector:store:store_stats")
+struct picomesh_string_result trace_collector_store_stats_impl(
+    struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
+{
+    (void)ctx; (void)obj; (void)hdrs;
+    collector_ensure_store();
+    return render(emit_stats, NULL);
+}
+
+static void emit_errors(struct yjson_writer *w, void *ud)
+{
+    ytelemetry_store_write_errors(w, ((struct trace_arg *)ud)->n);
+}
+
+PICOMESH_CLASS_ANNOTATE("override@trace_collector:store:store_errors")
+struct picomesh_string_result trace_collector_store_errors_impl(
+    struct ctx *ctx, struct object *obj, struct yheaders *hdrs, uint32_t since_secs)
+{
+    (void)ctx; (void)obj; (void)hdrs;
+    uint64_t floor = 0;
+    if (since_secs) {
+        uint64_t window = (uint64_t)since_secs * 1000000000ull;
+        uint64_t now = collector_now_ns();
+        floor = now > window ? now - window : 0;
+    }
+    struct trace_arg t = {.n = floor};
+    return render(emit_errors, &t);
+}
+
+#include "collector.gen.c"

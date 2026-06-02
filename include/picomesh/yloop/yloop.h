@@ -88,6 +88,32 @@ void yloop_close(struct yloop_stream *s);
  * loop (e.g. a serve coro from yloop_listen_tcp). */
 void yloop_sleep_ms(struct yloop *l, unsigned int ms);
 
+/* ---- repeating timer (not coroutine-bound) -------------------------- */
+
+struct yloop_timer;
+
+PICOMESH_RESULT_DECLARE(yloop_timer_ptr, struct yloop_timer *);
+
+/* Fired by yloop_timer_start on every tick, directly on the loop thread.
+ * It runs OUTSIDE any coroutine, so it must not call the coroutine-yielding
+ * stream ops (yloop_read/_write/_sleep_ms). Keep it short and non-blocking
+ * — read a counter, log a line, post a message. */
+typedef void (*yloop_timer_cb)(void *ud);
+
+/* Start a repeating timer that fires `cb(ud)` on the loop thread every
+ * `interval_ms` (first fire one interval from now). Returns a handle the
+ * caller owns; stop and free it with yloop_timer_stop. Used by long-lived
+ * housekeeping (e.g. periodic perf-counter sampling) that wants a wakeup
+ * without standing up a coroutine. */
+struct yloop_timer_ptr_result yloop_timer_start(struct yloop *l, unsigned int interval_ms,
+                                                yloop_timer_cb cb, void *ud);
+
+/* Stop the timer and release it. After this no further `cb` runs. The
+ * underlying libuv handle is closed asynchronously and freed on a later
+ * loop tick — safe to call even while tearing the owner down, as long as
+ * it precedes freeing whatever `ud` points at. Idempotent on NULL. */
+void yloop_timer_stop(struct yloop_timer *t);
+
 /* ---- subprocess spawn (libuv uv_spawn wrapper) ----------------- */
 
 struct yloop_process;

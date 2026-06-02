@@ -42,18 +42,20 @@ struct picomesh_uint32_result git_pipeline_store_enqueue(struct ctx * ctx, struc
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "git_pipeline_store_enqueue: header serialize overflow");
                 return PICOMESH_ERR(picomesh_uint32, "git_pipeline_store_enqueue: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_uint32, "git_pipeline_store_enqueue: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_pipeline_store_enqueue: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "git_pipeline_store_enqueue: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(repo_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_uint32, "git_pipeline_store_enqueue: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "git_pipeline_store_enqueue: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "git_pipeline_store_enqueue: pack overflow"); }
         memcpy(_a + _off, &repo_id, sizeof(repo_id)); _off += sizeof(repo_id);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -112,18 +114,20 @@ struct picomesh_uint32_result git_pipeline_store_lease(struct ctx * ctx, struct 
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "git_pipeline_store_lease: header serialize overflow");
                 return PICOMESH_ERR(picomesh_uint32, "git_pipeline_store_lease: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_uint32, "git_pipeline_store_lease: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_pipeline_store_lease: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "git_pipeline_store_lease: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(runner_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_uint32, "git_pipeline_store_lease: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "git_pipeline_store_lease: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "git_pipeline_store_lease: pack overflow"); }
         memcpy(_a + _off, &runner_id, sizeof(runner_id)); _off += sizeof(runner_id);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -182,21 +186,23 @@ struct picomesh_int_result git_pipeline_store_complete(struct ctx * ctx, struct 
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "git_pipeline_store_complete: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int, "git_pipeline_store_complete: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "git_pipeline_store_complete: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_pipeline_store_complete: pack overflow"); return PICOMESH_ERR(picomesh_int, "git_pipeline_store_complete: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(job_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int, "git_pipeline_store_complete: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "git_pipeline_store_complete: pack overflow"); return PICOMESH_ERR(picomesh_int, "git_pipeline_store_complete: pack overflow"); }
         memcpy(_a + _off, &job_id, sizeof(job_id)); _off += sizeof(job_id);
         if (_off + sizeof(status) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int, "git_pipeline_store_complete: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "git_pipeline_store_complete: pack overflow"); return PICOMESH_ERR(picomesh_int, "git_pipeline_store_complete: pack overflow"); }
         memcpy(_a + _off, &status, sizeof(status)); _off += sizeof(status);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -255,14 +261,16 @@ struct picomesh_size_result git_pipeline_store_count_pending(struct ctx * ctx, s
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "git_pipeline_store_count_pending: header serialize overflow");
                 return PICOMESH_ERR(picomesh_size, "git_pipeline_store_count_pending: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_size, "git_pipeline_store_count_pending: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_pipeline_store_count_pending: pack overflow"); return PICOMESH_ERR(picomesh_size, "git_pipeline_store_count_pending: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         uint8_t _wbuf[261];
@@ -322,14 +330,16 @@ struct picomesh_size_result git_pipeline_store_count_running(struct ctx * ctx, s
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "git_pipeline_store_count_running: header serialize overflow");
                 return PICOMESH_ERR(picomesh_size, "git_pipeline_store_count_running: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_size, "git_pipeline_store_count_running: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_pipeline_store_count_running: pack overflow"); return PICOMESH_ERR(picomesh_size, "git_pipeline_store_count_running: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         uint8_t _wbuf[261];
@@ -389,14 +399,16 @@ struct picomesh_size_result git_pipeline_store_count_done(struct ctx * ctx, stru
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "git_pipeline_store_count_done: header serialize overflow");
                 return PICOMESH_ERR(picomesh_size, "git_pipeline_store_count_done: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_size, "git_pipeline_store_count_done: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_pipeline_store_count_done: pack overflow"); return PICOMESH_ERR(picomesh_size, "git_pipeline_store_count_done: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         uint8_t _wbuf[261];

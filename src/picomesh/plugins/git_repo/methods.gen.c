@@ -42,30 +42,32 @@ struct picomesh_uint32_result git_repo_store_make(struct ctx * ctx, struct objec
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "git_repo_store_make: header serialize overflow");
                 return PICOMESH_ERR(picomesh_uint32, "git_repo_store_make: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_uint32, "git_repo_store_make: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_store_make: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "git_repo_store_make: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(owner_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_uint32, "git_repo_store_make: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_store_make: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "git_repo_store_make: pack overflow"); }
         memcpy(_a + _off, &owner_id, sizeof(owner_id)); _off += sizeof(owner_id);
         {
             uint32_t _slen = (uint32_t)(owner_name ? strlen(owner_name) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_uint32, "git_repo_store_make: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_store_make: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "git_repo_store_make: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, owner_name, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(repo_name ? strlen(repo_name) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_uint32, "git_repo_store_make: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_store_make: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "git_repo_store_make: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, repo_name, _slen); _off += _slen; }
         }
@@ -126,18 +128,20 @@ struct picomesh_int_result git_repo_store_delete(struct ctx * ctx, struct object
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "git_repo_store_delete: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int, "git_repo_store_delete: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "git_repo_store_delete: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_store_delete: pack overflow"); return PICOMESH_ERR(picomesh_int, "git_repo_store_delete: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(repo_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int, "git_repo_store_delete: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_store_delete: pack overflow"); return PICOMESH_ERR(picomesh_int, "git_repo_store_delete: pack overflow"); }
         memcpy(_a + _off, &repo_id, sizeof(repo_id)); _off += sizeof(repo_id);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -196,18 +200,20 @@ struct picomesh_uint32_result git_repo_store_owner_of(struct ctx * ctx, struct o
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "git_repo_store_owner_of: header serialize overflow");
                 return PICOMESH_ERR(picomesh_uint32, "git_repo_store_owner_of: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_uint32, "git_repo_store_owner_of: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_store_owner_of: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "git_repo_store_owner_of: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(repo_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_uint32, "git_repo_store_owner_of: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_store_owner_of: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "git_repo_store_owner_of: pack overflow"); }
         memcpy(_a + _off, &repo_id, sizeof(repo_id)); _off += sizeof(repo_id);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -266,18 +272,20 @@ struct picomesh_size_result git_repo_store_count_for_owner(struct ctx * ctx, str
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "git_repo_store_count_for_owner: header serialize overflow");
                 return PICOMESH_ERR(picomesh_size, "git_repo_store_count_for_owner: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_size, "git_repo_store_count_for_owner: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_store_count_for_owner: pack overflow"); return PICOMESH_ERR(picomesh_size, "git_repo_store_count_for_owner: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(owner_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_size, "git_repo_store_count_for_owner: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_store_count_for_owner: pack overflow"); return PICOMESH_ERR(picomesh_size, "git_repo_store_count_for_owner: pack overflow"); }
         memcpy(_a + _off, &owner_id, sizeof(owner_id)); _off += sizeof(owner_id);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -336,14 +344,16 @@ struct picomesh_size_result git_repo_store_count_total(struct ctx * ctx, struct 
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "git_repo_store_count_total: header serialize overflow");
                 return PICOMESH_ERR(picomesh_size, "git_repo_store_count_total: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_size, "git_repo_store_count_total: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_store_count_total: pack overflow"); return PICOMESH_ERR(picomesh_size, "git_repo_store_count_total: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         uint8_t _wbuf[261];
@@ -403,20 +413,22 @@ struct picomesh_string_result git_repo_store_list_for_owner(struct ctx * ctx, st
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "git_repo_store_list_for_owner: header serialize overflow");
                 return PICOMESH_ERR(picomesh_string, "git_repo_store_list_for_owner: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_string, "git_repo_store_list_for_owner: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_store_list_for_owner: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_store_list_for_owner: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(owner_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_string, "git_repo_store_list_for_owner: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_store_list_for_owner: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_store_list_for_owner: pack overflow"); }
         memcpy(_a + _off, &owner_id, sizeof(owner_id)); _off += sizeof(owner_id);
-        uint8_t _wbuf[4101];
+        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
@@ -478,34 +490,36 @@ struct picomesh_string_result git_repo_store_read_tree(struct ctx * ctx, struct 
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "git_repo_store_read_tree: header serialize overflow");
                 return PICOMESH_ERR(picomesh_string, "git_repo_store_read_tree: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_string, "git_repo_store_read_tree: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_store_read_tree: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_store_read_tree: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(repo_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_string, "git_repo_store_read_tree: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_store_read_tree: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_store_read_tree: pack overflow"); }
         memcpy(_a + _off, &repo_id, sizeof(repo_id)); _off += sizeof(repo_id);
         {
             uint32_t _slen = (uint32_t)(ref ? strlen(ref) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_string, "git_repo_store_read_tree: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_store_read_tree: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_store_read_tree: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, ref, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(path ? strlen(path) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_string, "git_repo_store_read_tree: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_store_read_tree: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_store_read_tree: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, path, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[4101];
+        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
@@ -567,34 +581,36 @@ struct picomesh_string_result git_repo_store_read_file(struct ctx * ctx, struct 
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "git_repo_store_read_file: header serialize overflow");
                 return PICOMESH_ERR(picomesh_string, "git_repo_store_read_file: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_string, "git_repo_store_read_file: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_store_read_file: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_store_read_file: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(repo_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_string, "git_repo_store_read_file: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_store_read_file: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_store_read_file: pack overflow"); }
         memcpy(_a + _off, &repo_id, sizeof(repo_id)); _off += sizeof(repo_id);
         {
             uint32_t _slen = (uint32_t)(ref ? strlen(ref) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_string, "git_repo_store_read_file: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_store_read_file: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_store_read_file: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, ref, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(path ? strlen(path) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_string, "git_repo_store_read_file: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_store_read_file: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_store_read_file: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, path, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[4101];
+        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
@@ -656,55 +672,57 @@ struct picomesh_string_result git_repo_store_put_file(struct ctx * ctx, struct o
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "git_repo_store_put_file: header serialize overflow");
                 return PICOMESH_ERR(picomesh_string, "git_repo_store_put_file: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_string, "git_repo_store_put_file: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_store_put_file: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_store_put_file: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(repo_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_string, "git_repo_store_put_file: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_store_put_file: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_store_put_file: pack overflow"); }
         memcpy(_a + _off, &repo_id, sizeof(repo_id)); _off += sizeof(repo_id);
         {
             uint32_t _slen = (uint32_t)(path ? strlen(path) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_string, "git_repo_store_put_file: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_store_put_file: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_store_put_file: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, path, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(content ? strlen(content) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_string, "git_repo_store_put_file: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_store_put_file: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_store_put_file: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, content, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(message ? strlen(message) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_string, "git_repo_store_put_file: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_store_put_file: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_store_put_file: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, message, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(author_name ? strlen(author_name) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_string, "git_repo_store_put_file: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_store_put_file: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_store_put_file: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, author_name, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(author_email ? strlen(author_email) : 0);
             if (_off + 4 + _slen > sizeof(_a))
-                return PICOMESH_ERR(picomesh_string, "git_repo_store_put_file: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_store_put_file: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_store_put_file: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, author_email, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[4101];
+        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
@@ -766,18 +784,20 @@ struct picomesh_int_result git_repo_store_is_public(struct ctx * ctx, struct obj
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "git_repo_store_is_public: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int, "git_repo_store_is_public: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "git_repo_store_is_public: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_store_is_public: pack overflow"); return PICOMESH_ERR(picomesh_int, "git_repo_store_is_public: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(repo_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int, "git_repo_store_is_public: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_store_is_public: pack overflow"); return PICOMESH_ERR(picomesh_int, "git_repo_store_is_public: pack overflow"); }
         memcpy(_a + _off, &repo_id, sizeof(repo_id)); _off += sizeof(repo_id);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -836,21 +856,23 @@ struct picomesh_int_result git_repo_store_set_public(struct ctx * ctx, struct ob
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "git_repo_store_set_public: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int, "git_repo_store_set_public: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "git_repo_store_set_public: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_store_set_public: pack overflow"); return PICOMESH_ERR(picomesh_int, "git_repo_store_set_public: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(repo_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int, "git_repo_store_set_public: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_store_set_public: pack overflow"); return PICOMESH_ERR(picomesh_int, "git_repo_store_set_public: pack overflow"); }
         memcpy(_a + _off, &repo_id, sizeof(repo_id)); _off += sizeof(repo_id);
         if (_off + sizeof(is_public) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int, "git_repo_store_set_public: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_store_set_public: pack overflow"); return PICOMESH_ERR(picomesh_int, "git_repo_store_set_public: pack overflow"); }
         memcpy(_a + _off, &is_public, sizeof(is_public)); _off += sizeof(is_public);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,

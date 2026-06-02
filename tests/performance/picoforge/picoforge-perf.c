@@ -18,10 +18,9 @@
  * Scenarios (selected with --scenario), each timed per iteration:
  *   rpc_count    POST /_rpc git_repo.store.count_total  (read; gateway→1 backend)
  *   login        POST /login                             (auth composite; 4 backends)
- *   repo_create  POST /repos/new                         (write; storage + git_repo)
+ *   repo_create  POST /repos/new                         (write; sharded_storage + git_repo)
  *   register     POST /register (new user each time)     (write; accounts + authn)
  *   full         register → login → repo_create → /repos (end-to-end journey)
- *   store_set / shard_set                                (direct KV write)
  *   mixed        each connection = a user doing a random op stream
  *
  * Usage:
@@ -60,15 +59,12 @@ enum scenario_id {
     SCENARIO_REPO_CREATE,
     SCENARIO_REGISTER,
     SCENARIO_FULL,
-    SCENARIO_STORE_SET,
-    SCENARIO_SHARD_SET,
     SCENARIO_MIXED,
 };
 
 enum mixed_op {
     OP_READ_COUNT = 0,
     OP_READ_LIST,
-    OP_KV_SET,
     OP_PUT_FILE,
     OP_OPEN_ISSUE,
     OP_ENQUEUE_RUN,
@@ -90,6 +86,9 @@ struct perf_config {
     long run_nonce;
     long seed_users;
     int repos_per_conn;
+    int emulate;            /* --emulate: run the client machinery, skip the
+                             * network + server (synthetic success responses).
+                             * Measures the load generator's own ceiling. */
 };
 
 /* ---- monotonic clock ------------------------------------------------- */
@@ -133,12 +132,16 @@ static uint32_t rng_next(uint64_t *state)
 }
 
 static const char *const OP_NAMES[OP__COUNT] = {
-    "read_count", "read_list", "kv_set", "put_file",
+    "read_count", "read_list", "put_file",
     "open_issue", "enqueue_run", "make_repo", "login",
 };
 
+/* No raw-storage op: clients never touch a storage node directly — every
+ * write goes through a business service (e.g. put_file = a real libgit2
+ * commit into the bare repo on disk; make_repo/open_issue likewise go via
+ * git_repo/issues, not the KV store). Weights sum to 100. */
 static const int OP_WEIGHTS[OP__COUNT] = {
-    /*read_count*/ 25, /*read_list*/ 15, /*kv_set*/ 20, /*put_file*/ 15,
+    /*read_count*/ 30, /*read_list*/ 20, /*put_file*/ 25,
     /*open_issue*/ 10, /*enqueue_run*/ 7, /*make_repo*/ 5, /*login*/ 3,
 };
 
@@ -202,6 +205,7 @@ struct vconn {
 static int vconn_connect(struct vconn *vc)
 {
     if (vc->stream) return 0;
+    if (vc->cfg->emulate) return 0; /* no server in emulate mode: stream stays NULL */
     struct yloop_stream_ptr_result r = yloop_connect_tcp(vc->loop, vc->cfg->host, vc->cfg->port);
     if (PICOMESH_IS_ERR(r)) { picomesh_error_destroy(r.error); vc->stream = NULL; return -1; }
     vc->stream = r.value;
@@ -239,6 +243,29 @@ static int http_request(struct vconn *vc, const char *method, const char *path,
         n += snprintf(hdr + n, sizeof(hdr) - n, "Cookie: picomesh-sid=%s\r\n", cookie_sid);
     n += snprintf(hdr + n, sizeof(hdr) - n, "\r\n");
     if (n <= 0 || (size_t)n >= sizeof(hdr)) return -1;
+
+    if (vc->cfg->emulate) {
+        /* --emulate: everything the client does per request EXCEPT the network
+         * and a real server. The request line/headers were just built and the
+         * caller built the body, so all client-side CPU (op selection, string
+         * formatting, the sid cookie threading, latency capture, stats) is
+         * still measured. We yield once — the await a real request would block
+         * on — which keeps the cooperative scheduler fair and lets the deadline
+         * timer fire; then hand back a synthetic success. This benchmarks the
+         * load generator's OWN ceiling: how many ops/s its threads+coroutines
+         * can push on this host with a zero-cost peer, so a real run's numbers
+         * can be read against the harness's own limit. */
+        yloop_sleep_ms(vc->loop, 0);
+        if (out_sid && out_sid_cap)
+            snprintf(out_sid, out_sid_cap, "emu%08xsid", (unsigned)vc->id);
+        /* Match the status the real route returns on success so ok/err
+         * accounting and the n_repos bookkeeping behave identically: the
+         * form-POST routes redirect (303), everything else is 200. */
+        int redirect = (strcmp(path, "/login") == 0 ||
+                        strcmp(path, "/register") == 0 ||
+                        strcmp(path, "/repos/new") == 0);
+        return redirect ? 303 : 200;
+    }
 
     if (yloop_write(vc->stream, hdr, (size_t)n) != (size_t)n) return -1;
     if (body_len && yloop_write(vc->stream, body, body_len) != body_len) return -1;
@@ -398,17 +425,6 @@ static int scenario_step(struct vconn *vc, long counter)
         st = http_try(vc, "GET", "/repos", NULL, cookie, "", 0, NULL, 0);
         return st == 200;
     }
-    case SCENARIO_STORE_SET:
-    case SCENARIO_SHARD_SET: {
-        const char *p = (vc->cfg->scenario == SCENARIO_SHARD_SET)
-                            ? "sharded_storage.db.set" : "storage.db.set";
-        char body[160];
-        int bn = snprintf(body, sizeof(body),
-            "{\"path\":\"%s\",\"args\":[\"bench\",\"k%d_%ld\",%ld]}",
-            p, vc->id, counter, counter);
-        return http_try(vc, "POST", "/_rpc", "application/json", vc->sid,
-                        body, (size_t)bn, NULL, 0) == 200;
-    }
     case SCENARIO_MIXED: {
         enum mixed_op op = pick_op(&vc->rng);
         enum mixed_op did = op;
@@ -429,13 +445,6 @@ static int scenario_step(struct vconn *vc, long counter)
         case OP_READ_LIST: {
             int bn = snprintf(body, sizeof(body),
                 "{\"path\":\"git_repo.store.list_for_owner\",\"args\":[%u]}", vc->uid);
-            st = http_try(vc, "POST", "/_rpc", "application/json", vc->sid, body, (size_t)bn, NULL, 0);
-            break;
-        }
-        case OP_KV_SET: {
-            int bn = snprintf(body, sizeof(body),
-                "{\"path\":\"sharded_storage.db.set\",\"args\":[\"bench\",\"w%d_%ld\",%ld]}",
-                vc->id, counter, counter);
             st = http_try(vc, "POST", "/_rpc", "application/json", vc->sid, body, (size_t)bn, NULL, 0);
             break;
         }
@@ -684,8 +693,6 @@ static enum scenario_id scenario_lookup(const char *name, const char **canonical
         {"repo_create", SCENARIO_REPO_CREATE},
         {"register",    SCENARIO_REGISTER},
         {"full",        SCENARIO_FULL},
-        {"store_set",   SCENARIO_STORE_SET},
-        {"shard_set",   SCENARIO_SHARD_SET},
         {"mixed",       SCENARIO_MIXED},
     };
     for (size_t i = 0; i < sizeof(SCENARIOS) / sizeof(SCENARIOS[0]); ++i)
@@ -708,9 +715,12 @@ static void usage(const char *prog)
         "  --coros-per-thread K  coroutines per thread (overrides --connections; total = M×K)\n"
         "  --duration SECS       run for this many seconds (default 10)\n"
         "  --requests R          fixed requests PER CONNECTION (overrides --duration)\n"
-        "  --scenario NAME       rpc_count|login|repo_create|register|full|store_set|shard_set|mixed\n"
+        "  --scenario NAME       rpc_count|login|repo_create|register|full|mixed\n"
         "  --seed-users N        mixed: pre-create N account records (stage 1)\n"
         "  --repos-per-worker K  mixed: cap repos a connection creates (default 8)\n"
+        "  --emulate             run the client machinery but make NO real calls\n"
+        "                        (synthetic success responses) — measures how far\n"
+        "                        the harness itself scales, not the gateway\n"
         "\n"
         "  Concurrency is M threads × K coroutines — C connections cost M threads, not C.\n",
         prog);
@@ -748,6 +758,7 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--requests") && next) { cfg.requests_per_conn = atol(next); i++; }
         else if (!strcmp(a, "--seed-users") && next) { cfg.seed_users = atol(next); i++; }
         else if (!strcmp(a, "--repos-per-worker") && next) { cfg.repos_per_conn = atoi(next); i++; }
+        else if (!strcmp(a, "--emulate")) { cfg.emulate = 1; }
         else if (!strcmp(a, "--scenario") && next) {
             const char *canon = NULL;
             cfg.scenario = scenario_lookup(next, &canon);
@@ -789,6 +800,9 @@ int main(int argc, char **argv)
         fprintf(stderr, "requests=%ld/conn\n", cfg.requests_per_conn);
     else
         fprintf(stderr, "duration=%.1fs\n", cfg.duration_secs);
+    if (cfg.emulate)
+        fprintf(stderr, "*** EMULATE MODE: no network, synthetic responses — "
+                        "this measures the HARNESS's own ceiling, NOT the gateway ***\n");
 
     /* ---- stage 1: population seed (mixed only) ----------------------- */
     uint64_t seed_ok_total = 0, seed_err_total = 0;
@@ -840,7 +854,8 @@ int main(int argc, char **argv)
     double thr = wall_s > 0 ? (double)total_req / wall_s : 0.0;
 
     printf("\n");
-    printf("scenario       : %s\n", cfg.scenario_name);
+    printf("scenario       : %s%s\n", cfg.scenario_name,
+           cfg.emulate ? "  [EMULATE — harness-only ceiling, no real calls]" : "");
     printf("concurrency    : %d threads × ~%d coroutines = %d connections\n",
            cfg.threads, (cfg.total + cfg.threads - 1) / cfg.threads, cfg.total);
     if (cfg.scenario == SCENARIO_MIXED && cfg.seed_users > 0) {

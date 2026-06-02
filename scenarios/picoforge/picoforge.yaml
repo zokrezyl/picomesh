@@ -56,8 +56,20 @@ mesh:
     # Listed first so it binds before the services that emit to it.
     trace_collector:
       port: 8220
+      # Multi-worker like the gateway: N threads, each its own loop +
+      # coroutine scheduler, all accept()ing on :8220 via SO_REUSEPORT and
+      # multiplexing keep-alive connections. The receiver must drain ~5
+      # spans per gateway request, so it needs real parallelism — a single
+      # worker backpressures the request path (gh#13). The in-memory store
+      # is mutex-guarded, so multi-worker is safe (gh#13 tracks sharding the
+      # store so it scales past the single lock).
+      workers: 16
       plugins: [trace_collector]
       config:
+        # In-memory store retention (read by the plugin → ytelemetry_store_init).
+        telemetry:
+          max_spans: 200000
+          max_age_seconds: 3600
         remotes: []
 
     portalloc:
@@ -257,6 +269,27 @@ mesh:
       plugins: []
       config:
         yhttp:
+        # gh#14: per-node Linux perf_event_open(2) profiling, driven from
+        # this service's own config — no separate `perf record` wrapper.
+        # Flip `enabled: true` to have each gateway worker open the listed
+        # counters against its own thread and log periodic deltas
+        # (`perf[gateway wN] +<interval>ms: cycles=… instructions=…`). The
+        # gateway is the production hot path, so it's the most useful target.
+        # Scope is the worker's own loop thread; libgit2 / DB work offloaded
+        # to the thread pool is not counted. Needs perf access on the host
+        # (kernel.perf_event_paranoid / CAP_PERFMON); a refusal is logged
+        # loudly and the service keeps serving. See docs/perf.md.
+        perf:
+          enabled: false
+          mode: counters
+          events:
+            - cycles
+            - instructions
+            - cache-references
+            - cache-misses
+            - branch-misses
+          interval_ms: 1000
+          log: true
         remotes:
           - service: sharded_storage
             port: 8212

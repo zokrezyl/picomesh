@@ -97,6 +97,22 @@ struct picomesh_void_result picomesh_engine_run_workers(struct picomesh_engine *
 /* Ask the engine to wind down — best effort across all worker loops. */
 void picomesh_engine_stop(struct picomesh_engine *e);
 
+/* Start config-driven perf profiling (gh#14) for the CURRENT worker.
+ * Reads the projected `perf` config subtree (service projection has
+ * already promoted `mesh.services.<name>.config.perf` onto the root) and,
+ * when `perf.enabled` is true, opens the configured Linux perf counters
+ * against this worker's own thread, sampling them on this worker's loop.
+ * `service` (may be NULL) only tags the log lines.
+ *
+ * Must run ON the worker thread (typically from the per-worker setup hook),
+ * before the worker's loop starts. Returns Ok when profiling is off or was
+ * opened successfully; returns an error when the config asked for profiling
+ * but the kernel refused it (permission / unknown event) — the caller
+ * decides whether that is fatal. The opened sampler is owned by the worker
+ * and torn down at engine destroy. */
+struct picomesh_void_result picomesh_engine_perf_start(struct picomesh_engine *e,
+                                                       const char *service);
+
 /* Borrow the yloop for frontend code (yloop_listen_tcp etc.). Returns
  * the CURRENT worker thread's loop (worker 0 on the main/bootstrap
  * thread). The engine retains ownership; do not destroy. */

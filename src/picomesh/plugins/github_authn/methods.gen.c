@@ -42,21 +42,23 @@ struct picomesh_int_result github_authn_store_set_credentials(struct ctx * ctx, 
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "github_authn_store_set_credentials: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int, "github_authn_store_set_credentials: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "github_authn_store_set_credentials: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "github_authn_store_set_credentials: pack overflow"); return PICOMESH_ERR(picomesh_int, "github_authn_store_set_credentials: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(client_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int, "github_authn_store_set_credentials: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "github_authn_store_set_credentials: pack overflow"); return PICOMESH_ERR(picomesh_int, "github_authn_store_set_credentials: pack overflow"); }
         memcpy(_a + _off, &client_id, sizeof(client_id)); _off += sizeof(client_id);
         if (_off + sizeof(secret_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int, "github_authn_store_set_credentials: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "github_authn_store_set_credentials: pack overflow"); return PICOMESH_ERR(picomesh_int, "github_authn_store_set_credentials: pack overflow"); }
         memcpy(_a + _off, &secret_id, sizeof(secret_id)); _off += sizeof(secret_id);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -115,21 +117,23 @@ struct picomesh_int_result github_authn_store_register_code(struct ctx * ctx, st
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "github_authn_store_register_code: header serialize overflow");
                 return PICOMESH_ERR(picomesh_int, "github_authn_store_register_code: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_int, "github_authn_store_register_code: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "github_authn_store_register_code: pack overflow"); return PICOMESH_ERR(picomesh_int, "github_authn_store_register_code: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(code) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int, "github_authn_store_register_code: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "github_authn_store_register_code: pack overflow"); return PICOMESH_ERR(picomesh_int, "github_authn_store_register_code: pack overflow"); }
         memcpy(_a + _off, &code, sizeof(code)); _off += sizeof(code);
         if (_off + sizeof(user_id) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_int, "github_authn_store_register_code: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "github_authn_store_register_code: pack overflow"); return PICOMESH_ERR(picomesh_int, "github_authn_store_register_code: pack overflow"); }
         memcpy(_a + _off, &user_id, sizeof(user_id)); _off += sizeof(user_id);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -188,18 +192,20 @@ struct picomesh_uint32_result github_authn_store_resolve(struct ctx * ctx, struc
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "github_authn_store_resolve: header serialize overflow");
                 return PICOMESH_ERR(picomesh_uint32, "github_authn_store_resolve: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_uint32, "github_authn_store_resolve: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "github_authn_store_resolve: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "github_authn_store_resolve: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         if (_off + sizeof(code) > sizeof(_a))
-            return PICOMESH_ERR(picomesh_uint32, "github_authn_store_resolve: pack overflow");
+            { ytelemetry_span_end(&_tsp, 0, "github_authn_store_resolve: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "github_authn_store_resolve: pack overflow"); }
         memcpy(_a + _off, &code, sizeof(code)); _off += sizeof(code);
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -258,14 +264,16 @@ struct picomesh_size_result github_authn_store_count_codes(struct ctx * ctx, str
          * this client span's id as parent_span_id across the serialize. */
         {
             size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
-            if (_hn == 0)
+            if (_hn == 0) {
+                ytelemetry_span_end(&_tsp, 0, "github_authn_store_count_codes: header serialize overflow");
                 return PICOMESH_ERR(picomesh_size, "github_authn_store_count_codes: header serialize overflow");
+            }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
             if (_off + 8 > sizeof(_a))
-                return PICOMESH_ERR(picomesh_size, "github_authn_store_count_codes: pack overflow");
+                { ytelemetry_span_end(&_tsp, 0, "github_authn_store_count_codes: pack overflow"); return PICOMESH_ERR(picomesh_size, "github_authn_store_count_codes: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         uint8_t _wbuf[261];
