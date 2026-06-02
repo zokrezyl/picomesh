@@ -396,16 +396,24 @@ struct sleep_state {
     struct picomesh_coro *coro;
 };
 
+static void on_sleep_closed(uv_handle_t *handle)
+{
+    free(handle->data); /* the heap sleep_state, once uv is fully done with the timer */
+}
+
 static void on_sleep_timer(uv_timer_t *handle)
 {
     struct sleep_state *ss = handle->data;
+    struct picomesh_coro *coro = ss->coro;
     uv_timer_stop(handle);
-    uv_close((uv_handle_t *)handle, NULL);
-    /* The timer handle is embedded in ss; closing it doesn't free ss
-     * — yloop_sleep_ms owns that on the coroutine's stack and reads
-     * it after resume returns. We resume the coro and the rest
-     * unwinds naturally. */
-    picomesh_coro_resume(ss->coro);
+    /* Close the handle and free its state in the close callback — never
+     * inline, never on the caller's stack. A coro that sleeps in a tight
+     * loop pops the yloop_sleep_ms frame and reuses that stack the instant
+     * it resumes; a stack-embedded timer would still sit in uv's
+     * closing-handles queue and uv_run would dereference freed stack. Heap
+     * + close-cb keeps the handle alive until uv has finished with it. */
+    uv_close((uv_handle_t *)handle, on_sleep_closed);
+    picomesh_coro_resume(coro);
 }
 
 void yloop_sleep_ms(struct yloop *l, unsigned int ms)
@@ -416,11 +424,12 @@ void yloop_sleep_ms(struct yloop *l, unsigned int ms)
         ywarn("yloop_sleep_ms: not in a coroutine — refusing to block");
         return;
     }
-    struct sleep_state ss = {0};
-    ss.coro = self;
-    uv_timer_init(&l->loop, &ss.timer);
-    ss.timer.data = &ss;
-    uv_timer_start(&ss.timer, on_sleep_timer, ms, 0);
+    struct sleep_state *ss = calloc(1, sizeof(*ss));
+    if (!ss) return;
+    ss->coro = self;
+    uv_timer_init(&l->loop, &ss->timer);
+    ss->timer.data = ss;
+    uv_timer_start(&ss->timer, on_sleep_timer, ms, 0);
     picomesh_coro_yield();
 }
 

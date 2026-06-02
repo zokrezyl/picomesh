@@ -1,0 +1,67 @@
+# picoforge — COLLOCATED all-in-one config for the webasm / in-browser
+# deployment.
+#
+# The server scenario (picoforge.yaml) runs each service as its own process
+# and the gateway talks to them over yrpc/TCP. That topology is great on
+# real hardware but brutal inside the RISC-V emulator, where a dozen
+# processes trading loopback-TCP through the emulated NIC dominates the
+# cost.
+#
+# picomesh was designed so the SAME plugins can be split across processes OR
+# folded into one. This config takes the second path: a SINGLE process
+# ("app") loads the gateway frontend PLUS every backend service PLUS the
+# storage, and they call each other IN-PROCESS — no yrpc, no TCP, no
+# extra processes. Launch it directly (no mesh bootstrap):
+#
+#   picomesh --config-file picoforge-webasm.yaml --name app \
+#         --frontend yhttp --host 0.0.0.0 --port 8080 serve
+#
+# `--name app` projects `mesh.services.app.config` as this process's
+# config root. There is NO `remotes:` block, so every `service_ctx()`
+# resolves to a local in-process object (rpc_object_acquire's no-peer
+# path). All plugin classes are registered process-wide at startup, so a
+# single process can host them all.
+
+name: app
+
+mesh:
+  services:
+    app:
+      # The one and only process. 0.0.0.0 so the in-browser slirp bridge
+      # (and the qemu hostfwd) can reach it.
+      host: 0.0.0.0
+      port: 8080
+      frontend: yhttp
+      # Every service in ONE process. The list is documentation — all
+      # plugin classes are linked and registered regardless; what makes
+      # them LOCAL is the absence of a `remotes:` block below.
+      plugins:
+        - portalloc
+        - sharded_storage
+        - session
+        - accounts
+        - password_authn
+        - github_authn
+        - token_issuer
+        - issues
+        - git_repo
+        - git_pipeline
+        - personal_access_tokens
+      config:
+        yhttp:
+          static_dir: assets/picoforge/static
+          # This process IS the web-facing gateway even though `session`
+          # has no remote peer (it's local here). Without this flag the
+          # frontend would assume it's a headless backend and serve JSON
+          # only. See yhttp_frontend_try().
+          serve_app: true
+        sharded_storage:
+          # One shard is plenty for the demo; collocation already removed
+          # the per-call process hop, which was the real cost.
+          shards: 1
+          path: /tmp/picoforge/sharded
+        git_repo:
+          repos_dir: /tmp/picoforge/repos
+        # NO `remotes:` — every backend is collocated and resolved
+        # in-process. This single key is the whole difference between the
+        # 12-process mesh and the 1-process all-in-one.

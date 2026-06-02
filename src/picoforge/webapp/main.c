@@ -14,8 +14,8 @@
  * Usage:
  *   picoforge-webapp --gateway-url http://127.0.0.1:8080 \
  *                  --host 0.0.0.0 --port 8081 \
- *                  [--templates scenarios/picoforge/webapp/templates] \
- *                  [--static scenarios/picoforge/webapp/static]
+ *                  [--templates assets/picoforge/templates] \
+ *                  [--static assets/picoforge/static]
  */
 
 #include <picomesh/ycore/result.h>

@@ -63,7 +63,7 @@ perf-picoforge: build-desktop-release
 ##                          verbatim by build-yemu-release as the in-VM
 ##                          /opt/picoforge payload.
 build-deploy: build-desktop-release
-	bash scenarios/picoforge/deploy/stage.sh
+	bash tools/picoforge/deploy/stage.sh
 
 ## build-yemu-release       bake the riscv64 VM rootfs at
 ##                          build-yemu-release/ (kernel + opensbi +
@@ -75,7 +75,7 @@ build-deploy: build-desktop-release
 ##   - make build-linux-riscv64-release   (cross-compiled picomesh binary)
 ##   - make build-deploy                  (host deploy tree)
 build-yemu-release: build-linux-riscv64-release build-deploy
-	bash scenarios/picoforge/yemu/build-image.sh
+	bash tools/picoforge/yemu/build-image.sh
 
 ## build-webasm-yemu-release  compile tinyemu to wasm (picomesh-yemu.{js,wasm})
 ##                            for the in-browser demo at
@@ -87,7 +87,7 @@ build-yemu-release: build-linux-riscv64-release build-deploy
 ##   - make build-yemu-release          (VM rootfs + kernel)
 ##   - Emscripten SDK installed at $$HOME/.local/emsdk (or EMSDK=…)
 build-webasm-yemu-release:
-	bash scenarios/picoforge/yemu/web/build.sh
+	bash tools/picoforge/yemu/web/build.sh
 
 ## build-linux-riscv64-release  cross-compile picomesh + picoforge-webapp for
 ##                              riscv64 (static, for the yemu demo VM

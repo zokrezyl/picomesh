@@ -203,7 +203,7 @@ static void render_head(struct buf *b, const char *title,
      * HTML therefore inlines the stylesheet instead of linking a
      * gateway-served /style.css. Emitted via buf_puts because the CSS
      * contains '%' (e.g. width: 35%) which buf_printf would misparse.
-     * The canonical copy lives in scenarios/picoforge/frontend/static/
+     * The canonical copy lives in assets/picoforge/static/
      * style.css (served by the picoforge-webapp sidecar); this inline
      * copy is generated from it. */
     buf_puts(b, "<style>\n"

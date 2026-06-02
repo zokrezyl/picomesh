@@ -1,0 +1,315 @@
+# picoforge — mirror of yaapp's scenarios/git-yaapp/yaapp.yaml.
+#
+# A "mesh" parent process spawns each backend as a child picomesh serving
+# JSON-RPC over yttp on the listed port. Real portalloc integration
+# would assign ports dynamically; for today every service has an
+# explicit `port:` so the mesh can spawn deterministically.
+#
+# To bring it up:
+#
+#   make build-desktop-release
+#   ./tools/picoforge/mesh-up.sh
+#
+# The script connects to the parent's control yttp, calls
+# `mesh_store_reconcile_from_config`, then probes a few children.
+
+name: mesh
+
+# Plugins the PARENT (control) process itself activates. Registration is
+# activation: only listed plugins enter this process's registry and become
+# reachable through its frontend. The parent only needs `mesh` — it serves
+# mesh_store on the control port (/create + reconcile_from_config) to spawn
+# the children. Each child is spawned with `--name <service>` and activates
+# its own `mesh.services.<service>.plugins` list. (The driver reads this
+# top-level `plugins:` because the parent runs with no `--name`.)
+plugins:
+  - mesh
+  # The parent also activates `storage` for its OWN bookkeeping: mesh_store
+  # records the pids of the children it spawns (and its own pid) here so it
+  # can reap them on shutdown, and so the stack can be stopped by signalling
+  # the recorded parent pid — never by pkill. Private parent state, separate
+  # from the `sharded_storage` backend the app uses.
+  - storage
+
+storage:
+  backend: sqlite
+  db_path: /tmp/picoforge/mesh-state.db
+
+# Parent process control port — clients (including the smoke script)
+# talk to the mesh here.
+control:
+  host: 127.0.0.1
+  port: 8800
+
+mesh:
+  auto_reconcile: true
+  services:
+
+    # The trace collector (issue #11): an ordinary yrpc backend plugin that
+    # RECEIVES spans on its exposed `store_ingest` method and answers the
+    # query methods (store_get_trace / store_services / store_operations /
+    # store_latency / store_errors). Every other service lists it as a remote
+    # and ships finished spans to it over its OWN per-worker connection,
+    # fire-and-forget (see ytelemetry). State is an in-memory bounded store —
+    # no durable storage in v1. Reached for queries like any backend, through
+    # the gateway's /_rpc + /_describe (service-driven, no bespoke routes).
+    # Listed first so it binds before the services that emit to it.
+    trace_collector:
+      port: 8220
+      # Multi-worker like the gateway: N threads, each its own loop +
+      # coroutine scheduler, all accept()ing on :8220 via SO_REUSEPORT and
+      # multiplexing keep-alive connections. The receiver must drain ~5
+      # spans per gateway request, so it needs real parallelism — a single
+      # worker backpressures the request path (gh#13). The in-memory store
+      # is mutex-guarded, so multi-worker is safe (gh#13 tracks sharding the
+      # store so it scales past the single lock).
+      workers: 16
+      plugins: [trace_collector]
+      config:
+        # In-memory store retention (read by the plugin → ytelemetry_store_init).
+        telemetry:
+          max_spans: 200000
+          max_age_seconds: 3600
+        remotes: []
+
+    portalloc:
+      port: 8201
+      plugins: [portalloc]
+      config:
+        portalloc:
+          port_range: "8201-8299"
+
+    # Storage = write-parallel sharded KV store (N mdbx shard envs keyed
+    # by hash(ns·key); one writer + fsync stream per shard). The plain
+    # single-env `storage` plugin still exists in the tree but is no
+    # longer run as a mesh service — every backend uses this.
+    sharded_storage:
+      port: 8212
+      # gh#6: in-process multithreaded workers. Set `workers: N` to run
+      # this service as N worker threads in ONE process — each with its
+      # own libuv event loop AND its own libco coroutine scheduler, all
+      # accept()ing on the same port via SO_REUSEPORT. The RPC handle
+      # table is per-worker (a connection is pinned to one worker for its
+      # lifetime); the class registry is shared read-only. Omitted ⇒ 1
+      # (single-threaded). Requires libco built with -DLIBCO_MP.
+      # The shared source of truth for every backend's state — hit hardest,
+      # so it gets the most workers.
+      workers: 8
+      plugins: [sharded_storage]
+      config:
+        sharded_storage:
+          shards: 8
+          path: /tmp/picoforge/sharded
+        # sharded_storage calls no backend, but its skels emit server spans,
+        # so it still needs a connection to ship them to the collector.
+        remotes:
+          - service: trace_collector
+            port: 8220
+
+    session:
+      port: 8203
+      # Hit on EVERY authenticated /_rpc (token→uid). State is in
+      # sharded_storage (no in-memory bookkeeping); start mints a random
+      # 128-bit token (no shared counter) and lookup is a single read, so
+      # there is no read-modify-write to race across workers.
+      workers: 8
+      plugins: [session]
+      config:
+        remotes:
+          - service: sharded_storage
+            port: 8212
+          - service: trace_collector
+            port: 8220
+          - service: token_issuer
+            port: 8207
+
+    accounts:
+      port: 8204
+      plugins: [accounts]
+      config:
+        remotes:
+          - service: sharded_storage
+            port: 8212
+          - service: trace_collector
+            port: 8220
+
+    password_authn:
+      port: 8205
+      plugins: [password_authn]
+      config:
+        remotes:
+          - service: sharded_storage
+            port: 8212
+          - service: trace_collector
+            port: 8220
+          - service: accounts
+            port: 8204
+
+    github_authn:
+      port: 8206
+      plugins: [github_authn]
+      config:
+        remotes:
+          - service: sharded_storage
+            port: 8212
+          - service: trace_collector
+            port: 8220
+
+    token_issuer:
+      port: 8207
+      plugins: [token_issuer]
+      config:
+        remotes:
+          - service: sharded_storage
+            port: 8212
+          - service: trace_collector
+            port: 8220
+          - service: accounts
+            port: 8204
+
+    issues:
+      port: 8208
+      plugins: [issues]
+      config:
+        remotes:
+          - service: sharded_storage
+            port: 8212
+          - service: trace_collector
+            port: 8220
+
+    git_repo:
+      port: 8209
+      # Metadata is in sharded_storage (the bare repos on disk are the content
+      # source of truth). Creation elects one writer via storage put_if_absent
+      # and bumps the count / owner index with atomic db_incr + compare-and-set,
+      # so concurrent creates can't double-count or lose index entries. Fewer
+      # workers than the storage/session tier — repo ops are heavier (libgit2).
+      workers: 4
+      plugins: [git_repo]
+      config:
+        git_repo:
+          # Per-user parent dir layout: each repo lives at
+          # <repos_dir>/<owner_name>/<repo_name>.git (bare).
+          # Defaults to /tmp/picoforge/repos if omitted.
+          repos_dir: /tmp/picoforge/repos
+        remotes:
+          - service: sharded_storage
+            port: 8212
+          - service: trace_collector
+            port: 8220
+
+    git_pipeline:
+      port: 8210
+      plugins: [git_pipeline]
+      config:
+        remotes:
+          - service: sharded_storage
+            port: 8212
+          - service: trace_collector
+            port: 8220
+
+    personal_access_tokens:
+      port: 8211
+      plugins: [personal_access_tokens]
+      config:
+        remotes:
+          - service: sharded_storage
+            port: 8212
+          - service: trace_collector
+            port: 8220
+
+    # The gateway. Per CLAUDE.md: this is the ONE service that
+    # listens yhttp — it's the auth boundary. External clients
+    # (browser sidecar, MCP, CLI, tests) hit it; the gateway
+    # translates opaque tokens to internal JWTs and forwards over
+    # yrpc.
+    #
+    # Public API (yaapp-compatible, src/picomesh/frontends/yhttp/):
+    #   POST /_rpc                {"path":"service.class.method","args":[]}
+    #   GET|POST /_describe                       — list backend services
+    #   GET|POST /<service.class>/_describe[_tree] — list a class's methods
+    # The legacy /create, /invoke and /describe?class= helpers are
+    # retired on this port (they answer 410 → use /_rpc). The binary
+    # /_rpc?op=&id= form remains internal gateway↔backend transport.
+    #
+    # FRONTEND DIRECTION (resolved): the browser-facing HTML is the
+    # standalone `picoforge-webapp` sidecar (src/picoforge/webapp/), NOT a
+    # combined gateway. The sidecar links no plugins and reaches every
+    # backend only through this gateway's /_rpc — see mesh-up.sh, which
+    # launches it on :8081. The HTML routes still compiled into the
+    # gateway (src/picomesh/frontends/yhttp/frontend.c) are LEGACY, kept
+    # only until the sidecar renders the full page set.
+    #
+    # gh#5: the gateway serves NO static files. Its legacy HTML inlines
+    # the CSS it needs; the sidecar serves browser assets under /static.
+    #
+    # The `frontend:` key below is the TRANSPORT selector (yhttp |
+    # yrpc | yttp), NOT a service name.
+    gateway:
+      port: 8080
+      # 0.0.0.0 so the gateway is reachable from outside the host the
+      # mesh runs on — required for the qemu hostfwd and the wasm/slirp
+      # bridge inside the in-browser VM. Backends stay 127.0.0.1 (their
+      # default) per the CLAUDE.md invariant: only the gateway is the
+      # external auth boundary; everything else is mesh-internal.
+      host: 0.0.0.0
+      frontend: yhttp
+      # gh#6: the gateway is the production hot path (the single auth
+      # boundary every external request crosses) and was the measured
+      # bottleneck — one process pegged at 100% of a single core. Set
+      # `workers: N` to run it as N worker threads in ONE process: each
+      # holds its own loop + coroutine scheduler and its own warm yrpc
+      # connection set to every backend, all sharing this port via
+      # SO_REUSEPORT. Omitted ⇒ 1. Requires libco built with -DLIBCO_MP.
+      # Safe to scale now that every stateful backend (git_repo, issues,
+      # git_pipeline, session, accounts, …) keeps its state in sharded_storage
+      # rather than per-object memory — each gateway worker's own backend
+      # objects all read/write the same shared source of truth.
+      workers: 8
+      plugins: []
+      config:
+        yhttp:
+        # gh#14: per-node Linux perf_event_open(2) profiling, driven from
+        # this service's own config — no separate `perf record` wrapper.
+        # Flip `enabled: true` to have each gateway worker open the listed
+        # counters against its own thread and log periodic deltas
+        # (`perf[gateway wN] +<interval>ms: cycles=… instructions=…`). The
+        # gateway is the production hot path, so it's the most useful target.
+        # Scope is the worker's own loop thread; libgit2 / DB work offloaded
+        # to the thread pool is not counted. Needs perf access on the host
+        # (kernel.perf_event_paranoid / CAP_PERFMON); a refusal is logged
+        # loudly and the service keeps serving. See docs/perf.md.
+        perf:
+          enabled: false
+          mode: counters
+          events:
+            - cycles
+            - instructions
+            - cache-references
+            - cache-misses
+            - branch-misses
+          interval_ms: 1000
+          log: true
+        remotes:
+          - service: sharded_storage
+            port: 8212
+          - service: trace_collector
+            port: 8220
+          - service: session
+            port: 8203
+          - service: accounts
+            port: 8204
+          - service: password_authn
+            port: 8205
+          - service: github_authn
+            port: 8206
+          - service: token_issuer
+            port: 8207
+          - service: issues
+            port: 8208
+          - service: git_repo
+            port: 8209
+          - service: git_pipeline
+            port: 8210
+          - service: personal_access_tokens
+            port: 8211

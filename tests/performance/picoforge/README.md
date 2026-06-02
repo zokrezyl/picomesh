@@ -28,7 +28,7 @@ make build-desktop-release            # produces build-desktop-release/picoforge
 Bring the mesh up, then point the tool at it:
 
 ```sh
-./scenarios/picoforge/mesh-up.sh &    # gateway on :8080
+./tools/picoforge/mesh-up.sh &    # gateway on :8080
 ./build-desktop-release/picoforge-perf --scenario rpc_count --connections 16 --duration 10
 ```
 

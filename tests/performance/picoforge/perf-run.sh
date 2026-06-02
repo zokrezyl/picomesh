@@ -19,7 +19,7 @@ cd "$(dirname "$0")/../../.."          # repo root
 
 PICOMESH=./build-desktop-release/picomesh
 PERF=./build-desktop-release/picoforge-perf
-SRC_CONFIG=scenarios/picoforge/picoforge.yaml
+SRC_CONFIG=assets/picoforge/config/picoforge.yaml
 CONFIG=/tmp/picoforge-perf.yaml
 DATADIR=/tmp/picoforge-perf
 CTRL=9800
