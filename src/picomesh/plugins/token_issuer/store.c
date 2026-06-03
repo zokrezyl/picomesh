@@ -1,35 +1,30 @@
 /* token_issuer — the mesh's JWT issuer (issue #19).
  *
- *   login(method, uid, username, pw_hash) → JSON {access_jwt, refresh_token,
- *                                            uid, username, groups}
+ *   login(method, uid, username, pw_hash) → JSON {access_jwt, refresh_token, …}
  *   refresh(refresh_token)                → JSON {access_jwt, refresh_token, …}
- *   mint(uid, username, groups_csv, ttl)  → access JWT string (PAT path)
+ *   mint(uid, username, groups_csv, ttl)  → access JWT string (PAT/runner path)
  *   count_active                          → number of live refresh tokens
  *
- * Login delegates credential verification to the named authn plugin
- * (`<method>_authn.authenticate`) — authn plugins verify credentials, they do
- * NOT mint framework tokens — then loads the user's groups from `accounts` and
- * mints a short-lived HS256 access JWT plus a long-lived opaque refresh token.
- * The signing secret comes from configured key material
- * (`picomesh_security_jwt_secret`), shared across the trusted mesh.
+ * Login delegates credential verification to `<method>_authn`, loads groups
+ * from `accounts`, and mints a short-lived HS256 access JWT plus a long-lived
+ * opaque refresh token. Refresh tokens are ROWS in the `refresh_tokens` table
+ * in `relational_storage` (one row per token, real columns) — not prefixed KV
+ * keys. The token_issuer plugin OWNS this table and creates it itself.
  *
- * Refresh tokens are opaque bearer secrets persisted in the shared
- * `sharded_storage` service (context `token_issuer`):
- *   count            → live refresh-token count
- *   refresh:<token>  → "<uid>\t<username>"
+ *   refresh_tokens(token PK, uid, username, created_at)
  *
  * Access JWTs are stateless (verified by signature + expiry); they are not
- * stored. A refresh/login updates the groups claim, so role changes take
+ * stored. A refresh/login refreshes the groups claim, so role changes take
  * effect on the next exchange. */
 
 #include <picomesh/ycore/result.h>
 #include <picomesh/ycore/ytrace.h>
 #include <picomesh/yclass/class.h>
 #include <picomesh/yengine/engine.h>
-#include <picomesh/yjson/yjson.h>
+#include <picomesh/yplatform/time.h>
 #include <picomesh/ysecurity/jwt.h>
 #include <picomesh/ysecurity/secret.h>
-#include <picomesh/plugin/sharded_storage/sharded_storage.h>
+#include <picomesh/plugin/relational_storage/relational_sql.h>
 #include <picomesh/plugin/password_authn/password_authn.h>
 #include <picomesh/plugin/accounts/accounts.h>
 
@@ -40,45 +35,25 @@
 #include <string.h>
 #include <sys/random.h>
 
-#define TI_CTX "token_issuer"
+#define TI_DDL \
+    "CREATE TABLE IF NOT EXISTS refresh_tokens(" \
+    "token TEXT PRIMARY KEY, uid INTEGER NOT NULL, username TEXT, " \
+    "created_at INTEGER NOT NULL DEFAULT 0)"
 
-/* No in-memory state — every op delegates to storage / peers. */
 struct PICOMESH_CLASS_ANNOTATE("class@token_issuer:token_issuer") token_issuer_token_issuer_data {
-    char _unused;
+    int schema_ensured; /* per-worker: set once this worker has created the table */
 };
 
-struct ti_storage {
-    struct ctx c;
-    struct object *obj;
-};
-PICOMESH_RESULT_DECLARE(ti_storage, struct ti_storage);
-
-static struct ti_storage_result ti_open(void)
+static struct token_issuer_token_issuer_data *ti(struct object *obj)
 {
-    struct picomesh_engine *e = picomesh_active_engine();
-    if (!e) return PICOMESH_ERR(ti_storage, "token_issuer: no active engine");
-    struct ti_storage h = {.c = picomesh_engine_service_ctx(e, "sharded_storage")};
-    struct object_ptr_result o = sharded_storage_db_create(&h.c);
-    if (PICOMESH_IS_ERR(o)) return PICOMESH_ERR(ti_storage, "token_issuer: storage_db_create failed", o);
-    h.obj = o.value;
-    return PICOMESH_OK(ti_storage, h);
+    return (struct token_issuer_token_issuer_data *)((char *)obj + sizeof(struct object));
 }
 
-/* Atomic counter bump — propagates a backend failure. */
-static struct picomesh_int64_result ti_incr(struct ti_storage *h, struct yheaders *hdrs, const char *key, int64_t delta)
+static struct picomesh_void_result ti_open(struct rel_handle *h, struct yheaders *hdrs, struct object *obj)
 {
-    struct picomesh_int64_result r = sharded_storage_db_incr(&h->c, h->obj, hdrs, TI_CTX, key, delta);
-    if (PICOMESH_IS_ERR(r)) return PICOMESH_ERR(picomesh_int64, "token_issuer: counter update failed", r);
-    return r;
-}
-
-static struct picomesh_int64_result ti_get(struct ti_storage *h, struct yheaders *hdrs, const char *key, int64_t fallback)
-{
-    struct picomesh_string_result r = sharded_storage_db_get(&h->c, h->obj, hdrs, TI_CTX, key);
-    if (PICOMESH_IS_ERR(r)) return PICOMESH_ERR(picomesh_int64, "token_issuer: storage read failed", r);
-    int64_t v = (r.value && r.value[0]) ? strtoll(r.value, NULL, 10) : fallback;
-    free(r.value);
-    return PICOMESH_OK(picomesh_int64, v);
+    struct picomesh_void_result o = rel_open(h);
+    if (PICOMESH_IS_ERR(o)) return PICOMESH_ERR(picomesh_void, "token_issuer: open relational_storage failed", o);
+    return rel_ensure_schema(h, hdrs, &ti(obj)->schema_ensured, TI_DDL);
 }
 
 /* Allocate an opaque 128-bit refresh token (hex). Fails closed if secure
@@ -89,10 +64,7 @@ static int alloc_refresh_token(char *out, size_t cap)
     size_t got = 0;
     while (got < sizeof(raw)) {
         ssize_t n = getrandom(raw + got, sizeof(raw) - got, 0);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            return 0;
-        }
+        if (n < 0) { if (errno == EINTR) continue; return 0; }
         got += (size_t)n;
     }
     static const char hex[] = "0123456789abcdef";
@@ -105,14 +77,6 @@ static int alloc_refresh_token(char *out, size_t cap)
     return 1;
 }
 
-/* Load this process's JWT signing secret (caller frees on success). */
-static struct picomesh_string_result ti_secret(void)
-{
-    return picomesh_security_jwt_secret(picomesh_active_engine());
-}
-
-/* Fetch a user's group memberships from the accounts service. Returns an
- * owned CSV string (possibly empty); never NULL on success. */
 static struct picomesh_string_result ti_load_groups(struct yheaders *hdrs, uint32_t uid)
 {
     struct picomesh_engine *e = picomesh_active_engine();
@@ -124,18 +88,16 @@ static struct picomesh_string_result ti_load_groups(struct yheaders *hdrs, uint3
     if (PICOMESH_IS_ERR(groups)) return PICOMESH_ERR(picomesh_string, "token_issuer: load groups failed", groups);
     if (!groups.value) {
         char *empty = strdup("");
-        if (!empty) return PICOMESH_ERR(picomesh_string, "token_issuer: out of memory");
-        return PICOMESH_OK(picomesh_string, empty);
+        return empty ? PICOMESH_OK(picomesh_string, empty) : PICOMESH_ERR(picomesh_string, "token_issuer: out of memory");
     }
     return groups;
 }
 
-/* Mint a signed access JWT for (uid, username, groups) with the given TTL.
- * Returns an owned token string. */
+/* Mint a signed access JWT for (uid, username, groups) with the given TTL. */
 static struct picomesh_string_result ti_mint_access(uint32_t uid, const char *username,
                                                     const char *groups_csv, int64_t ttl_seconds)
 {
-    struct picomesh_string_result sec = ti_secret();
+    struct picomesh_string_result sec = picomesh_security_jwt_secret(picomesh_active_engine());
     if (PICOMESH_IS_ERR(sec)) return PICOMESH_ERR(picomesh_string, "token_issuer: signing secret unavailable", sec);
     int64_t now = picomesh_security_now();
     char *claims = picomesh_jwt_build_claims("picomesh", uid, username, groups_csv, now, now + ttl_seconds);
@@ -147,8 +109,6 @@ static struct picomesh_string_result ti_mint_access(uint32_t uid, const char *us
     return PICOMESH_OK(picomesh_string, jwt);
 }
 
-/* Build the {access_jwt, refresh_token, uid, username, groups} JSON returned
- * by login/refresh. Consumes none of its inputs. */
 static struct picomesh_json_result ti_token_pair_json(const char *access_jwt, const char *refresh_token,
                                                       uint32_t uid, const char *username, const char *groups_csv)
 {
@@ -169,23 +129,26 @@ static struct picomesh_json_result ti_token_pair_json(const char *access_jwt, co
     return PICOMESH_OK(picomesh_json, out);
 }
 
-/* Mint a fresh opaque refresh token, persist it, and bump the live count. */
-static struct picomesh_string_result ti_issue_refresh(struct ti_storage *h, struct yheaders *hdrs,
+/* Mint a fresh opaque refresh token and persist it as a row. */
+static struct picomesh_string_result ti_issue_refresh(struct rel_handle *h, struct yheaders *hdrs,
                                                       uint32_t uid, const char *username)
 {
     char token[40];
     if (!alloc_refresh_token(token, sizeof(token)))
         return PICOMESH_ERR(picomesh_string, "token_issuer: secure random unavailable");
-    char key[64], value[128];
-    snprintf(key, sizeof(key), "refresh:%s", token);
-    snprintf(value, sizeof(value), "%u\t%s", uid, username ? username : "");
-    struct picomesh_int_result w = sharded_storage_db_set(&h->c, h->obj, hdrs, TI_CTX, key, value);
-    if (PICOMESH_IS_ERR(w)) return PICOMESH_ERR(picomesh_string, "token_issuer: persist refresh failed", w);
-    struct picomesh_int64_result cc = ti_incr(h, hdrs, "count", 1);
-    if (PICOMESH_IS_ERR(cc)) return PICOMESH_ERR(picomesh_string, "token_issuer: bump count failed", cc);
+    struct yjson_writer *aw = yjson_writer_new();
+    yjson_writer_begin_array(aw);
+    yjson_writer_string(aw, token);
+    yjson_writer_int(aw, (int64_t)uid);
+    yjson_writer_string(aw, username ? username : "");
+    yjson_writer_int(aw, picomesh_yplatform_time_wall_ms() / 1000);
+    char *args = rel_args_take(aw);
+    int changes = rel_exec_changes(h, hdrs,
+        "INSERT INTO refresh_tokens(token,uid,username,created_at) VALUES(?,?,?,?)", args);
+    free(args);
+    if (changes < 1) return PICOMESH_ERR(picomesh_string, "token_issuer: persist refresh failed");
     char *out = strdup(token);
-    if (!out) return PICOMESH_ERR(picomesh_string, "token_issuer: out of memory");
-    return PICOMESH_OK(picomesh_string, out);
+    return out ? PICOMESH_OK(picomesh_string, out) : PICOMESH_ERR(picomesh_string, "token_issuer: out of memory");
 }
 
 PICOMESH_CLASS_ANNOTATE("override@token_issuer:token_issuer:token_issuer_login")
@@ -194,12 +157,11 @@ struct picomesh_json_result token_issuer_token_issuer_login_impl(struct ctx *ctx
                                                                  const char *method, uint32_t uid,
                                                                  const char *username, int64_t pw_hash)
 {
-    (void)ctx; (void)obj;
+    (void)ctx;
     if (!method || strcmp(method, "password") != 0)
         return PICOMESH_ERR(picomesh_json, "token_issuer_login: unsupported auth method");
     if (!username) username = "";
 
-    /* Delegate credential verification to the password authn plugin. */
     struct picomesh_engine *e = picomesh_active_engine();
     if (!e) return PICOMESH_ERR(picomesh_json, "token_issuer_login: no active engine");
     struct ctx pw_ctx = picomesh_engine_service_ctx(e, "password_authn");
@@ -217,9 +179,9 @@ struct picomesh_json_result token_issuer_token_issuer_login_impl(struct ctx *ctx
     struct picomesh_string_result access = ti_mint_access(uid, username, groups.value, ttl);
     if (PICOMESH_IS_ERR(access)) { free(groups.value); return PICOMESH_ERR(picomesh_json, "token_issuer_login: mint access failed", access); }
 
-    struct ti_storage_result sr = ti_open();
-    if (PICOMESH_IS_ERR(sr)) { free(groups.value); free(access.value); return PICOMESH_ERR(picomesh_json, "token_issuer_login: storage open failed", sr); }
-    struct ti_storage h = sr.value;
+    struct rel_handle h;
+    struct picomesh_void_result oh = ti_open(&h, hdrs, obj);
+    if (PICOMESH_IS_ERR(oh)) { free(groups.value); free(access.value); return PICOMESH_ERR(picomesh_json, "token_issuer_login: storage open failed", oh); }
     struct picomesh_string_result refresh = ti_issue_refresh(&h, hdrs, uid, username);
     if (PICOMESH_IS_ERR(refresh)) { free(groups.value); free(access.value); return PICOMESH_ERR(picomesh_json, "token_issuer_login: issue refresh failed", refresh); }
 
@@ -234,32 +196,39 @@ struct picomesh_json_result token_issuer_token_issuer_refresh_impl(struct ctx *c
                                                                    struct yheaders *hdrs,
                                                                    const char *refresh_token)
 {
-    (void)ctx; (void)obj;
+    (void)ctx;
     if (!refresh_token || !*refresh_token)
         return PICOMESH_ERR(picomesh_json, "token_issuer_refresh: missing refresh token");
-    struct ti_storage_result sr = ti_open();
-    if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_json, "token_issuer_refresh: storage open failed", sr);
-    struct ti_storage h = sr.value;
+    struct rel_handle h;
+    struct picomesh_void_result oh = ti_open(&h, hdrs, obj);
+    if (PICOMESH_IS_ERR(oh)) return PICOMESH_ERR(picomesh_json, "token_issuer_refresh: storage open failed", oh);
 
-    char key[64];
-    snprintf(key, sizeof(key), "refresh:%s", refresh_token);
-    struct picomesh_string_result row = sharded_storage_db_get(&h.c, h.obj, hdrs, TI_CTX, key);
-    if (PICOMESH_IS_ERR(row)) return PICOMESH_ERR(picomesh_json, "token_issuer_refresh: read failed", row);
-    if (!row.value || !row.value[0]) { free(row.value); return PICOMESH_ERR(picomesh_json, "token_issuer_refresh: unknown refresh token"); }
-
+    /* Resolve the presented refresh token to its (uid, username). */
+    char *args = rel_args1s(refresh_token);
+    struct picomesh_json_result row = rel_query(&h, hdrs, "SELECT uid,username FROM refresh_tokens WHERE token=?", args);
+    if (PICOMESH_IS_ERR(row)) { free(args); return PICOMESH_ERR(picomesh_json, "token_issuer_refresh: read failed", row); }
     uint32_t uid = 0;
     char username[64] = {0};
-    char *tab = strchr(row.value, '\t');
-    if (tab) { *tab = 0; uid = (uint32_t)strtoul(row.value, NULL, 10); snprintf(username, sizeof(username), "%s", tab + 1); }
+    struct yjson_doc *doc = yjson_parse(row.value ? row.value : "[]", row.value ? strlen(row.value) : 2);
+    int found = 0;
+    if (doc) {
+        const struct yjson_value *arr = yjson_doc_root(doc);
+        if (arr && yjson_array_size(arr) > 0) {
+            const struct yjson_value *r0 = yjson_array_at(arr, 0);
+            uid = (uint32_t)yjson_as_int(yjson_object_get(r0, "uid"), 0);
+            const char *u = yjson_as_string(yjson_object_get(r0, "username"), "");
+            snprintf(username, sizeof(username), "%s", u ? u : "");
+            found = 1;
+        }
+        yjson_doc_free(doc);
+    }
     free(row.value);
+    if (!found) { free(args); return PICOMESH_ERR(picomesh_json, "token_issuer_refresh: unknown refresh token"); }
 
-    /* Rotate: delete the presented token (gated on actually removing it), then
-     * issue a fresh one. */
-    struct picomesh_int_result del = sharded_storage_db_del(&h.c, h.obj, hdrs, TI_CTX, key);
-    if (PICOMESH_IS_ERR(del)) return PICOMESH_ERR(picomesh_json, "token_issuer_refresh: delete failed", del);
-    if (del.value == 0) return PICOMESH_ERR(picomesh_json, "token_issuer_refresh: token already rotated");
-    struct picomesh_int64_result dc = ti_incr(&h, hdrs, "count", -1);
-    if (PICOMESH_IS_ERR(dc)) return PICOMESH_ERR(picomesh_json, "token_issuer_refresh: count update failed", dc);
+    /* Rotate: delete the presented token (gated on actually removing it). */
+    int deleted = rel_exec_changes(&h, hdrs, "DELETE FROM refresh_tokens WHERE token=?", args);
+    free(args);
+    if (deleted < 1) return PICOMESH_ERR(picomesh_json, "token_issuer_refresh: token already rotated");
 
     struct picomesh_string_result groups = ti_load_groups(hdrs, uid);
     if (PICOMESH_IS_ERR(groups)) return PICOMESH_ERR(picomesh_json, "token_issuer_refresh: load groups failed", groups);
@@ -274,9 +243,8 @@ struct picomesh_json_result token_issuer_token_issuer_refresh_impl(struct ctx *c
     return out;
 }
 
-/* Low-level mint: a signed access JWT for an already-resolved identity. Used
- * by the gateway's bearer-opaque (PAT) authenticator after it resolves the
- * token to a uid — minting stays in the issuer, not the authn path. */
+/* Low-level mint: a signed access JWT for an already-resolved identity (the
+ * gateway's bearer-opaque/runner path). Minting stays in the issuer. */
 PICOMESH_CLASS_ANNOTATE("override@token_issuer:token_issuer:token_issuer_mint")
 struct picomesh_string_result token_issuer_token_issuer_mint_impl(struct ctx *ctx, struct object *obj,
                                                                   struct yheaders *hdrs,
@@ -291,37 +259,45 @@ struct picomesh_string_result token_issuer_token_issuer_mint_impl(struct ctx *ct
 PICOMESH_CLASS_ANNOTATE("override@token_issuer:token_issuer:token_issuer_count_active")
 struct picomesh_size_result token_issuer_token_issuer_count_active_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
-    (void)ctx; (void)obj;
-    struct ti_storage_result sr = ti_open();
-    if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_size, "token_issuer_count: storage open failed", sr);
-    struct ti_storage h = sr.value;
-    struct picomesh_int64_result cr = ti_get(&h, hdrs, "count", 0);
-    if (PICOMESH_IS_ERR(cr)) return PICOMESH_ERR(picomesh_size, "token_issuer_count: read failed", cr);
-    return PICOMESH_OK(picomesh_size, (size_t)(cr.value < 0 ? 0 : cr.value));
+    (void)ctx;
+    struct rel_handle h;
+    struct picomesh_void_result oh = ti_open(&h, hdrs, obj);
+    if (PICOMESH_IS_ERR(oh)) return PICOMESH_ERR(picomesh_size, "token_issuer_count: storage open failed", oh);
+    int64_t n = rel_query_int(&h, hdrs, "SELECT COUNT(*) AS n FROM refresh_tokens", "[]", "n", 0, NULL);
+    return PICOMESH_OK(picomesh_size, (size_t)(n < 0 ? 0 : n));
 }
 
-/* List ALL live refresh tokens as a JSON array (gh#15). */
+/* List live refresh tokens as `[{"uid":…,"username":…,"created_at":…}, …]` —
+ * non-secret metadata only. The refresh token is an opaque bearer secret:
+ * returning it here would let any caller with list access harvest live
+ * credentials, so it is never selected. One-time token material is handed out
+ * only at issuance (login/refresh). */
 PICOMESH_CLASS_ANNOTATE("override@token_issuer:token_issuer:token_issuer_list")
 struct picomesh_json_result token_issuer_token_issuer_list_impl(struct ctx *ctx, struct object *obj,
                                                          struct yheaders *hdrs,
                                                          int64_t offset, int64_t limit)
 {
-    (void)ctx; (void)obj;
-    struct ti_storage_result sr = ti_open();
-    if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_json, "token_issuer_list: storage open failed", sr);
-    struct ti_storage h = sr.value;
-    return sharded_storage_db_list(&h.c, h.obj, hdrs, TI_CTX, "refresh:", offset, limit);
+    (void)ctx;
+    if (limit <= 0) limit = 100;
+    struct rel_handle h;
+    struct picomesh_void_result oh = ti_open(&h, hdrs, obj);
+    if (PICOMESH_IS_ERR(oh)) return PICOMESH_ERR(picomesh_json, "token_issuer_list: storage open failed", oh);
+    char *args = rel_args2i(limit, offset < 0 ? 0 : offset);
+    struct picomesh_json_result r =
+        rel_query(&h, hdrs, "SELECT uid,username,created_at FROM refresh_tokens ORDER BY created_at LIMIT ? OFFSET ?", args);
+    free(args);
+    return r;
 }
 
 PICOMESH_CLASS_ANNOTATE("override@token_issuer:token_issuer:token_issuer_list_all")
 struct picomesh_json_result token_issuer_token_issuer_list_all_impl(struct ctx *ctx, struct object *obj,
                                                                     struct yheaders *hdrs)
 {
-    (void)ctx; (void)obj;
-    struct ti_storage_result sr = ti_open();
-    if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_json, "token_issuer_list_all: storage open failed", sr);
-    struct ti_storage h = sr.value;
-    return sharded_storage_db_list_all(&h.c, h.obj, hdrs, TI_CTX, "refresh:");
+    (void)ctx;
+    struct rel_handle h;
+    struct picomesh_void_result oh = ti_open(&h, hdrs, obj);
+    if (PICOMESH_IS_ERR(oh)) return PICOMESH_ERR(picomesh_json, "token_issuer_list_all: storage open failed", oh);
+    return rel_query(&h, hdrs, "SELECT uid,username,created_at FROM refresh_tokens ORDER BY created_at", "[]");
 }
 
 #include "store.gen.c"

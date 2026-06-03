@@ -267,7 +267,7 @@ struct picomesh_string_result session_session_jwt(struct ctx * ctx, struct objec
     }
 }
 
-struct picomesh_uint32_result session_session_lookup(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * token)
+struct picomesh_uint32_result session_session_lookup(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * sid)
 {
     static method_slot _slot = METHOD_SLOT_UNDEFINED;
     if (_slot == METHOD_SLOT_UNDEFINED) {
@@ -294,7 +294,7 @@ struct picomesh_uint32_result session_session_lookup(struct ctx * ctx, struct ob
             cmp_ctx_t _maw;
             picomesh_msgpack_writer_init(&_maw, &_mab, _margs, 16384);
             cmp_write_array(&_maw, 1u);
-            cmp_write_str(&_maw, token ? token : "", (uint32_t)(token ? strlen(token) : 0));
+            cmp_write_str(&_maw, sid ? sid : "", (uint32_t)(sid ? strlen(sid) : 0));
             size_t _mrlen = 0;
             char _merr[256] = {0};
             if (!peer_channel_msgpack_call(_s->peer, "session.session.lookup", hdrs,
@@ -343,11 +343,11 @@ struct picomesh_uint32_result session_session_lookup(struct ctx * ctx, struct ob
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
-            uint32_t _slen = (uint32_t)(token ? strlen(token) : 0);
+            uint32_t _slen = (uint32_t)(sid ? strlen(sid) : 0);
             if (_off + 4 + _slen > sizeof(_a))
                 { ytelemetry_span_end(&_tsp, 0, "session_session_lookup: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "session_session_lookup: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
-            if (_slen) { memcpy(_a + _off, token, _slen); _off += _slen; }
+            if (_slen) { memcpy(_a + _off, sid, _slen); _off += _slen; }
         }
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -370,11 +370,11 @@ struct picomesh_uint32_result session_session_lookup(struct ctx * ctx, struct ob
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_uint32, "session_session_lookup: no impl on this class");
-        return ((session_session_lookup_fn)fn)(ctx, obj, hdrs, token);
+        return ((session_session_lookup_fn)fn)(ctx, obj, hdrs, sid);
     }
 }
 
-struct picomesh_int_result session_session_destroy(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * token)
+struct picomesh_int_result session_session_destroy(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * sid)
 {
     static method_slot _slot = METHOD_SLOT_UNDEFINED;
     if (_slot == METHOD_SLOT_UNDEFINED) {
@@ -401,7 +401,7 @@ struct picomesh_int_result session_session_destroy(struct ctx * ctx, struct obje
             cmp_ctx_t _maw;
             picomesh_msgpack_writer_init(&_maw, &_mab, _margs, 16384);
             cmp_write_array(&_maw, 1u);
-            cmp_write_str(&_maw, token ? token : "", (uint32_t)(token ? strlen(token) : 0));
+            cmp_write_str(&_maw, sid ? sid : "", (uint32_t)(sid ? strlen(sid) : 0));
             size_t _mrlen = 0;
             char _merr[256] = {0};
             if (!peer_channel_msgpack_call(_s->peer, "session.session.destroy", hdrs,
@@ -450,11 +450,11 @@ struct picomesh_int_result session_session_destroy(struct ctx * ctx, struct obje
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
-            uint32_t _slen = (uint32_t)(token ? strlen(token) : 0);
+            uint32_t _slen = (uint32_t)(sid ? strlen(sid) : 0);
             if (_off + 4 + _slen > sizeof(_a))
                 { ytelemetry_span_end(&_tsp, 0, "session_session_destroy: pack overflow"); return PICOMESH_ERR(picomesh_int, "session_session_destroy: pack overflow"); }
             memcpy(_a + _off, &_slen, 4); _off += 4;
-            if (_slen) { memcpy(_a + _off, token, _slen); _off += _slen; }
+            if (_slen) { memcpy(_a + _off, sid, _slen); _off += _slen; }
         }
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
@@ -477,7 +477,7 @@ struct picomesh_int_result session_session_destroy(struct ctx * ctx, struct obje
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_int, "session_session_destroy: no impl on this class");
-        return ((session_session_destroy_fn)fn)(ctx, obj, hdrs, token);
+        return ((session_session_destroy_fn)fn)(ctx, obj, hdrs, sid);
     }
 }
 

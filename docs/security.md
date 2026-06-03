@@ -233,14 +233,23 @@ Later requests:
 
 ```text
 browser sends picomesh-sid cookie
-  -> session_cookie authenticator calls session.session.lookup(session_id)
-  -> lookup returns stored access JWT if session is valid
-  -> authenticator verifies JWT
+  -> session_cookie authenticator calls session.session.jwt(session_id)
+  -> jwt() returns the stored access JWT if the session exists
+  -> authenticator verifies the JWT (signature + expiry)
   -> authorizer decides endpoint access
 ```
 
 Session ids are bearer secrets. They must be high-entropy random values and
 must never be derived from user ids, counters, clocks, or storage row numbers.
+
+Because the sid is a bearer secret, it never appears in a listing.
+`session.session.list` / `list_all` return only non-secret metadata
+(`uid`, `created_at`) — never the sid, the stored access JWT, or the refresh
+token. The same rule holds for every credential store: `token_issuer.list`
+returns `uid`/`username`/`created_at` but never the refresh token, and a
+runner/PAT list must never return its opaque token. One-time token material is
+handed out only at issuance, not by a list call. A caller with list access must
+not be able to harvest a live credential.
 
 Session rows should support:
 

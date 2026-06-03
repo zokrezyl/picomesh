@@ -700,7 +700,7 @@ static int session_session_lookup_minvoke(struct ctx *ctx, struct object *obj, s
     {
         uint32_t _sz = (uint32_t)sizeof(_v0);
         if (!cmp_read_str(_mr, _v0, &_sz)) {
-            snprintf(_err, _err_cap, "token: expected str arg (%s)", cmp_strerror(_mr));
+            snprintf(_err, _err_cap, "sid: expected str arg (%s)", cmp_strerror(_mr));
             return -1;
         }
     }
@@ -730,7 +730,7 @@ static int session_session_destroy_minvoke(struct ctx *ctx, struct object *obj, 
     {
         uint32_t _sz = (uint32_t)sizeof(_v0);
         if (!cmp_read_str(_mr, _v0, &_sz)) {
-            snprintf(_err, _err_cap, "token: expected str arg (%s)", cmp_strerror(_mr));
+            snprintf(_err, _err_cap, "sid: expected str arg (%s)", cmp_strerror(_mr));
             return -1;
         }
     }
@@ -894,10 +894,10 @@ static const struct jinvoke_param session_session_jwt_params[] = {
     {"sid", "const char *"}
 };
 static const struct jinvoke_param session_session_lookup_params[] = {
-    {"token", "const char *"}
+    {"sid", "const char *"}
 };
 static const struct jinvoke_param session_session_destroy_params[] = {
-    {"token", "const char *"}
+    {"sid", "const char *"}
 };
 static const struct jinvoke_param session_session_list_params[] = {
     {"offset", "int64_t"},

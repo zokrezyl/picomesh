@@ -18,8 +18,9 @@
  * External runner agents (docs/runner-agent.md) lease via `lease_job`, fetch
  * details via `job_descriptor`, stream output via `append_log`, and report via
  * `complete_job`. The gateway resolves an `rnr_` token to a JWT whose sub is the
- * runner_id, so the runner's identity arrives in yheaders["uid"]; ownership ops
- * (append_log / complete_job) require it to match the job's leased runner.
+ * runner_id and forwards it in the headers; ownership ops (lease_job /
+ * append_log / complete_job) verify that JWT and require its sub to match the
+ * job's leased runner — a missing or invalid auth context is never ownership.
  *
  * State lives in the shared `sharded_storage` service (context `git_pipeline`),
  * NOT in this process — so multiple objects / gateway workers share one source
@@ -43,6 +44,7 @@
 #include <picomesh/yengine/engine.h>
 #include <picomesh/yjson/yjson.h>
 #include <picomesh/ysecurity/jwt.h>
+#include <picomesh/ysecurity/secret.h>
 #include <picomesh/plugin/sharded_storage/sharded_storage.h>
 
 #include <stdint.h>
@@ -187,13 +189,19 @@ static int64_t gp_job_timeout(struct gp_storage *h, struct yheaders *hdrs, uint3
     return timeout;
 }
 
-/* The caller's authenticated runner id, as resolved by the gateway into
- * yheaders["uid"] (a runner JWT carries sub=runner_id). 0 means no gateway
- * context (internal/test) — accepted. Otherwise must match the job's runner. */
+/* Does the caller own this job's lease? Identity comes ONLY from the verified
+ * runner JWT the gateway placed in the headers (its sub = runner_id), never the
+ * bare yheaders["uid"] — a backend trusts signed claims, not the gateway's
+ * unverified word, and never an unauthenticated request. There is deliberately
+ * NO `caller == 0` bypass: an absent/invalid auth context is not ownership. The
+ * lease-lifecycle methods (lease_job / append_log / complete_job) are externally
+ * reachable, so they fail closed for any caller without a verified identity. */
 static int gp_caller_owns(struct yheaders *hdrs, uint32_t leased_runner)
 {
-    uint32_t caller = hdrs ? yheaders_get_u32(hdrs, "uid", 0) : 0;
-    return caller == 0 || caller == leased_runner;
+    struct picomesh_authctx caller;
+    picomesh_authctx_from_headers(hdrs, picomesh_active_engine(), &caller);
+    if (!caller.authenticated || caller.uid == 0) return 0;
+    return caller.uid == leased_runner;
 }
 
 /* Claim the next queued job for runner_id via FIFO CAS, adjusting counters and

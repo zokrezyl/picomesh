@@ -207,6 +207,18 @@ static void rel_work_fn(void *arg)
         pthread_mutex_unlock(&sh->mu);
         return;
     }
+    /* The number of supplied binds must match the statement's `?` placeholder
+     * count exactly — too few would leave trailing params silently NULL, too
+     * many would bind past the statement. Reject the mismatch rather than
+     * stepping a half-bound query. */
+    int want = sqlite3_bind_parameter_count(st);
+    if (want != w->nbinds) {
+        snprintf(w->err, sizeof(w->err),
+                 "bind count mismatch: SQL has %d parameter(s), got %d", want, w->nbinds);
+        sqlite3_finalize(st);
+        pthread_mutex_unlock(&sh->mu);
+        return;
+    }
     rel_bind_args(st, w->binds, w->nbinds);
 
     struct yjson_writer *jw = yjson_writer_new();
@@ -279,24 +291,39 @@ static struct picomesh_json_result rel_call(enum rel_op op, uint32_t shard_key,
 
     /* Extract the bind params HERE (coroutine thread) into plain C so the
      * offloaded worker never touches the simdjson doc. The doc (and its
-     * string bytes the binds point at) stays alive until after rel_run. */
+     * string bytes the binds point at) stays alive until after rel_run.
+     *
+     * Malformed input is a client error, not silently zero binds: reject a
+     * non-JSON body, a JSON value that is not an array, and an array longer
+     * than REL_MAX_BINDS. (The bind count is checked against the prepared
+     * statement's `?` placeholder count on the worker thread, before step.) */
     struct yjson_doc *doc = NULL;
     struct rel_bind binds[REL_MAX_BINDS];
     int nbinds = 0;
     if (args_json && *args_json) {
         doc = yjson_parse(args_json, strlen(args_json));
-        const struct yjson_value *arr = doc ? yjson_doc_root(doc) : NULL;
-        if (arr && yjson_is_array(arr)) {
-            size_t n = yjson_array_size(arr);
-            for (size_t i = 0; i < n && nbinds < REL_MAX_BINDS; ++i) {
-                const struct yjson_value *a = yjson_array_at(arr, i);
-                struct rel_bind *b = &binds[nbinds++];
-                if (yjson_is_int(a))        { b->kind = RB_INT;   b->i64 = yjson_as_int(a, 0); }
-                else if (yjson_is_float(a)) { b->kind = RB_FLOAT; b->f64 = yjson_as_float(a, 0); }
-                else if (yjson_is_bool(a))  { b->kind = RB_INT;   b->i64 = yjson_as_bool(a, 0); }
-                else if (yjson_is_null(a))  { b->kind = RB_NULL;  b->str = NULL; }
-                else                        { b->kind = RB_TEXT;  b->str = yjson_as_string(a, ""); }
-            }
+        if (!doc)
+            return PICOMESH_ERR(picomesh_json, "relational_storage: malformed args_json (not valid JSON)");
+        const struct yjson_value *arr = yjson_doc_root(doc);
+        if (!arr || !yjson_is_array(arr)) {
+            yjson_doc_free(doc);
+            return PICOMESH_ERR(picomesh_json, "relational_storage: args_json must be a JSON array");
+        }
+        size_t n = yjson_array_size(arr);
+        if (n > REL_MAX_BINDS) {
+            yjson_doc_free(doc);
+            char msg[96];
+            snprintf(msg, sizeof(msg), "relational_storage: too many bind args (%zu > max %d)", n, REL_MAX_BINDS);
+            return PICOMESH_ERR(picomesh_json, msg);
+        }
+        for (size_t i = 0; i < n; ++i) {
+            const struct yjson_value *a = yjson_array_at(arr, i);
+            struct rel_bind *b = &binds[nbinds++];
+            if (yjson_is_int(a))        { b->kind = RB_INT;   b->i64 = yjson_as_int(a, 0); }
+            else if (yjson_is_float(a)) { b->kind = RB_FLOAT; b->f64 = yjson_as_float(a, 0); }
+            else if (yjson_is_bool(a))  { b->kind = RB_INT;   b->i64 = yjson_as_bool(a, 0); }
+            else if (yjson_is_null(a))  { b->kind = RB_NULL;  b->str = NULL; }
+            else                        { b->kind = RB_TEXT;  b->str = yjson_as_string(a, ""); }
         }
     }
 

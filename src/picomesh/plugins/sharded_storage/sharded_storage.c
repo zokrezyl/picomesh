@@ -233,6 +233,7 @@ enum shard_op {
     OP_PUT_IF_ABSENT, /* insert only if key absent, one txn → inserted? */
     OP_CAS,           /* swap only if current bytes == expected, one txn */
     OP_LIST,          /* cursor-scan a namespace across all shards → JSON */
+    OP_LIST_ALL_NS,   /* cursor-scan EVERY namespace in every shard → JSON */
 };
 
 struct shard_work {
@@ -258,6 +259,86 @@ static void shard_work_fn(void *arg)
     struct shard_work *w = arg;
     struct shard_set *s = shard_set();
     if (!s) { w->rc = SHARD_OPEN_FAILED; return; }
+
+    if (w->op == OP_LIST_ALL_NS) {
+        /* List EVERY key in EVERY namespace, across all shards. Each shard's
+         * unnamed (main) DBI holds the names of its named sub-DBs (one per
+         * namespace), so we cursor the main DBI to enumerate namespaces, then
+         * scan each. Entries carry the namespace so the caller knows where a
+         * key lives. No namespace argument is required (and none is valid). */
+        const char *prefix = w->key ? w->key : "";
+        size_t plen = strlen(prefix);
+        int64_t limit = w->in_limit; /* < 0 == unbounded */
+        int64_t emitted = 0;
+        struct yjson_writer *jw = yjson_writer_new();
+        if (!jw) { w->rc = SHARD_INTERNAL; return; }
+        yjson_writer_begin_array(jw);
+        for (int i = 0; i < s->n && (limit < 0 || emitted < limit); ++i) {
+            MDBX_txn *txn = NULL;
+            if (mdbx_txn_begin(s->shards[i].env, NULL, MDBX_TXN_RDONLY, &txn) != MDBX_SUCCESS)
+                continue;
+            /* Collect this shard's namespace names first (cursoring the main
+             * DBI while opening sub-DBIs in the same txn is best avoided). */
+            char namespaces[SHARDED_DBI_PER_SHARD][64];
+            int ns_count = 0;
+            MDBX_dbi main_dbi = 0;
+            MDBX_cursor *ns_cur = NULL;
+            if (mdbx_dbi_open(txn, NULL, 0, &main_dbi) == MDBX_SUCCESS &&
+                mdbx_cursor_open(txn, main_dbi, &ns_cur) == MDBX_SUCCESS) {
+                MDBX_val nk, nv;
+                int ncr = mdbx_cursor_get(ns_cur, &nk, &nv, MDBX_FIRST);
+                while (ncr == MDBX_SUCCESS && ns_count < SHARDED_DBI_PER_SHARD) {
+                    size_t nlen = nk.iov_len < sizeof(namespaces[0]) - 1 ? nk.iov_len : sizeof(namespaces[0]) - 1;
+                    memcpy(namespaces[ns_count], nk.iov_base, nlen);
+                    namespaces[ns_count][nlen] = 0;
+                    ns_count++;
+                    ncr = mdbx_cursor_get(ns_cur, &nk, &nv, MDBX_NEXT);
+                }
+            }
+            if (ns_cur) mdbx_cursor_close(ns_cur);
+
+            for (int n = 0; n < ns_count && (limit < 0 || emitted < limit); ++n) {
+                MDBX_dbi dbi = 0;
+                MDBX_cursor *cur = NULL;
+                if (mdbx_dbi_open(txn, namespaces[n], 0, &dbi) != MDBX_SUCCESS ||
+                    mdbx_cursor_open(txn, dbi, &cur) != MDBX_SUCCESS) {
+                    if (cur) mdbx_cursor_close(cur);
+                    continue;
+                }
+                MDBX_val k, v;
+                int cr = mdbx_cursor_get(cur, &k, &v, MDBX_FIRST);
+                while (cr == MDBX_SUCCESS && (limit < 0 || emitted < limit)) {
+                    if (plen && (k.iov_len < plen || memcmp(k.iov_base, prefix, plen) != 0)) {
+                        cr = mdbx_cursor_get(cur, &k, &v, MDBX_NEXT);
+                        continue;
+                    }
+                    char kbuf[256];
+                    size_t klen = k.iov_len < sizeof(kbuf) - 1 ? k.iov_len : sizeof(kbuf) - 1;
+                    memcpy(kbuf, k.iov_base, klen); kbuf[klen] = 0;
+                    char *vbuf = malloc(v.iov_len + 1);
+                    if (vbuf) { memcpy(vbuf, v.iov_base, v.iov_len); vbuf[v.iov_len] = 0; }
+                    yjson_writer_begin_object(jw);
+                    yjson_writer_key(jw, "namespace"); yjson_writer_string(jw, namespaces[n]);
+                    yjson_writer_key(jw, "key");       yjson_writer_string(jw, kbuf);
+                    yjson_writer_key(jw, "value");     yjson_writer_string(jw, vbuf ? vbuf : "");
+                    yjson_writer_end_object(jw);
+                    free(vbuf);
+                    ++emitted;
+                    cr = mdbx_cursor_get(cur, &k, &v, MDBX_NEXT);
+                }
+                mdbx_cursor_close(cur);
+            }
+            mdbx_txn_abort(txn);
+        }
+        yjson_writer_end_array(jw);
+        size_t jlen = 0;
+        const char *jdata = yjson_writer_data(jw, &jlen);
+        w->out_str = strdup(jdata ? jdata : "[]");
+        yjson_writer_free(jw);
+        w->rc = w->out_str ? SHARD_OK : SHARD_INTERNAL;
+        return;
+    }
+
     if (!ns_valid(w->ns)) { w->rc = SHARD_BAD_CONTEXT; return; }
 
     if (w->op == OP_COUNT) {
@@ -658,15 +739,20 @@ struct picomesh_json_result sharded_storage_db_list_impl(struct ctx *ctx, struct
     return PICOMESH_OK(picomesh_json, w.out_str ? w.out_str : strdup("[]"));
 }
 
-/* Unbounded: every matching entry in the namespace. Use with care — on a
- * large namespace this returns the whole set in one response. */
+/* Unbounded list. With a namespace: every matching entry in that namespace
+ * (`[{"key","value"}]`). With NO namespace (empty/NULL context): every entry in
+ * EVERY namespace, across all shards (`[{"namespace","key","value"}]`) — this is
+ * what a generic console's "list all" means. Use with care: returns the whole
+ * set in one response. */
 PICOMESH_CLASS_ANNOTATE("override@sharded_storage:db:db_list_all")
 struct picomesh_json_result sharded_storage_db_list_all_impl(struct ctx *ctx, struct object *obj,
                                                              struct yheaders *hdrs,
                                                              const char *context, const char *prefix)
 {
     (void)ctx; (void)obj; (void)hdrs;
-    struct shard_work w = {.op = OP_LIST, .ns = context, .key = prefix ? prefix : "",
+    int all_namespaces = !context || !*context;
+    struct shard_work w = {.op = all_namespaces ? OP_LIST_ALL_NS : OP_LIST,
+                           .ns = context, .key = prefix ? prefix : "",
                            .in_offset = 0, .in_limit = -1};
     shard_run(&w);
     if (w.rc != SHARD_OK) return PICOMESH_ERR(picomesh_json, shard_rc_msg(w.rc));

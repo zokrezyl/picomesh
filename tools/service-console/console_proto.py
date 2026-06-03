@@ -119,7 +119,11 @@ function renderValue(v){
   if(v===null||v===undefined) return '<span class="rt-null">null</span>';
   if(typeof v==='boolean') return v?'true':'false';
   if(typeof v==='number') return esc(String(v));
-  if(typeof v==='string') return esc(v);
+  if(typeof v==='string'){                              // a string that is itself JSON -> render recursively
+    const s=v.trim();
+    if(s.length>1&&(s[0]==='{'||s[0]==='[')){try{const p=JSON.parse(s);if(p&&typeof p==='object')return renderValue(p);}catch(e){}}
+    return esc(v);
+  }
   if(Array.isArray(v)){
     if(!v.length) return '<span class="rt-null">[ empty ]</span>';
     if(v.every(isObj)){                                  // list of records -> table

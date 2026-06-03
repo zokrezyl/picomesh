@@ -95,12 +95,34 @@ any other model — the engine doesn't care.
 ## Migration status (gh#18)
 
 - [x] `relational_storage` plugin: SQLite, namespace shards, exec/query, schema.
-- [ ] accounts / namespaces → relational (users table).
+- [x] accounts → relational (users / roster), in the global shard.
+- [x] session → relational (`sessions` table), in the global shard.
+- [x] token_issuer → relational (`refresh_tokens` table), in the global shard.
 - [ ] git_repo metadata → relational (repos / repo_members).
 - [ ] issues → relational (issues).
 - [ ] git_pipeline → relational (pipeline_runs).
 - [ ] global reads (e.g. roster, totals) via shard fan-out / read models.
 
-Auth/runtime services (session, token_issuer, password_authn,
-personal_access_tokens, github_authn) stay on `sharded_storage` — KV is the
-right abstraction there.
+### What is SQL-backed today, and why
+
+`accounts`, `session`, and `token_issuer` are **intentionally** on
+`relational_storage` now. Each owns a small, strongly-typed table with a real
+primary key and `UNIQUE`/lookup semantics (`users(uid PK)`,
+`sessions(sid PK)`, `refresh_tokens(token PK)`), and each query is a single
+indexed row lookup. These are global, non-namespaced tables, so they live in
+one shard — `REL_SHARD_GLOBAL` — and a lookup or count is one query with
+nothing to scatter/gather. SQL is the better fit than faking columns behind
+prefixed KV keys, so these moved first. This supersedes the earlier note that
+"auth/runtime services stay on `sharded_storage`": only `password_authn`,
+`personal_access_tokens`, and `github_authn` remain KV today.
+
+### Product state — still KV (scope of the remaining gh#18 work)
+
+`git_repo` (incl. repo membership/permission metadata), `issues`, and
+`git_pipeline` still store their state as prefixed keys in `sharded_storage`.
+Migrating them is the open part of gh#18 and is **namespace-sharded**, not
+global: a repo/issue/pipeline workflow should be shard-local
+(`shard = namespace_id % N`) and transactional, enforcing local uniqueness such
+as `(namespace_id, repo_name)` and `(repo_id, issue_number)`. That migration is
+deliberately out of scope here — it is its own change — and these services keep
+working on KV until then.

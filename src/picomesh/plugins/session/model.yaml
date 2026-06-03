@@ -40,7 +40,7 @@ methods:
         type: "struct object *"
       - name: hdrs
         type: "struct yheaders *"
-      - name: token
+      - name: sid
         type: "const char *"
   - slot: session_destroy
     domain: session
@@ -53,7 +53,7 @@ methods:
         type: "struct object *"
       - name: hdrs
         type: "struct yheaders *"
-      - name: token
+      - name: sid
         type: "const char *"
   - slot: session_count_active
     domain: session

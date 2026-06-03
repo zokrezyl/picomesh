@@ -710,23 +710,13 @@ static int cookie_get(const char *headers_raw, size_t headers_raw_len,
 }
 
 /* Defined later — the opaque-token extractor (cookie OR `picomesh-sid:`
- * header OR `Authorization: Bearer`) and the token→uid session lookup. */
+ * header OR `Authorization: Bearer`), the token→uid session lookup, and the
+ * verified-context resolver the gateway's mutation routes use. */
 static int extract_session_token(const char *headers_raw, size_t headers_raw_len,
                                  char *out, size_t cap);
 static uint32_t uid_for_token(const char *token);
-
-/* Resolve the caller's opaque session token → user id, or 0 if
- * missing/invalid. Accepts the token as a Cookie (browser), a
- * `picomesh-sid:` header, or a Bearer token — so server-side relays like
- * the picoforge webapp (which forward the sid as a header, not a cookie)
- * authenticate the same as a browser. Mirrors the /_rpc path. */
-static uint32_t resolve_uid(const char *headers_raw, size_t headers_raw_len)
-{
-    char token[64];
-    if (!extract_session_token(headers_raw, headers_raw_len, token, sizeof(token)))
-        return 0;
-    return uid_for_token(token);
-}
+static void resolve_authctx(const char *headers_raw, size_t headers_raw_len,
+                            struct picomesh_authctx *out);
 
 /* ---------- per-route page helpers ---------- */
 
@@ -1219,17 +1209,6 @@ static uint32_t repo_register(const char *account, const char *name, uint32_t ow
 
 /* ---------- route: POST /repos/new ---------- */
 
-/* Pull the `picomesh-uname` cookie value into a stack buffer. Returns 1
- * if found AND syntactically valid. Used by the per-request handlers
- * to decide which account namespace to write into. */
-static int resolve_uname(const char *headers_raw, size_t headers_raw_len,
-                         char *out, size_t cap)
-{
-    if (!cookie_get(headers_raw, headers_raw_len, "picomesh-uname", out, cap))
-        return 0;
-    return username_ok(out);
-}
-
 static void route_repos_new_post(struct yloop_stream *s, uint32_t uid,
                                  const char *uname,
                                  const char *body, size_t body_len, int keep_alive)
@@ -1389,11 +1368,15 @@ static int extract_session_token(const char *headers_raw, size_t headers_raw_len
         return 1;
     char auth[128];
     if (header_value(headers_raw, headers_raw_len, "authorization", auth, sizeof(auth))) {
-        const char *p = auth;
-        if (strncasecmp(p, "Bearer ", 7) == 0) p += 7;
-        while (*p == ' ') ++p;
-        size_t n = strlen(p);
-        if (n && n < cap) { memcpy(out, p, n); out[n] = 0; return 1; }
+        /* Only the Bearer scheme carries an opaque session token. A non-Bearer
+         * Authorization (Basic, Digest, …) is NOT a session token: reject it
+         * rather than treating the raw header value as one. */
+        if (strncasecmp(auth, "Bearer ", 7) == 0) {
+            const char *p = auth + 7;
+            while (*p == ' ') ++p;
+            size_t n = strlen(p);
+            if (n && n < cap) { memcpy(out, p, n); out[n] = 0; return 1; }
+        }
     }
     out[0] = 0;
     return 0;
@@ -1414,6 +1397,43 @@ static uint32_t uid_for_token(const char *token)
     object_release_in_ctx(&c, o.value);
     if (PICOMESH_IS_ERR(lr)) { picomesh_error_destroy(lr.error); return 0; }
     return lr.value;
+}
+
+/* Resolve the caller's opaque session token to a VERIFIED auth context, the
+ * same exchange the `session_cookie` authenticator performs for /_rpc: the
+ * opaque sid → stored access JWT (session.session.jwt) → signature+expiry
+ * verification against the shared signing secret. FAILS CLOSED — a missing,
+ * expired, or invalid JWT (or unavailable key material) yields an anonymous
+ * context (authenticated 0, uid 0). Unlike the bare sid→uid `uid_for_token`
+ * lookup, an expired stored JWT can no longer authorize: the gateway's
+ * non-login mutation routes resolve identity through this so they cannot be
+ * authorized by a stale credential. Always populates `out`. */
+static void resolve_authctx(const char *headers_raw, size_t headers_raw_len,
+                            struct picomesh_authctx *out)
+{
+    memset(out, 0, sizeof(*out));
+    char token[64];
+    if (!extract_session_token(headers_raw, headers_raw_len, token, sizeof(token)))
+        return;
+    struct picomesh_engine *e = picomesh_active_engine();
+    if (!e) return;
+    struct ctx c = picomesh_engine_service_ctx(e, "session");
+    struct object_ptr_result o = session_session_create(&c);
+    if (PICOMESH_IS_ERR(o)) { picomesh_error_destroy(o.error); return; }
+    struct picomesh_string_result jr = session_session_jwt(&c, o.value, NULL, token);
+    object_release_in_ctx(&c, o.value);
+    if (PICOMESH_IS_ERR(jr)) { picomesh_error_destroy(jr.error); return; }
+    if (jr.value && jr.value[0]) {
+        struct picomesh_string_result secret = picomesh_security_jwt_secret(e);
+        if (PICOMESH_IS_OK(secret)) {
+            struct picomesh_void_result ctx_r = picomesh_authctx_from_jwt(jr.value, secret.value, out);
+            if (PICOMESH_IS_ERR(ctx_r)) picomesh_error_destroy(ctx_r.error);
+            free(secret.value);
+        } else {
+            picomesh_error_destroy(secret.error);
+        }
+    }
+    free(jr.value);
 }
 
 /* The frontend's security pipeline, built ONCE per worker and reused for every
@@ -2114,18 +2134,27 @@ int yhttp_frontend_try(struct yloop_stream *s,
      * API routes above (/_rpc, /_describe, /_whoami, /_perf) and the
      * login/register/logout POSTs either resolve sid→uid themselves or
      * don't need it. Resolving up front would charge every /_rpc a second,
-     * redundant session.session.lookup (the dominant per-call cost). */
-    uint32_t uid = resolve_uid(headers_raw, headers_raw_len);
-    char dispatch_uname[64] = {0};
-    resolve_uname(headers_raw, headers_raw_len, dispatch_uname, sizeof(dispatch_uname));
+     * redundant session exchange (the dominant per-call cost).
+     *
+     * These non-login mutation routes resolve identity through the SAME
+     * verified exchange as /_rpc — the opaque sid → stored access JWT →
+     * signature+expiry verification — so an expired or invalid session JWT
+     * cannot authorize a mutation, and the writable namespace + admin gate are
+     * derived from the verified JWT claims (uid, username, groups), never the
+     * forgeable picomesh-uname cookie. */
+    struct picomesh_authctx caller;
+    resolve_authctx(headers_raw, headers_raw_len, &caller);
+    uint32_t uid = caller.authenticated ? caller.uid : 0;
 
     /* Authenticated action POSTs (forwarded by the frontend app with the
      * session cookie). They redirect or 404 — never render a page. */
     if (uid) {
-        const char *uname = dispatch_uname;
+        const char *uname = caller.username;
         if (is_post && path_eq(path, "/repos/new"))
             { route_repos_new_post(s, uid, uname, body, body_len, keep_alive); return 1; }
-        if (strncmp(path, "/admin/", 7) == 0 && is_site_admin(uid)) {
+        int site_admin = picomesh_groups_max_role(caller.groups_csv, "site") >=
+                         picomesh_role_rank("maintainer");
+        if (strncmp(path, "/admin/", 7) == 0 && site_admin) {
             /* Token administration lives in its own admin section. */
             if (is_post && path_eq(path, "/admin/tokens/mint_pat"))
                 { route_admin_tokens_mint_pat(s, body, body_len, keep_alive); return 1; }
