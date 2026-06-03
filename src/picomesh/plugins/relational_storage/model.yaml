@@ -1,0 +1,51 @@
+methods:
+  - slot: db_exec
+    domain: relational_storage
+    owning_class: db
+    return_type: struct picomesh_json_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: shard_key
+        type: uint32_t
+      - name: sql
+        type: "const char *"
+      - name: args_json
+        type: "const char *"
+  - slot: db_query
+    domain: relational_storage
+    owning_class: db
+    return_type: struct picomesh_json_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: shard_key
+        type: uint32_t
+      - name: sql
+        type: "const char *"
+      - name: args_json
+        type: "const char *"
+classes:
+  - name: db
+    domain: relational_storage
+    accessor: relational_storage_db_class_get
+    type: regular
+    source_file: /home/misi/work/my/picomesh/src/picomesh/plugins/relational_storage/relational_storage.c
+    parent: null
+    mixins: []
+    data: struct relational_storage_data
+    ops:
+      - slot: db_exec
+        slot_domain: relational_storage
+        impl: relational_storage_db_exec_impl
+      - slot: db_query
+        slot_domain: relational_storage
+        impl: relational_storage_db_query_impl

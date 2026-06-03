@@ -51,16 +51,16 @@ struct mesh_child_entry {
     int exit_status;
 };
 
-struct PICOMESH_CLASS_ANNOTATE("class@mesh:store") mesh_store_data {
+struct PICOMESH_CLASS_ANNOTATE("class@mesh:mesh") mesh_mesh_data {
     struct mesh_service_entry entries[MESH_MAX_SERVICES];
     struct mesh_child_entry children[MESH_MAX_CHILDREN];
     size_t count;
     size_t child_count;
 };
 
-static struct mesh_store_data *ms(struct object *obj)
+static struct mesh_mesh_data *ms(struct object *obj)
 {
-    return (struct mesh_store_data *)((char *)obj + sizeof(struct object));
+    return (struct mesh_mesh_data *)((char *)obj + sizeof(struct object));
 }
 
 /* ---- child lifecycle: the mesh owns and reaps what it spawned ---------- *
@@ -200,12 +200,12 @@ static void mesh_reap_previous_run(void)
     }
 }
 
-PICOMESH_CLASS_ANNOTATE("override@mesh:store:store_register_service")
-struct picomesh_int_result mesh_store_register_service_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@mesh:mesh:mesh_register_service")
+struct picomesh_int_result mesh_mesh_register_service_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                          uint32_t service_id, uint32_t port)
 {
     (void)ctx;
-    struct mesh_store_data *d = ms(obj);
+    struct mesh_mesh_data *d = ms(obj);
     /* idempotent: re-registering same id updates the port */
     for (size_t i = 0; i < MESH_MAX_SERVICES; ++i) {
         if (d->entries[i].used && d->entries[i].service_id == service_id) {
@@ -226,12 +226,12 @@ struct picomesh_int_result mesh_store_register_service_impl(struct ctx *ctx, str
     return PICOMESH_ERR(picomesh_int, "mesh_register_service: table full");
 }
 
-PICOMESH_CLASS_ANNOTATE("override@mesh:store:store_resolve")
-struct picomesh_uint32_result mesh_store_resolve_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@mesh:mesh:mesh_resolve")
+struct picomesh_uint32_result mesh_mesh_resolve_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                    uint32_t service_id)
 {
     (void)ctx;
-    struct mesh_store_data *d = ms(obj);
+    struct mesh_mesh_data *d = ms(obj);
     for (size_t i = 0; i < MESH_MAX_SERVICES; ++i) {
         if (d->entries[i].used && d->entries[i].service_id == service_id) {
             return PICOMESH_OK(picomesh_uint32, d->entries[i].port);
@@ -240,12 +240,12 @@ struct picomesh_uint32_result mesh_store_resolve_impl(struct ctx *ctx, struct ob
     return PICOMESH_OK(picomesh_uint32, 0);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@mesh:store:store_forget")
-struct picomesh_int_result mesh_store_forget_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@mesh:mesh:mesh_forget")
+struct picomesh_int_result mesh_mesh_forget_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                uint32_t service_id)
 {
     (void)ctx;
-    struct mesh_store_data *d = ms(obj);
+    struct mesh_mesh_data *d = ms(obj);
     for (size_t i = 0; i < MESH_MAX_SERVICES; ++i) {
         if (d->entries[i].used && d->entries[i].service_id == service_id) {
             d->entries[i].used = 0;
@@ -256,8 +256,8 @@ struct picomesh_int_result mesh_store_forget_impl(struct ctx *ctx, struct object
     return PICOMESH_OK(picomesh_int, 0);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@mesh:store:store_count_services")
-struct picomesh_size_result mesh_store_count_services_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
+PICOMESH_CLASS_ANNOTATE("override@mesh:mesh:mesh_count_services")
+struct picomesh_size_result mesh_mesh_count_services_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
     (void)ctx;
     return PICOMESH_OK(picomesh_size, ms(obj)->count);
@@ -278,7 +278,7 @@ struct picomesh_size_result mesh_store_count_services_impl(struct ctx *ctx, stru
  * Path discovery uses `/proc/self/exe` on Linux. On macOS we'd use
  * `_NSGetExecutablePath` — TODO for the platform shim. */
 
-static int find_child_slot(struct mesh_store_data *d, int32_t pid)
+static int find_child_slot(struct mesh_mesh_data *d, int32_t pid)
 {
     for (int i = 0; i < MESH_MAX_CHILDREN; ++i) {
         if (!d->children[i].exited && d->children[i].pid == pid) return i;
@@ -292,7 +292,7 @@ static void mesh_child_exit_cb(struct yloop_process *p, int64_t exit_status,
     (void)p; (void)term_signal;
     struct object *obj = ud;
     if (!obj) return;
-    struct mesh_store_data *d = ms(obj);
+    struct mesh_mesh_data *d = ms(obj);
     /* libuv only knows the uv_process_t pointer; the pid we stashed
      * at spawn time matches the slot. Sweep for any non-exited child
      * whose pid matches the captured exit. Since uv passes us the
@@ -317,7 +317,7 @@ static void mesh_child_exit_cb_real(struct yloop_process *p, int64_t exit_status
     (void)p;
     struct mesh_child_cookie *c = ud;
     if (!c) return;
-    struct mesh_store_data *d = ms(c->obj);
+    struct mesh_mesh_data *d = ms(c->obj);
     int slot = find_child_slot(d, c->pid);
     if (slot >= 0) {
         d->children[slot].exited = 1;
@@ -330,12 +330,12 @@ static void mesh_child_exit_cb_real(struct yloop_process *p, int64_t exit_status
     free(c);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@mesh:store:store_spawn_picomesh")
-struct picomesh_int_result mesh_store_spawn_picomesh_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@mesh:mesh:mesh_spawn_picomesh")
+struct picomesh_int_result mesh_mesh_spawn_picomesh_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                     uint32_t port)
 {
     (void)ctx;
-    struct mesh_store_data *d = ms(obj);
+    struct mesh_mesh_data *d = ms(obj);
     struct picomesh_engine *e = picomesh_active_engine();
     if (!e) return PICOMESH_ERR(picomesh_int, "spawn_picomesh: no active engine");
 
@@ -391,14 +391,14 @@ struct picomesh_int_result mesh_store_spawn_picomesh_impl(struct ctx *ctx, struc
     return PICOMESH_OK(picomesh_int, pid);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@mesh:store:store_kill_pid")
-struct picomesh_int_result mesh_store_kill_pid_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@mesh:mesh:mesh_kill_pid")
+struct picomesh_int_result mesh_mesh_kill_pid_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                  int32_t pid)
 {
     (void)ctx;
     struct picomesh_engine *e = picomesh_active_engine();
     if (!e) return PICOMESH_ERR(picomesh_int, "kill_pid: no active engine");
-    struct mesh_store_data *d = ms(obj);
+    struct mesh_mesh_data *d = ms(obj);
     if (find_child_slot(d, pid) < 0) {
         return PICOMESH_OK(picomesh_int, 0);
     }
@@ -406,8 +406,8 @@ struct picomesh_int_result mesh_store_kill_pid_impl(struct ctx *ctx, struct obje
     return PICOMESH_OK(picomesh_int, rc == 0 ? 1 : 0);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@mesh:store:store_count_children")
-struct picomesh_size_result mesh_store_count_children_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
+PICOMESH_CLASS_ANNOTATE("override@mesh:mesh:mesh_count_children")
+struct picomesh_size_result mesh_mesh_count_children_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
     (void)ctx;
     return PICOMESH_OK(picomesh_size, ms(obj)->child_count);
@@ -535,7 +535,7 @@ static int mesh_write_node_config(struct picomesh_engine *e, const char *name,
 static int mesh_internal_spawn(struct object *obj, const char *name)
 {
     if (!name || !*name) return 0;
-    struct mesh_store_data *d = ms(obj);
+    struct mesh_mesh_data *d = ms(obj);
     struct picomesh_engine *e = picomesh_active_engine();
     if (!e) return 0;
     int slot = -1;
@@ -626,8 +626,8 @@ static int reconcile_walk_cb(const char *service_name,
     return 0;
 }
 
-PICOMESH_CLASS_ANNOTATE("override@mesh:store:store_reconcile_from_config")
-struct picomesh_int_result mesh_store_reconcile_from_config_impl(struct ctx *ctx,
+PICOMESH_CLASS_ANNOTATE("override@mesh:mesh:mesh_reconcile_from_config")
+struct picomesh_int_result mesh_mesh_reconcile_from_config_impl(struct ctx *ctx,
                                                               struct object *obj,
                                                               struct yheaders *hdrs)
 {
@@ -664,8 +664,8 @@ struct picomesh_int_result mesh_store_reconcile_from_config_impl(struct ctx *ctx
     return PICOMESH_OK(picomesh_int, rc.spawned);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@mesh:store:store_reconcile")
-struct picomesh_int_result mesh_store_reconcile_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
+PICOMESH_CLASS_ANNOTATE("override@mesh:mesh:mesh_reconcile")
+struct picomesh_int_result mesh_mesh_reconcile_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
     (void)ctx;
     /* No actual orchestration yet — placeholder for the spawn loop. */

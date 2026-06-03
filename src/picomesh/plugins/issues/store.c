@@ -31,7 +31,7 @@
 #define ISSUES_CTX "issues"
 
 /* No in-memory state — every op delegates to storage. */
-struct PICOMESH_CLASS_ANNOTATE("class@issues:store") issues_store_data {
+struct PICOMESH_CLASS_ANNOTATE("class@issues:issues") issues_issues_data {
     char _unused;
 };
 
@@ -118,8 +118,8 @@ static struct picomesh_void_result issue_store(struct is_storage *h, struct yhea
     return PICOMESH_OK_VOID();
 }
 
-PICOMESH_CLASS_ANNOTATE("override@issues:store:store_open")
-struct picomesh_uint32_result issues_store_open_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@issues:issues:issues_open")
+struct picomesh_uint32_result issues_issues_open_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                   uint32_t repo_id, uint32_t author_id)
 {
     (void)ctx; (void)obj;
@@ -142,8 +142,8 @@ struct picomesh_uint32_result issues_store_open_impl(struct ctx *ctx, struct obj
     return PICOMESH_OK(picomesh_uint32, id);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@issues:store:store_close")
-struct picomesh_int_result issues_store_close_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@issues:issues:issues_close")
+struct picomesh_int_result issues_issues_close_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                 uint32_t issue_id)
 {
     (void)ctx; (void)obj;
@@ -173,8 +173,8 @@ struct picomesh_int_result issues_store_close_impl(struct ctx *ctx, struct objec
     return PICOMESH_OK(picomesh_int, 1);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@issues:store:store_status")
-struct picomesh_int_result issues_store_status_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@issues:issues:issues_status")
+struct picomesh_int_result issues_issues_status_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                  uint32_t issue_id)
 {
     (void)ctx; (void)obj;
@@ -188,8 +188,8 @@ struct picomesh_int_result issues_store_status_impl(struct ctx *ctx, struct obje
     return PICOMESH_OK(picomesh_int, closed ? 2 : 1);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@issues:store:store_count_open_in_repo")
-struct picomesh_size_result issues_store_count_open_in_repo_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@issues:issues:issues_count_open_in_repo")
+struct picomesh_size_result issues_issues_count_open_in_repo_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                               uint32_t repo_id)
 {
     (void)ctx; (void)obj;
@@ -203,8 +203,8 @@ struct picomesh_size_result issues_store_count_open_in_repo_impl(struct ctx *ctx
     return PICOMESH_OK(picomesh_size, (size_t)(nr.value < 0 ? 0 : nr.value));
 }
 
-PICOMESH_CLASS_ANNOTATE("override@issues:store:store_count_total")
-struct picomesh_size_result issues_store_count_total_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
+PICOMESH_CLASS_ANNOTATE("override@issues:issues:issues_count_total")
+struct picomesh_size_result issues_issues_count_total_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
     (void)ctx; (void)obj;
     struct is_storage_result sr = is_open_storage();
@@ -213,6 +213,32 @@ struct picomesh_size_result issues_store_count_total_impl(struct ctx *ctx, struc
     struct picomesh_int64_result nr = is_get(&h, hdrs, "count", 0);
     if (PICOMESH_IS_ERR(nr)) return PICOMESH_ERR(picomesh_size, "issues_count_total: read failed", nr);
     return PICOMESH_OK(picomesh_size, (size_t)(nr.value < 0 ? 0 : nr.value));
+}
+
+/* List ALL issues' stored entries as a JSON array (gh#15) — every object,
+ * not scoped per repo, not a count. Delegates to the namespace scan. */
+PICOMESH_CLASS_ANNOTATE("override@issues:issues:issues_list")
+struct picomesh_json_result issues_issues_list_impl(struct ctx *ctx, struct object *obj,
+                                                   struct yheaders *hdrs,
+                                                   int64_t offset, int64_t limit)
+{
+    (void)ctx; (void)obj;
+    struct is_storage_result sr = is_open_storage();
+    if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_json, "issues_list: storage open failed", sr);
+    struct is_storage h = sr.value;
+    return sharded_storage_db_list(&h.c, h.obj, hdrs, ISSUES_CTX, "issue:", offset, limit);
+}
+
+/* Unbounded variant — every issue. Use with care on large deployments. */
+PICOMESH_CLASS_ANNOTATE("override@issues:issues:issues_list_all")
+struct picomesh_json_result issues_issues_list_all_impl(struct ctx *ctx, struct object *obj,
+                                                        struct yheaders *hdrs)
+{
+    (void)ctx; (void)obj;
+    struct is_storage_result sr = is_open_storage();
+    if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_json, "issues_list_all: storage open failed", sr);
+    struct is_storage h = sr.value;
+    return sharded_storage_db_list_all(&h.c, h.obj, hdrs, ISSUES_CTX, "issue:");
 }
 
 #include "store.gen.c"

@@ -18,6 +18,7 @@
  * plugins this instance activates via config (registration == activation). */
 #include <picomesh/plugin/storage/storage.h>
 #include <picomesh/plugin/sharded_storage/sharded_storage.h>
+#include <picomesh/plugin/relational_storage/relational_storage.h>
 #include <picomesh/plugin/calculator/calculator.h>
 #include <picomesh/plugin/time/time.h>
 #include <picomesh/plugin/accounts/accounts.h>
@@ -43,6 +44,7 @@
 #include <picomesh/frontends/yttp/yttp.h>
 #include <picomesh/frontends/yhttp/yhttp.h>
 #include <picomesh/frontends/alpine/alpine.h>
+#include <picomesh/frontends/msgpack/msgpack.h>
 #include <picomesh/frontends/cli/cli.h>
 #include <picomesh/ycore/result.h>
 #include <picomesh/ycore/ytrace.h>
@@ -66,7 +68,8 @@ static const struct yargv_option_def PICOMESH_OPTIONS[] = {
     {"--port",        "-p", "port",        "bind/connect port",               YARGV_VALUE,     0},
     {"--app-name",    NULL, "app_name",    "app name (drives XDG path)",      YARGV_VALUE,     0},
     {"--name",        NULL, "name",        "instance name",                   YARGV_VALUE,     0},
-    {"--frontend",    NULL, "frontend",    "frontend: yrpc (default), yttp, yhttp or alpine",YARGV_VALUE, 0},
+    {"--frontend",    NULL, "frontend",    "frontend: yrpc (default), yttp, yhttp, alpine or msgpack",YARGV_VALUE, 0},
+    {"--transport",   NULL, "transport",   "client transport: yrpc (default) or msgpack", YARGV_VALUE, 0},
     {"--workers",     NULL, "workers",     "in-process worker threads (default 1)", YARGV_VALUE, 0},
     {"--plugins",     NULL, "plugins",     "comma-sep plugin list (yaapp compat)", YARGV_VALUE, 0},
 };
@@ -98,6 +101,7 @@ static const struct plugin_reg *plugin_registry(size_t *count)
     static const struct plugin_reg ROWS[] = {
         {"storage",                picomesh_plugin_storage_register},
         {"sharded_storage",        picomesh_plugin_sharded_storage_register},
+        {"relational_storage",     picomesh_plugin_relational_storage_register},
         {"calculator",             picomesh_plugin_calculator_register},
         {"time",                   picomesh_plugin_time_register},
         {"accounts",               picomesh_plugin_accounts_register},
@@ -235,7 +239,7 @@ static void usage(const char *argv0)
     fprintf(stderr,
             "usage:\n"
             "  %s [--config-file PATH] [--config K=V]... [--env K=V]...\n"
-            "      [--host H] [--port P] [--frontend yrpc|yttp|yhttp|alpine]\n"
+            "      [--host H] [--port P] [--frontend yrpc|yttp|yhttp|alpine|msgpack]\n"
             "      [--verbose] [--app-name N]\n"
             "      (serve | client | config-dump | invoke <method> [arg...])\n",
             argv0);
@@ -388,6 +392,10 @@ static struct picomesh_void_result serve_worker_setup(struct picomesh_engine *e,
         struct alpine_config cfg = {.host = ss->host, .port = ss->port};
         struct alpine_frontend_ptr_result fr = alpine_start(e, &cfg);
         PICOMESH_RETURN_IF_ERR(picomesh_void, fr, "serve_worker_setup: alpine_start failed");
+    } else if (strcmp(ss->frontend, "msgpack") == 0) {
+        struct msgpack_config cfg = {.host = ss->host, .port = ss->port};
+        struct msgpack_frontend_ptr_result fr = msgpack_start(e, &cfg);
+        PICOMESH_RETURN_IF_ERR(picomesh_void, fr, "serve_worker_setup: msgpack_start failed");
     } else {
         struct yrpc_config cfg = {.host = ss->host, .port = ss->port};
         struct yrpc_frontend_ptr_result fr = yrpc_start(e, &cfg);
@@ -409,8 +417,10 @@ static int cmd_serve(struct picomesh_engine *e)
 
     /* Reject an unknown frontend up front, before spinning any worker. */
     if (strcmp(frontend, "yrpc") != 0 && strcmp(frontend, "yttp") != 0 &&
-        strcmp(frontend, "yhttp") != 0 && strcmp(frontend, "alpine") != 0) {
-        fprintf(stderr, "unknown --frontend '%s' (try yrpc | yttp | yhttp | alpine)\n", frontend);
+        strcmp(frontend, "yhttp") != 0 && strcmp(frontend, "alpine") != 0 &&
+        strcmp(frontend, "msgpack") != 0) {
+        fprintf(stderr, "unknown --frontend '%s' (try yrpc | yttp | yhttp | alpine | msgpack)\n",
+                frontend);
         return 2;
     }
 
@@ -450,29 +460,34 @@ static int cmd_client(struct picomesh_engine *e)
         perror("connect"); close(fd); return 1;
     }
     yinfo("picomesh client: connected to %s:%d", host, port);
+
+    /* --transport msgpack: drive a FOREIGN msgpack service over the outbound
+     * msgpack client path. The receiver object is built locally (no remote
+     * CREATE — the msgpack envelope identifies the receiver by path), then the
+     * call rides the msgpack peer. Proves picomesh C → foreign msgpack. */
+    const char *transport = yargv_get_string(picomesh_engine_cli(e), "transport", NULL);
+    if (transport && strcmp(transport, "msgpack") == 0) {
+        struct peer_channel *mp = peer_channel_create_msgpack(fd);
+        if (!mp) { close(fd); return 1; }
+        struct ctx local_ctx = {0};
+        struct object_ptr_result cr = calculator_calc_create(&local_ctx);
+        if (PICOMESH_IS_ERR(cr)) { peer_channel_destroy(mp); return die_err("calc_create", cr.error); }
+        struct object *calc = cr.value;
+        struct ctx mp_ctx = {.peer = mp};
+        struct picomesh_int64_result ar = calculator_calc_add(&mp_ctx, calc, NULL, 6, 7);
+        if (PICOMESH_IS_ERR(ar)) { peer_channel_destroy(mp); return die_err("calc_add(msgpack)", ar.error); }
+        printf("msgpack client: 6 + 7 = %lld\n", (long long)ar.value);
+        struct picomesh_int64_result mr = calculator_calc_mul(&mp_ctx, calc, NULL, 6, 7);
+        if (PICOMESH_IS_ERR(mr)) { peer_channel_destroy(mp); return die_err("calc_mul(msgpack)", mr.error); }
+        printf("msgpack client: 6 * 7 = %lld\n", (long long)mr.value);
+        object_release_in_ctx(&local_ctx, calc);
+        peer_channel_destroy(mp);
+        return 0;
+    }
+
     struct peer_channel *s = peer_channel_create(fd);
     if (!s) { close(fd); return 1; }
     struct ctx ctx = {.peer = s};
-
-    struct object_ptr_result kv_r = storage_kv_create(&ctx);
-    if (PICOMESH_IS_ERR(kv_r)) { peer_channel_destroy(s); return die_err("kv_create", kv_r.error); }
-    struct object *kv = kv_r.value;
-    for (uint32_t k = 1; k <= 3; ++k) {
-        char key[16], val[16];
-        snprintf(key, sizeof(key), "k%u", k);
-        snprintf(val, sizeof(val), "%u", k * 10);
-        struct picomesh_int_result sr = storage_kv_set(&ctx, kv, NULL, key, val);
-        if (PICOMESH_IS_ERR(sr)) { peer_channel_destroy(s); return die_err("kv_set", sr.error); }
-    }
-    for (uint32_t k = 1; k <= 3; ++k) {
-        char key[16];
-        snprintf(key, sizeof(key), "k%u", k);
-        struct picomesh_string_result gr = storage_kv_get(&ctx, kv, NULL, key);
-        if (PICOMESH_IS_ERR(gr)) { peer_channel_destroy(s); return die_err("kv_get", gr.error); }
-        yinfo("client: kv[%s] = %s", key, gr.value ? gr.value : "(null)");
-        free(gr.value);
-    }
-    object_release_in_ctx(&ctx, kv); /* remote proxy is cached on the channel */
 
     struct object_ptr_result cr = calculator_calc_create(&ctx);
     if (PICOMESH_IS_ERR(cr)) { peer_channel_destroy(s); return die_err("calc_create", cr.error); }

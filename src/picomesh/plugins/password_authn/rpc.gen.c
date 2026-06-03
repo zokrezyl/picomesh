@@ -1,6 +1,7 @@
 /* GENERATED — do not edit. */
 #include <picomesh/yclass/rpc.h>
 #include <picomesh/yclass/jinvoke.h>
+#include <picomesh/yclass/minvoke.h>
 #include <picomesh/yclass/yheaders.h>
 #include <picomesh/yjson/yjson.h>
 #include <picomesh/ycore/result.h>
@@ -9,12 +10,13 @@
 #include <picomesh/ycore/ytelemetry.h>
 #include <picomesh/yclass/class.h>
 #include "password_authn.internal.h"
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-static size_t password_authn_store_register_skel(const void *_body, size_t _body_len,
+static size_t password_authn_password_authn_register_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
@@ -44,13 +46,13 @@ static size_t password_authn_store_register_skel(const void *_body, size_t _body
     memcpy(&_v2, (const uint8_t *)_body + _off, sizeof(_v2));
     _off += sizeof(_v2);
     struct ytelemetry_span _tsp;
-    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.password_authn_store_register");
-    struct picomesh_int_result _r = password_authn_store_register(&_local, _obj, _hdrs, _v1, _v2);
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.password_authn_password_authn_register");
+    struct picomesh_int_result _r = password_authn_password_authn_register(&_local, _obj, _hdrs, _v1, _v2);
     ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
-        picomesh_error_print(stderr, "[skel] password_authn_store_register", _r.error);
+        picomesh_error_print(stderr, "[skel] password_authn_password_authn_register", _r.error);
         const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
         uint32_t _ml = (uint32_t)strlen(_msg);
         if (_ml > 256) _ml = 256;
@@ -75,7 +77,7 @@ _short_body:
     return _resp_max >= 1 ? 1 : 0;
 }
 
-static size_t password_authn_store_authenticate_skel(const void *_body, size_t _body_len,
+static size_t password_authn_password_authn_authenticate_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
@@ -105,13 +107,13 @@ static size_t password_authn_store_authenticate_skel(const void *_body, size_t _
     memcpy(&_v2, (const uint8_t *)_body + _off, sizeof(_v2));
     _off += sizeof(_v2);
     struct ytelemetry_span _tsp;
-    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.password_authn_store_authenticate");
-    struct picomesh_int_result _r = password_authn_store_authenticate(&_local, _obj, _hdrs, _v1, _v2);
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.password_authn_password_authn_authenticate");
+    struct picomesh_int_result _r = password_authn_password_authn_authenticate(&_local, _obj, _hdrs, _v1, _v2);
     ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
-        picomesh_error_print(stderr, "[skel] password_authn_store_authenticate", _r.error);
+        picomesh_error_print(stderr, "[skel] password_authn_password_authn_authenticate", _r.error);
         const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
         uint32_t _ml = (uint32_t)strlen(_msg);
         if (_ml > 256) _ml = 256;
@@ -136,7 +138,7 @@ _short_body:
     return _resp_max >= 1 ? 1 : 0;
 }
 
-static size_t password_authn_store_change_password_skel(const void *_body, size_t _body_len,
+static size_t password_authn_password_authn_change_password_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
@@ -166,13 +168,13 @@ static size_t password_authn_store_change_password_skel(const void *_body, size_
     memcpy(&_v2, (const uint8_t *)_body + _off, sizeof(_v2));
     _off += sizeof(_v2);
     struct ytelemetry_span _tsp;
-    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.password_authn_store_change_password");
-    struct picomesh_int_result _r = password_authn_store_change_password(&_local, _obj, _hdrs, _v1, _v2);
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.password_authn_password_authn_change_password");
+    struct picomesh_int_result _r = password_authn_password_authn_change_password(&_local, _obj, _hdrs, _v1, _v2);
     ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
-        picomesh_error_print(stderr, "[skel] password_authn_store_change_password", _r.error);
+        picomesh_error_print(stderr, "[skel] password_authn_password_authn_change_password", _r.error);
         const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
         uint32_t _ml = (uint32_t)strlen(_msg);
         if (_ml > 256) _ml = 256;
@@ -197,7 +199,7 @@ _short_body:
     return _resp_max >= 1 ? 1 : 0;
 }
 
-static size_t password_authn_store_count_registered_skel(const void *_body, size_t _body_len,
+static size_t password_authn_password_authn_count_registered_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
     size_t _off = 0;
@@ -219,13 +221,13 @@ static size_t password_authn_store_count_registered_skel(const void *_body, size
         _obj = (struct object *)rpc_handle_resolve(_h);
     }
     struct ytelemetry_span _tsp;
-    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.password_authn_store_count_registered");
-    struct picomesh_size_result _r = password_authn_store_count_registered(&_local, _obj, _hdrs);
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.password_authn_password_authn_count_registered");
+    struct picomesh_size_result _r = password_authn_password_authn_count_registered(&_local, _obj, _hdrs);
     ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
     if (PICOMESH_IS_ERR(_r)) {
-        picomesh_error_print(stderr, "[skel] password_authn_store_count_registered", _r.error);
+        picomesh_error_print(stderr, "[skel] password_authn_password_authn_count_registered", _r.error);
         const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
         uint32_t _ml = (uint32_t)strlen(_msg);
         if (_ml > 256) _ml = 256;
@@ -250,7 +252,133 @@ _short_body:
     return _resp_max >= 1 ? 1 : 0;
 }
 
-static int password_authn_store_register_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+static size_t password_authn_password_authn_list_skel(const void *_body, size_t _body_len,
+                          void *_resp, size_t _resp_max)
+{
+    size_t _off = 0;
+    struct ctx _local = {0};
+    /* The framework header section is first on every CALL body — parse
+     * it back into the `hdrs` argument before the packed business args. */
+    struct yheaders *_hdrs = NULL;
+    {
+        size_t _hconsumed = 0;
+        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
+        if (!_hdrs) goto _short_body;
+        _off = _hconsumed;
+    }
+    struct object *_obj = NULL;
+    {
+        if (_off + 8 > _body_len) goto _short_body;
+        uint64_t _h;
+        memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
+        _obj = (struct object *)rpc_handle_resolve(_h);
+    }
+    int64_t _v1 = 0;
+    if (_off + sizeof(_v1) > _body_len) goto _short_body;
+    memcpy(&_v1, (const uint8_t *)_body + _off, sizeof(_v1));
+    _off += sizeof(_v1);
+    int64_t _v2 = 0;
+    if (_off + sizeof(_v2) > _body_len) goto _short_body;
+    memcpy(&_v2, (const uint8_t *)_body + _off, sizeof(_v2));
+    _off += sizeof(_v2);
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.password_authn_password_authn_list");
+    struct picomesh_json_result _r = password_authn_password_authn_list(&_local, _obj, _hdrs, _v1, _v2);
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
+    yheaders_free(_hdrs); _hdrs = NULL;
+    if (_resp_max < 1) return 0;
+    if (PICOMESH_IS_ERR(_r)) {
+        picomesh_error_print(stderr, "[skel] password_authn_password_authn_list", _r.error);
+        const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
+        uint32_t _ml = (uint32_t)strlen(_msg);
+        if (_ml > 256) _ml = 256;
+        if (_resp_max < 1 + 4 + _ml) {
+            picomesh_error_destroy(_r.error);
+            ((uint8_t *)_resp)[0] = 1;
+            return _resp_max >= 1 ? 1 : 0;
+        }
+        ((uint8_t *)_resp)[0] = 1;
+        memcpy((uint8_t *)_resp + 1, &_ml, 4);
+        memcpy((uint8_t *)_resp + 5, _msg, _ml);
+        picomesh_error_destroy(_r.error);
+        return 1 + 4 + _ml;
+    }
+    {
+        const char *_sv = _r.value ? _r.value : "";
+        uint32_t _svlen = (uint32_t)strlen(_sv);
+        if (_resp_max < 1 + 4 + (size_t)_svlen) { free(_r.value); return 0; }
+        ((uint8_t *)_resp)[0] = 0;
+        memcpy((uint8_t *)_resp + 1, &_svlen, 4);
+        if (_svlen) memcpy((uint8_t *)_resp + 5, _sv, _svlen);
+        free(_r.value);
+        return 1 + 4 + (size_t)_svlen;
+    }
+_short_body:
+    yheaders_free(_hdrs);
+    if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
+    return _resp_max >= 1 ? 1 : 0;
+}
+
+static size_t password_authn_password_authn_list_all_skel(const void *_body, size_t _body_len,
+                          void *_resp, size_t _resp_max)
+{
+    size_t _off = 0;
+    struct ctx _local = {0};
+    /* The framework header section is first on every CALL body — parse
+     * it back into the `hdrs` argument before the packed business args. */
+    struct yheaders *_hdrs = NULL;
+    {
+        size_t _hconsumed = 0;
+        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
+        if (!_hdrs) goto _short_body;
+        _off = _hconsumed;
+    }
+    struct object *_obj = NULL;
+    {
+        if (_off + 8 > _body_len) goto _short_body;
+        uint64_t _h;
+        memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
+        _obj = (struct object *)rpc_handle_resolve(_h);
+    }
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.password_authn_password_authn_list_all");
+    struct picomesh_json_result _r = password_authn_password_authn_list_all(&_local, _obj, _hdrs);
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
+    yheaders_free(_hdrs); _hdrs = NULL;
+    if (_resp_max < 1) return 0;
+    if (PICOMESH_IS_ERR(_r)) {
+        picomesh_error_print(stderr, "[skel] password_authn_password_authn_list_all", _r.error);
+        const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
+        uint32_t _ml = (uint32_t)strlen(_msg);
+        if (_ml > 256) _ml = 256;
+        if (_resp_max < 1 + 4 + _ml) {
+            picomesh_error_destroy(_r.error);
+            ((uint8_t *)_resp)[0] = 1;
+            return _resp_max >= 1 ? 1 : 0;
+        }
+        ((uint8_t *)_resp)[0] = 1;
+        memcpy((uint8_t *)_resp + 1, &_ml, 4);
+        memcpy((uint8_t *)_resp + 5, _msg, _ml);
+        picomesh_error_destroy(_r.error);
+        return 1 + 4 + _ml;
+    }
+    {
+        const char *_sv = _r.value ? _r.value : "";
+        uint32_t _svlen = (uint32_t)strlen(_sv);
+        if (_resp_max < 1 + 4 + (size_t)_svlen) { free(_r.value); return 0; }
+        ((uint8_t *)_resp)[0] = 0;
+        memcpy((uint8_t *)_resp + 1, &_svlen, 4);
+        if (_svlen) memcpy((uint8_t *)_resp + 5, _sv, _svlen);
+        free(_r.value);
+        return 1 + 4 + (size_t)_svlen;
+    }
+_short_body:
+    yheaders_free(_hdrs);
+    if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
+    return _resp_max >= 1 ? 1 : 0;
+}
+
+static int password_authn_password_authn_register_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
 {
@@ -258,18 +386,18 @@ static int password_authn_store_register_jinvoke(struct ctx *ctx, struct object 
     int64_t arg1 = (int64_t)yjson_as_int(yjson_array_at(args, 1), 0);
     struct ctx local_ctx = {0};
     struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct picomesh_int_result call_result = password_authn_store_register(call_ctx, obj, hdrs, arg0, arg1);
+    struct picomesh_int_result call_result = password_authn_password_authn_register(call_ctx, obj, hdrs, arg0, arg1);
     if (PICOMESH_IS_ERR(call_result)) {
-        snprintf(err, err_cap, "%s: %s", "password_authn_store_register",
+        snprintf(err, err_cap, "%s: %s", "password_authn_password_authn_register",
                  call_result.error.msg ? call_result.error.msg : "<no message>");
         picomesh_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(result, (int64_t)call_result.value);
+    yjson_writer_int(result, (int64_t)call_result.value);
     return 0;
 }
 
-static int password_authn_store_authenticate_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+static int password_authn_password_authn_authenticate_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
 {
@@ -277,18 +405,18 @@ static int password_authn_store_authenticate_jinvoke(struct ctx *ctx, struct obj
     int64_t arg1 = (int64_t)yjson_as_int(yjson_array_at(args, 1), 0);
     struct ctx local_ctx = {0};
     struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct picomesh_int_result call_result = password_authn_store_authenticate(call_ctx, obj, hdrs, arg0, arg1);
+    struct picomesh_int_result call_result = password_authn_password_authn_authenticate(call_ctx, obj, hdrs, arg0, arg1);
     if (PICOMESH_IS_ERR(call_result)) {
-        snprintf(err, err_cap, "%s: %s", "password_authn_store_authenticate",
+        snprintf(err, err_cap, "%s: %s", "password_authn_password_authn_authenticate",
                  call_result.error.msg ? call_result.error.msg : "<no message>");
         picomesh_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(result, (int64_t)call_result.value);
+    yjson_writer_int(result, (int64_t)call_result.value);
     return 0;
 }
 
-static int password_authn_store_change_password_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+static int password_authn_password_authn_change_password_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
 {
@@ -296,43 +424,252 @@ static int password_authn_store_change_password_jinvoke(struct ctx *ctx, struct 
     int64_t arg1 = (int64_t)yjson_as_int(yjson_array_at(args, 1), 0);
     struct ctx local_ctx = {0};
     struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct picomesh_int_result call_result = password_authn_store_change_password(call_ctx, obj, hdrs, arg0, arg1);
+    struct picomesh_int_result call_result = password_authn_password_authn_change_password(call_ctx, obj, hdrs, arg0, arg1);
     if (PICOMESH_IS_ERR(call_result)) {
-        snprintf(err, err_cap, "%s: %s", "password_authn_store_change_password",
+        snprintf(err, err_cap, "%s: %s", "password_authn_password_authn_change_password",
                  call_result.error.msg ? call_result.error.msg : "<no message>");
         picomesh_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(result, (int64_t)call_result.value);
+    yjson_writer_int(result, (int64_t)call_result.value);
     return 0;
 }
 
-static int password_authn_store_count_registered_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+static int password_authn_password_authn_count_registered_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
 {
     struct ctx local_ctx = {0};
     struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct picomesh_size_result call_result = password_authn_store_count_registered(call_ctx, obj, hdrs);
+    struct picomesh_size_result call_result = password_authn_password_authn_count_registered(call_ctx, obj, hdrs);
     if (PICOMESH_IS_ERR(call_result)) {
-        snprintf(err, err_cap, "%s: %s", "password_authn_store_count_registered",
+        snprintf(err, err_cap, "%s: %s", "password_authn_password_authn_count_registered",
                  call_result.error.msg ? call_result.error.msg : "<no message>");
         picomesh_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(result, (int64_t)call_result.value);
+    yjson_writer_int(result, (int64_t)call_result.value);
     return 0;
 }
 
-struct object_ptr_result password_authn_store_create(struct ctx *ctx)
+static int password_authn_password_authn_list_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
 {
-    ydebug("class=password_authn_store");
-    struct class_ptr_result _kr = password_authn_store_class_get();
+    int64_t arg0 = (int64_t)yjson_as_int(yjson_array_at(args, 0), 0);
+    int64_t arg1 = (int64_t)yjson_as_int(yjson_array_at(args, 1), 0);
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_json_result call_result = password_authn_password_authn_list(call_ctx, obj, hdrs, arg0, arg1);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "password_authn_password_authn_list",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    yjson_writer_raw(result, call_result.value ? call_result.value : "null");
+    free(call_result.value);
+    return 0;
+}
+
+static int password_authn_password_authn_list_all_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
+{
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_json_result call_result = password_authn_password_authn_list_all(call_ctx, obj, hdrs);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "password_authn_password_authn_list_all",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    yjson_writer_raw(result, call_result.value ? call_result.value : "null");
+    free(call_result.value);
+    return 0;
+}
+
+static int password_authn_password_authn_register_minvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          cmp_ctx_t *_mr, uint32_t _argc, cmp_ctx_t *_mw,
+                          char *_err, size_t _err_cap)
+{
+    (void)_mr;
+    if (_argc != 2u) {
+        snprintf(_err, _err_cap, "password_authn_password_authn_register: expected 2 arg(s), got %u", _argc);
+        return -1;
+    }
+    uint32_t _v0;
+    {
+        uint64_t _u;
+        if (!cmp_read_uinteger(_mr, &_u)) { snprintf(_err, _err_cap, "user_id: expected unsigned int (%s)", cmp_strerror(_mr)); return -1; }
+        if (_u > UINT32_MAX) { snprintf(_err, _err_cap, "user_id: value %llu out of range for uint32_t", (unsigned long long)_u); return -1; }
+        _v0 = (uint32_t)_u;
+    }
+    int64_t _v1;
+    if (!cmp_read_integer(_mr, &_v1)) { snprintf(_err, _err_cap, "hash: expected int (%s)", cmp_strerror(_mr)); return -1; }
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_int_result call_result = password_authn_password_authn_register(call_ctx, obj, hdrs, _v0, _v1);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(_err, _err_cap, "%s: %s", "password_authn_password_authn_register",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    cmp_write_integer(_mw, (int64_t)call_result.value);
+    return 0;
+}
+
+static int password_authn_password_authn_authenticate_minvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          cmp_ctx_t *_mr, uint32_t _argc, cmp_ctx_t *_mw,
+                          char *_err, size_t _err_cap)
+{
+    (void)_mr;
+    if (_argc != 2u) {
+        snprintf(_err, _err_cap, "password_authn_password_authn_authenticate: expected 2 arg(s), got %u", _argc);
+        return -1;
+    }
+    uint32_t _v0;
+    {
+        uint64_t _u;
+        if (!cmp_read_uinteger(_mr, &_u)) { snprintf(_err, _err_cap, "user_id: expected unsigned int (%s)", cmp_strerror(_mr)); return -1; }
+        if (_u > UINT32_MAX) { snprintf(_err, _err_cap, "user_id: value %llu out of range for uint32_t", (unsigned long long)_u); return -1; }
+        _v0 = (uint32_t)_u;
+    }
+    int64_t _v1;
+    if (!cmp_read_integer(_mr, &_v1)) { snprintf(_err, _err_cap, "hash: expected int (%s)", cmp_strerror(_mr)); return -1; }
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_int_result call_result = password_authn_password_authn_authenticate(call_ctx, obj, hdrs, _v0, _v1);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(_err, _err_cap, "%s: %s", "password_authn_password_authn_authenticate",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    cmp_write_integer(_mw, (int64_t)call_result.value);
+    return 0;
+}
+
+static int password_authn_password_authn_change_password_minvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          cmp_ctx_t *_mr, uint32_t _argc, cmp_ctx_t *_mw,
+                          char *_err, size_t _err_cap)
+{
+    (void)_mr;
+    if (_argc != 2u) {
+        snprintf(_err, _err_cap, "password_authn_password_authn_change_password: expected 2 arg(s), got %u", _argc);
+        return -1;
+    }
+    uint32_t _v0;
+    {
+        uint64_t _u;
+        if (!cmp_read_uinteger(_mr, &_u)) { snprintf(_err, _err_cap, "user_id: expected unsigned int (%s)", cmp_strerror(_mr)); return -1; }
+        if (_u > UINT32_MAX) { snprintf(_err, _err_cap, "user_id: value %llu out of range for uint32_t", (unsigned long long)_u); return -1; }
+        _v0 = (uint32_t)_u;
+    }
+    int64_t _v1;
+    if (!cmp_read_integer(_mr, &_v1)) { snprintf(_err, _err_cap, "hash: expected int (%s)", cmp_strerror(_mr)); return -1; }
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_int_result call_result = password_authn_password_authn_change_password(call_ctx, obj, hdrs, _v0, _v1);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(_err, _err_cap, "%s: %s", "password_authn_password_authn_change_password",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    cmp_write_integer(_mw, (int64_t)call_result.value);
+    return 0;
+}
+
+static int password_authn_password_authn_count_registered_minvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          cmp_ctx_t *_mr, uint32_t _argc, cmp_ctx_t *_mw,
+                          char *_err, size_t _err_cap)
+{
+    (void)_mr;
+    if (_argc != 0u) {
+        snprintf(_err, _err_cap, "password_authn_password_authn_count_registered: expected 0 arg(s), got %u", _argc);
+        return -1;
+    }
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_size_result call_result = password_authn_password_authn_count_registered(call_ctx, obj, hdrs);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(_err, _err_cap, "%s: %s", "password_authn_password_authn_count_registered",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    cmp_write_uinteger(_mw, (uint64_t)call_result.value);
+    return 0;
+}
+
+static int password_authn_password_authn_list_minvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          cmp_ctx_t *_mr, uint32_t _argc, cmp_ctx_t *_mw,
+                          char *_err, size_t _err_cap)
+{
+    (void)_mr;
+    if (_argc != 2u) {
+        snprintf(_err, _err_cap, "password_authn_password_authn_list: expected 2 arg(s), got %u", _argc);
+        return -1;
+    }
+    int64_t _v0;
+    if (!cmp_read_integer(_mr, &_v0)) { snprintf(_err, _err_cap, "offset: expected int (%s)", cmp_strerror(_mr)); return -1; }
+    int64_t _v1;
+    if (!cmp_read_integer(_mr, &_v1)) { snprintf(_err, _err_cap, "limit: expected int (%s)", cmp_strerror(_mr)); return -1; }
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_json_result call_result = password_authn_password_authn_list(call_ctx, obj, hdrs, _v0, _v1);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(_err, _err_cap, "%s: %s", "password_authn_password_authn_list",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    {
+        const char *_sv = call_result.value ? call_result.value : "";
+        cmp_write_str(_mw, _sv, (uint32_t)strlen(_sv));
+        free(call_result.value);
+    }
+    return 0;
+}
+
+static int password_authn_password_authn_list_all_minvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          cmp_ctx_t *_mr, uint32_t _argc, cmp_ctx_t *_mw,
+                          char *_err, size_t _err_cap)
+{
+    (void)_mr;
+    if (_argc != 0u) {
+        snprintf(_err, _err_cap, "password_authn_password_authn_list_all: expected 0 arg(s), got %u", _argc);
+        return -1;
+    }
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_json_result call_result = password_authn_password_authn_list_all(call_ctx, obj, hdrs);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(_err, _err_cap, "%s: %s", "password_authn_password_authn_list_all",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    {
+        const char *_sv = call_result.value ? call_result.value : "";
+        cmp_write_str(_mw, _sv, (uint32_t)strlen(_sv));
+        free(call_result.value);
+    }
+    return 0;
+}
+
+struct object_ptr_result password_authn_password_authn_create(struct ctx *ctx)
+{
+    ydebug("class=password_authn_password_authn");
+    struct class_ptr_result _kr = password_authn_password_authn_class_get();
     if (PICOMESH_IS_ERR(_kr))
-        return PICOMESH_ERR(object_ptr, "password_authn_store_create: class accessor failed", _kr);
+        return PICOMESH_ERR(object_ptr, "password_authn_password_authn_create: class accessor failed", _kr);
     /* A service dependency is acquired once and cached for the connection
      * (remote) / process (in-process) lifetime — no per-call create. */
-    return rpc_object_acquire(ctx, _kr.value, "password_authn_store");
+    return rpc_object_acquire(ctx, _kr.value, "password_authn_password_authn");
 }
 
 
@@ -341,10 +678,12 @@ struct object_ptr_result password_authn_store_create(struct ctx *ctx)
 struct password_authn_jinvoke_row { const char *name; jinvoke_fn fn; };
 
 static const struct password_authn_jinvoke_row password_authn_jinvoke_rows[] = {
-    {"password_authn_store_register", password_authn_store_register_jinvoke},
-    {"password_authn_store_authenticate", password_authn_store_authenticate_jinvoke},
-    {"password_authn_store_change_password", password_authn_store_change_password_jinvoke},
-    {"password_authn_store_count_registered", password_authn_store_count_registered_jinvoke}
+    {"password_authn_password_authn_register", password_authn_password_authn_register_jinvoke},
+    {"password_authn_password_authn_authenticate", password_authn_password_authn_authenticate_jinvoke},
+    {"password_authn_password_authn_change_password", password_authn_password_authn_change_password_jinvoke},
+    {"password_authn_password_authn_count_registered", password_authn_password_authn_count_registered_jinvoke},
+    {"password_authn_password_authn_list", password_authn_password_authn_list_jinvoke},
+    {"password_authn_password_authn_list_all", password_authn_password_authn_list_all_jinvoke}
 };
 
 static jinvoke_fn password_authn_jinvoke_lookup(const char *qname)
@@ -355,11 +694,71 @@ static jinvoke_fn password_authn_jinvoke_lookup(const char *qname)
             return password_authn_jinvoke_rows[i].fn;
     return NULL;
 }
+
+/* ---- password_authn: minvoke table ------------------------------------ */
+
+struct password_authn_minvoke_row { const char *name; minvoke_fn fn; };
+
+static const struct password_authn_minvoke_row password_authn_minvoke_rows[] = {
+    {"password_authn_password_authn_register", password_authn_password_authn_register_minvoke},
+    {"password_authn_password_authn_authenticate", password_authn_password_authn_authenticate_minvoke},
+    {"password_authn_password_authn_change_password", password_authn_password_authn_change_password_minvoke},
+    {"password_authn_password_authn_count_registered", password_authn_password_authn_count_registered_minvoke},
+    {"password_authn_password_authn_list", password_authn_password_authn_list_minvoke},
+    {"password_authn_password_authn_list_all", password_authn_password_authn_list_all_minvoke}
+};
+
+static minvoke_fn password_authn_minvoke_lookup(const char *qname)
+{
+    for (size_t i = 0;
+         i < sizeof(password_authn_minvoke_rows) / sizeof(password_authn_minvoke_rows[0]); ++i)
+        if (strcmp(password_authn_minvoke_rows[i].name, qname) == 0)
+            return password_authn_minvoke_rows[i].fn;
+    return NULL;
+}
+
+/* ---- password_authn: per-method parameter signatures (runtime reflection) -- */
+
+static const struct jinvoke_param password_authn_password_authn_register_params[] = {
+    {"user_id", "uint32_t"},
+    {"hash", "int64_t"}
+};
+static const struct jinvoke_param password_authn_password_authn_authenticate_params[] = {
+    {"user_id", "uint32_t"},
+    {"hash", "int64_t"}
+};
+static const struct jinvoke_param password_authn_password_authn_change_password_params[] = {
+    {"user_id", "uint32_t"},
+    {"hash", "int64_t"}
+};
+static const struct jinvoke_param password_authn_password_authn_list_params[] = {
+    {"offset", "int64_t"},
+    {"limit", "int64_t"}
+};
+struct password_authn_params_row { const char *name; struct jinvoke_params params; };
+
+static const struct password_authn_params_row password_authn_params_rows[] = {
+    {"password_authn_password_authn_register", {password_authn_password_authn_register_params, 2}},
+    {"password_authn_password_authn_authenticate", {password_authn_password_authn_authenticate_params, 2}},
+    {"password_authn_password_authn_change_password", {password_authn_password_authn_change_password_params, 2}},
+    {"password_authn_password_authn_count_registered", {NULL, 0}},
+    {"password_authn_password_authn_list", {password_authn_password_authn_list_params, 2}},
+    {"password_authn_password_authn_list_all", {NULL, 0}}
+};
+
+static const struct jinvoke_params *password_authn_params_lookup(const char *qname)
+{
+    for (size_t i = 0;
+         i < sizeof(password_authn_params_rows) / sizeof(password_authn_params_rows[0]); ++i)
+        if (strcmp(password_authn_params_rows[i].name, qname) == 0)
+            return &password_authn_params_rows[i].params;
+    return NULL;
+}
 /* ---- password_authn: class name → accessor (lazy) ---------------------- */
 
 static struct class_ptr_result password_authn_accessor_lookup(const char *name)
 {
-    if (strcmp(name, "password_authn_store") == 0) return password_authn_store_class_get();
+    if (strcmp(name, "password_authn_password_authn") == 0) return password_authn_password_authn_class_get();
     return PICOMESH_OK(class_ptr, NULL);
 }
 
@@ -368,10 +767,12 @@ static struct class_ptr_result password_authn_accessor_lookup(const char *name)
 struct password_authn_skel_row { const char *name; rpc_skel_fn fn; };
 
 static const struct password_authn_skel_row password_authn_skel_rows[] = {
-    {"password_authn_store_register", password_authn_store_register_skel},
-    {"password_authn_store_authenticate", password_authn_store_authenticate_skel},
-    {"password_authn_store_change_password", password_authn_store_change_password_skel},
-    {"password_authn_store_count_registered", password_authn_store_count_registered_skel}
+    {"password_authn_password_authn_register", password_authn_password_authn_register_skel},
+    {"password_authn_password_authn_authenticate", password_authn_password_authn_authenticate_skel},
+    {"password_authn_password_authn_change_password", password_authn_password_authn_change_password_skel},
+    {"password_authn_password_authn_count_registered", password_authn_password_authn_count_registered_skel},
+    {"password_authn_password_authn_list", password_authn_password_authn_list_skel},
+    {"password_authn_password_authn_list_all", password_authn_password_authn_list_all_skel}
 };
 
 static rpc_skel_fn password_authn_skel_lookup(method_slot slot)
@@ -398,6 +799,8 @@ void picomesh_plugin_password_authn_register(void)
     }
     rpc_add_skel_lookup(password_authn_skel_lookup);
     jinvoke_add_lookup(password_authn_jinvoke_lookup);
-    { struct class_ptr_result reg = password_authn_store_class_get();
+    minvoke_add_lookup(password_authn_minvoke_lookup);
+    jinvoke_params_add_lookup(password_authn_params_lookup);
+    { struct class_ptr_result reg = password_authn_password_authn_class_get();
       if (PICOMESH_IS_ERR(reg)) picomesh_error_destroy(reg.error); }
 }

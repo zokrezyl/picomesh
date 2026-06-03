@@ -1,6 +1,7 @@
 /* GENERATED — do not edit. */
 #include <picomesh/yclass/rpc.h>
 #include <picomesh/yclass/jinvoke.h>
+#include <picomesh/yclass/minvoke.h>
 #include <picomesh/yclass/yheaders.h>
 #include <picomesh/yjson/yjson.h>
 #include <picomesh/ycore/result.h>
@@ -9,6 +10,7 @@
 #include <picomesh/ycore/ytelemetry.h>
 #include <picomesh/yclass/class.h>
 #include "calculator.internal.h"
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -273,7 +275,7 @@ static int calculator_calc_add_jinvoke(struct ctx *ctx, struct object *obj, stru
         picomesh_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(result, (int64_t)call_result.value);
+    yjson_writer_int(result, (int64_t)call_result.value);
     return 0;
 }
 
@@ -292,7 +294,7 @@ static int calculator_calc_sub_jinvoke(struct ctx *ctx, struct object *obj, stru
         picomesh_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(result, (int64_t)call_result.value);
+    yjson_writer_int(result, (int64_t)call_result.value);
     return 0;
 }
 
@@ -311,7 +313,7 @@ static int calculator_calc_mul_jinvoke(struct ctx *ctx, struct object *obj, stru
         picomesh_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(result, (int64_t)call_result.value);
+    yjson_writer_int(result, (int64_t)call_result.value);
     return 0;
 }
 
@@ -330,7 +332,111 @@ static int calculator_calc_div_jinvoke(struct ctx *ctx, struct object *obj, stru
         picomesh_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(result, (int64_t)call_result.value);
+    yjson_writer_int(result, (int64_t)call_result.value);
+    return 0;
+}
+
+static int calculator_calc_add_minvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          cmp_ctx_t *_mr, uint32_t _argc, cmp_ctx_t *_mw,
+                          char *_err, size_t _err_cap)
+{
+    (void)_mr;
+    if (_argc != 2u) {
+        snprintf(_err, _err_cap, "calculator_calc_add: expected 2 arg(s), got %u", _argc);
+        return -1;
+    }
+    int64_t _v0;
+    if (!cmp_read_integer(_mr, &_v0)) { snprintf(_err, _err_cap, "x: expected int (%s)", cmp_strerror(_mr)); return -1; }
+    int64_t _v1;
+    if (!cmp_read_integer(_mr, &_v1)) { snprintf(_err, _err_cap, "y: expected int (%s)", cmp_strerror(_mr)); return -1; }
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_int64_result call_result = calculator_calc_add(call_ctx, obj, hdrs, _v0, _v1);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(_err, _err_cap, "%s: %s", "calculator_calc_add",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    cmp_write_integer(_mw, (int64_t)call_result.value);
+    return 0;
+}
+
+static int calculator_calc_sub_minvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          cmp_ctx_t *_mr, uint32_t _argc, cmp_ctx_t *_mw,
+                          char *_err, size_t _err_cap)
+{
+    (void)_mr;
+    if (_argc != 2u) {
+        snprintf(_err, _err_cap, "calculator_calc_sub: expected 2 arg(s), got %u", _argc);
+        return -1;
+    }
+    int64_t _v0;
+    if (!cmp_read_integer(_mr, &_v0)) { snprintf(_err, _err_cap, "x: expected int (%s)", cmp_strerror(_mr)); return -1; }
+    int64_t _v1;
+    if (!cmp_read_integer(_mr, &_v1)) { snprintf(_err, _err_cap, "y: expected int (%s)", cmp_strerror(_mr)); return -1; }
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_int64_result call_result = calculator_calc_sub(call_ctx, obj, hdrs, _v0, _v1);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(_err, _err_cap, "%s: %s", "calculator_calc_sub",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    cmp_write_integer(_mw, (int64_t)call_result.value);
+    return 0;
+}
+
+static int calculator_calc_mul_minvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          cmp_ctx_t *_mr, uint32_t _argc, cmp_ctx_t *_mw,
+                          char *_err, size_t _err_cap)
+{
+    (void)_mr;
+    if (_argc != 2u) {
+        snprintf(_err, _err_cap, "calculator_calc_mul: expected 2 arg(s), got %u", _argc);
+        return -1;
+    }
+    int64_t _v0;
+    if (!cmp_read_integer(_mr, &_v0)) { snprintf(_err, _err_cap, "x: expected int (%s)", cmp_strerror(_mr)); return -1; }
+    int64_t _v1;
+    if (!cmp_read_integer(_mr, &_v1)) { snprintf(_err, _err_cap, "y: expected int (%s)", cmp_strerror(_mr)); return -1; }
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_int64_result call_result = calculator_calc_mul(call_ctx, obj, hdrs, _v0, _v1);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(_err, _err_cap, "%s: %s", "calculator_calc_mul",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    cmp_write_integer(_mw, (int64_t)call_result.value);
+    return 0;
+}
+
+static int calculator_calc_div_minvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          cmp_ctx_t *_mr, uint32_t _argc, cmp_ctx_t *_mw,
+                          char *_err, size_t _err_cap)
+{
+    (void)_mr;
+    if (_argc != 2u) {
+        snprintf(_err, _err_cap, "calculator_calc_div: expected 2 arg(s), got %u", _argc);
+        return -1;
+    }
+    int64_t _v0;
+    if (!cmp_read_integer(_mr, &_v0)) { snprintf(_err, _err_cap, "x: expected int (%s)", cmp_strerror(_mr)); return -1; }
+    int64_t _v1;
+    if (!cmp_read_integer(_mr, &_v1)) { snprintf(_err, _err_cap, "y: expected int (%s)", cmp_strerror(_mr)); return -1; }
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_int64_result call_result = calculator_calc_div(call_ctx, obj, hdrs, _v0, _v1);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(_err, _err_cap, "%s: %s", "calculator_calc_div",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    cmp_write_integer(_mw, (int64_t)call_result.value);
     return 0;
 }
 
@@ -363,6 +469,62 @@ static jinvoke_fn calculator_jinvoke_lookup(const char *qname)
          i < sizeof(calculator_jinvoke_rows) / sizeof(calculator_jinvoke_rows[0]); ++i)
         if (strcmp(calculator_jinvoke_rows[i].name, qname) == 0)
             return calculator_jinvoke_rows[i].fn;
+    return NULL;
+}
+
+/* ---- calculator: minvoke table ------------------------------------ */
+
+struct calculator_minvoke_row { const char *name; minvoke_fn fn; };
+
+static const struct calculator_minvoke_row calculator_minvoke_rows[] = {
+    {"calculator_calc_add", calculator_calc_add_minvoke},
+    {"calculator_calc_sub", calculator_calc_sub_minvoke},
+    {"calculator_calc_mul", calculator_calc_mul_minvoke},
+    {"calculator_calc_div", calculator_calc_div_minvoke}
+};
+
+static minvoke_fn calculator_minvoke_lookup(const char *qname)
+{
+    for (size_t i = 0;
+         i < sizeof(calculator_minvoke_rows) / sizeof(calculator_minvoke_rows[0]); ++i)
+        if (strcmp(calculator_minvoke_rows[i].name, qname) == 0)
+            return calculator_minvoke_rows[i].fn;
+    return NULL;
+}
+
+/* ---- calculator: per-method parameter signatures (runtime reflection) -- */
+
+static const struct jinvoke_param calculator_calc_add_params[] = {
+    {"x", "int64_t"},
+    {"y", "int64_t"}
+};
+static const struct jinvoke_param calculator_calc_sub_params[] = {
+    {"x", "int64_t"},
+    {"y", "int64_t"}
+};
+static const struct jinvoke_param calculator_calc_mul_params[] = {
+    {"x", "int64_t"},
+    {"y", "int64_t"}
+};
+static const struct jinvoke_param calculator_calc_div_params[] = {
+    {"x", "int64_t"},
+    {"y", "int64_t"}
+};
+struct calculator_params_row { const char *name; struct jinvoke_params params; };
+
+static const struct calculator_params_row calculator_params_rows[] = {
+    {"calculator_calc_add", {calculator_calc_add_params, 2}},
+    {"calculator_calc_sub", {calculator_calc_sub_params, 2}},
+    {"calculator_calc_mul", {calculator_calc_mul_params, 2}},
+    {"calculator_calc_div", {calculator_calc_div_params, 2}}
+};
+
+static const struct jinvoke_params *calculator_params_lookup(const char *qname)
+{
+    for (size_t i = 0;
+         i < sizeof(calculator_params_rows) / sizeof(calculator_params_rows[0]); ++i)
+        if (strcmp(calculator_params_rows[i].name, qname) == 0)
+            return &calculator_params_rows[i].params;
     return NULL;
 }
 /* ---- calculator: class name → accessor (lazy) ---------------------- */
@@ -408,6 +570,8 @@ void picomesh_plugin_calculator_register(void)
     }
     rpc_add_skel_lookup(calculator_skel_lookup);
     jinvoke_add_lookup(calculator_jinvoke_lookup);
+    minvoke_add_lookup(calculator_minvoke_lookup);
+    jinvoke_params_add_lookup(calculator_params_lookup);
     { struct class_ptr_result reg = calculator_calc_class_get();
       if (PICOMESH_IS_ERR(reg)) picomesh_error_destroy(reg.error); }
 }

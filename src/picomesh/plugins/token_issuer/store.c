@@ -34,7 +34,7 @@
 #define TI_CTX "token_issuer"
 
 /* No in-memory state — every op delegates to storage. */
-struct PICOMESH_CLASS_ANNOTATE("class@token_issuer:store") token_issuer_store_data {
+struct PICOMESH_CLASS_ANNOTATE("class@token_issuer:token_issuer") token_issuer_token_issuer_data {
     char _unused;
 };
 
@@ -121,8 +121,8 @@ static struct picomesh_uint32_result token_mint(struct ti_storage *h, struct yhe
     return PICOMESH_OK(picomesh_uint32, tid);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@token_issuer:store:store_login")
-struct picomesh_uint32_result token_issuer_store_login_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@token_issuer:token_issuer:token_issuer_login")
+struct picomesh_uint32_result token_issuer_token_issuer_login_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                          uint32_t user_id, uint32_t provider_id)
 {
     (void)ctx; (void)obj;
@@ -137,8 +137,8 @@ struct picomesh_uint32_result token_issuer_store_login_impl(struct ctx *ctx, str
     return minted;
 }
 
-PICOMESH_CLASS_ANNOTATE("override@token_issuer:store:store_validate")
-struct picomesh_uint32_result token_issuer_store_validate_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@token_issuer:token_issuer:token_issuer_validate")
+struct picomesh_uint32_result token_issuer_token_issuer_validate_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                             uint32_t token_id)
 {
     (void)ctx; (void)obj;
@@ -151,8 +151,8 @@ struct picomesh_uint32_result token_issuer_store_validate_impl(struct ctx *ctx, 
     return PICOMESH_OK(picomesh_uint32, lr.value ? user_id : 0);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@token_issuer:store:store_refresh")
-struct picomesh_uint32_result token_issuer_store_refresh_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@token_issuer:token_issuer:token_issuer_refresh")
+struct picomesh_uint32_result token_issuer_token_issuer_refresh_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                            uint32_t token_id)
 {
     (void)ctx; (void)obj;
@@ -177,8 +177,8 @@ struct picomesh_uint32_result token_issuer_store_refresh_impl(struct ctx *ctx, s
     return minted;
 }
 
-PICOMESH_CLASS_ANNOTATE("override@token_issuer:store:store_revoke")
-struct picomesh_int_result token_issuer_store_revoke_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@token_issuer:token_issuer:token_issuer_revoke")
+struct picomesh_int_result token_issuer_token_issuer_revoke_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                        uint32_t token_id)
 {
     (void)ctx; (void)obj;
@@ -197,8 +197,8 @@ struct picomesh_int_result token_issuer_store_revoke_impl(struct ctx *ctx, struc
     return PICOMESH_OK(picomesh_int, 1);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@token_issuer:store:store_count_active")
-struct picomesh_size_result token_issuer_store_count_active_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
+PICOMESH_CLASS_ANNOTATE("override@token_issuer:token_issuer:token_issuer_count_active")
+struct picomesh_size_result token_issuer_token_issuer_count_active_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
     (void)ctx; (void)obj;
     struct ti_storage_result sr = ti_open();
@@ -207,6 +207,32 @@ struct picomesh_size_result token_issuer_store_count_active_impl(struct ctx *ctx
     struct picomesh_int64_result cr = ti_get(&h, hdrs, "count", 0);
     if (PICOMESH_IS_ERR(cr)) return PICOMESH_ERR(picomesh_size, "token_issuer_count: read failed", cr);
     return PICOMESH_OK(picomesh_size, (size_t)(cr.value < 0 ? 0 : cr.value));
+}
+
+/* List ALL issued-token entries as a JSON array (gh#15) — every object,
+ * not a count. Delegates to the namespace scan. */
+PICOMESH_CLASS_ANNOTATE("override@token_issuer:token_issuer:token_issuer_list")
+struct picomesh_json_result token_issuer_token_issuer_list_impl(struct ctx *ctx, struct object *obj,
+                                                         struct yheaders *hdrs,
+                                                         int64_t offset, int64_t limit)
+{
+    (void)ctx; (void)obj;
+    struct ti_storage_result sr = ti_open();
+    if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_json, "token_issuer_list: storage open failed", sr);
+    struct ti_storage h = sr.value;
+    return sharded_storage_db_list(&h.c, h.obj, hdrs, TI_CTX, "tok:", offset, limit);
+}
+
+/* Unbounded variant — every issued token. Use with care on large deployments. */
+PICOMESH_CLASS_ANNOTATE("override@token_issuer:token_issuer:token_issuer_list_all")
+struct picomesh_json_result token_issuer_token_issuer_list_all_impl(struct ctx *ctx, struct object *obj,
+                                                                    struct yheaders *hdrs)
+{
+    (void)ctx; (void)obj;
+    struct ti_storage_result sr = ti_open();
+    if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_json, "token_issuer_list_all: storage open failed", sr);
+    struct ti_storage h = sr.value;
+    return sharded_storage_db_list_all(&h.c, h.obj, hdrs, TI_CTX, "tok:");
 }
 
 #include "store.gen.c"

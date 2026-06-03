@@ -1,7 +1,7 @@
 methods:
-  - slot: store_set_credentials
+  - slot: github_authn_set_credentials
     domain: github_authn
-    owning_class: store
+    owning_class: github_authn
     return_type: struct picomesh_int_result
     args:
       - name: ctx
@@ -14,9 +14,9 @@ methods:
         type: uint32_t
       - name: secret_id
         type: uint32_t
-  - slot: store_register_code
+  - slot: github_authn_register_code
     domain: github_authn
-    owning_class: store
+    owning_class: github_authn
     return_type: struct picomesh_int_result
     args:
       - name: ctx
@@ -29,9 +29,9 @@ methods:
         type: uint32_t
       - name: user_id
         type: uint32_t
-  - slot: store_resolve
+  - slot: github_authn_resolve
     domain: github_authn
-    owning_class: store
+    owning_class: github_authn
     return_type: struct picomesh_uint32_result
     args:
       - name: ctx
@@ -42,9 +42,9 @@ methods:
         type: "struct yheaders *"
       - name: code
         type: uint32_t
-  - slot: store_count_codes
+  - slot: github_authn_count_codes
     domain: github_authn
-    owning_class: store
+    owning_class: github_authn
     return_type: struct picomesh_size_result
     args:
       - name: ctx
@@ -53,25 +53,57 @@ methods:
         type: "struct object *"
       - name: hdrs
         type: "struct yheaders *"
-classes:
-  - name: store
+  - slot: github_authn_list
     domain: github_authn
-    accessor: github_authn_store_class_get
+    owning_class: github_authn
+    return_type: struct picomesh_json_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: offset
+        type: int64_t
+      - name: limit
+        type: int64_t
+  - slot: github_authn_list_all
+    domain: github_authn
+    owning_class: github_authn
+    return_type: struct picomesh_json_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+classes:
+  - name: github_authn
+    domain: github_authn
+    accessor: github_authn_github_authn_class_get
     type: regular
     source_file: /home/misi/work/my/picomesh/src/picomesh/plugins/github_authn/store.c
     parent: null
     mixins: []
-    data: struct github_authn_store_data
+    data: struct github_authn_github_authn_data
     ops:
-      - slot: store_set_credentials
+      - slot: github_authn_set_credentials
         slot_domain: github_authn
-        impl: github_authn_store_set_credentials_impl
-      - slot: store_register_code
+        impl: github_authn_github_authn_set_credentials_impl
+      - slot: github_authn_register_code
         slot_domain: github_authn
-        impl: github_authn_store_register_code_impl
-      - slot: store_resolve
+        impl: github_authn_github_authn_register_code_impl
+      - slot: github_authn_resolve
         slot_domain: github_authn
-        impl: github_authn_store_resolve_impl
-      - slot: store_count_codes
+        impl: github_authn_github_authn_resolve_impl
+      - slot: github_authn_count_codes
         slot_domain: github_authn
-        impl: github_authn_store_count_codes_impl
+        impl: github_authn_github_authn_count_codes_impl
+      - slot: github_authn_list
+        slot_domain: github_authn
+        impl: github_authn_github_authn_list_impl
+      - slot: github_authn_list_all
+        slot_domain: github_authn
+        impl: github_authn_github_authn_list_all_impl

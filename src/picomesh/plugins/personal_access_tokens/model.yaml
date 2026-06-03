@@ -1,7 +1,7 @@
 methods:
-  - slot: store_mint
+  - slot: personal_access_tokens_mint
     domain: personal_access_tokens
-    owning_class: store
+    owning_class: personal_access_tokens
     return_type: struct picomesh_uint32_result
     args:
       - name: ctx
@@ -12,9 +12,9 @@ methods:
         type: "struct yheaders *"
       - name: user_id
         type: uint32_t
-  - slot: store_lookup
+  - slot: personal_access_tokens_lookup
     domain: personal_access_tokens
-    owning_class: store
+    owning_class: personal_access_tokens
     return_type: struct picomesh_uint32_result
     args:
       - name: ctx
@@ -25,9 +25,9 @@ methods:
         type: "struct yheaders *"
       - name: pat_id
         type: uint32_t
-  - slot: store_revoke
+  - slot: personal_access_tokens_revoke
     domain: personal_access_tokens
-    owning_class: store
+    owning_class: personal_access_tokens
     return_type: struct picomesh_int_result
     args:
       - name: ctx
@@ -38,9 +38,9 @@ methods:
         type: "struct yheaders *"
       - name: pat_id
         type: uint32_t
-  - slot: store_list_for_user
+  - slot: personal_access_tokens_list_for_user
     domain: personal_access_tokens
-    owning_class: store
+    owning_class: personal_access_tokens
     return_type: struct picomesh_size_result
     args:
       - name: ctx
@@ -51,9 +51,9 @@ methods:
         type: "struct yheaders *"
       - name: user_id
         type: uint32_t
-  - slot: store_count_active
+  - slot: personal_access_tokens_count_active
     domain: personal_access_tokens
-    owning_class: store
+    owning_class: personal_access_tokens
     return_type: struct picomesh_size_result
     args:
       - name: ctx
@@ -62,28 +62,60 @@ methods:
         type: "struct object *"
       - name: hdrs
         type: "struct yheaders *"
-classes:
-  - name: store
+  - slot: personal_access_tokens_list
     domain: personal_access_tokens
-    accessor: personal_access_tokens_store_class_get
+    owning_class: personal_access_tokens
+    return_type: struct picomesh_json_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: offset
+        type: int64_t
+      - name: limit
+        type: int64_t
+  - slot: personal_access_tokens_list_all
+    domain: personal_access_tokens
+    owning_class: personal_access_tokens
+    return_type: struct picomesh_json_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+classes:
+  - name: personal_access_tokens
+    domain: personal_access_tokens
+    accessor: personal_access_tokens_personal_access_tokens_class_get
     type: regular
     source_file: /home/misi/work/my/picomesh/src/picomesh/plugins/personal_access_tokens/store.c
     parent: null
     mixins: []
-    data: struct personal_access_tokens_store_data
+    data: struct personal_access_tokens_personal_access_tokens_data
     ops:
-      - slot: store_mint
+      - slot: personal_access_tokens_mint
         slot_domain: personal_access_tokens
-        impl: personal_access_tokens_store_mint_impl
-      - slot: store_lookup
+        impl: personal_access_tokens_personal_access_tokens_mint_impl
+      - slot: personal_access_tokens_lookup
         slot_domain: personal_access_tokens
-        impl: personal_access_tokens_store_lookup_impl
-      - slot: store_revoke
+        impl: personal_access_tokens_personal_access_tokens_lookup_impl
+      - slot: personal_access_tokens_revoke
         slot_domain: personal_access_tokens
-        impl: personal_access_tokens_store_revoke_impl
-      - slot: store_list_for_user
+        impl: personal_access_tokens_personal_access_tokens_revoke_impl
+      - slot: personal_access_tokens_list_for_user
         slot_domain: personal_access_tokens
-        impl: personal_access_tokens_store_list_for_user_impl
-      - slot: store_count_active
+        impl: personal_access_tokens_personal_access_tokens_list_for_user_impl
+      - slot: personal_access_tokens_count_active
         slot_domain: personal_access_tokens
-        impl: personal_access_tokens_store_count_active_impl
+        impl: personal_access_tokens_personal_access_tokens_count_active_impl
+      - slot: personal_access_tokens_list
+        slot_domain: personal_access_tokens
+        impl: personal_access_tokens_personal_access_tokens_list_impl
+      - slot: personal_access_tokens_list_all
+        slot_domain: personal_access_tokens
+        impl: personal_access_tokens_personal_access_tokens_list_all_impl

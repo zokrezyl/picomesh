@@ -1,7 +1,8 @@
 /* trace_collector — the receiver side of Picomesh tracing (issue #11).
  *
  * A normal yrpc backend plugin: services emit finished spans by calling
- * `store_ingest` over yrpc (fire-and-forget, from ytelemetry); operators
+ * `trace_collector_ingest` over yrpc (fire-and-forget, from ytelemetry);
+ * operators
  * and the webapp read traces back through the query methods via the
  * gateway's /_rpc + /_describe — service-driven, no hand-rolled routes.
  *
@@ -21,7 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-struct PICOMESH_CLASS_ANNOTATE("class@trace_collector:store") trace_collector_store_data {
+struct PICOMESH_CLASS_ANNOTATE("class@trace_collector:trace_collector") trace_collector_trace_collector_data {
     char placeholder;
 };
 
@@ -61,7 +62,7 @@ static struct picomesh_string_result render(void (*emit)(struct yjson_writer *, 
     if (!w) return PICOMESH_ERR(picomesh_string, "trace_collector: writer alloc failed");
     emit(w, ud);
     size_t len = 0;
-    const char *data = yjson_w_data(w, &len);
+    const char *data = yjson_writer_data(w, &len);
     char *out = malloc(len + 1);
     if (out) { memcpy(out, data, len); out[len] = 0; }
     yjson_writer_free(w);
@@ -71,8 +72,8 @@ static struct picomesh_string_result render(void (*emit)(struct yjson_writer *, 
 
 /* ---- ingest ---------------------------------------------------------- */
 
-PICOMESH_CLASS_ANNOTATE("override@trace_collector:store:store_ingest")
-struct picomesh_void_result trace_collector_store_ingest_impl(
+PICOMESH_CLASS_ANNOTATE("override@trace_collector:trace_collector:trace_collector_ingest")
+struct picomesh_void_result trace_collector_trace_collector_ingest_impl(
     struct ctx *ctx, struct object *obj, struct yheaders *hdrs, const char *span_json)
 {
     (void)ctx; (void)obj; (void)hdrs;
@@ -94,8 +95,8 @@ static void emit_trace(struct yjson_writer *w, void *ud)
     ytelemetry_store_write_trace(w, ((struct trace_arg *)ud)->a);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@trace_collector:store:store_get_trace")
-struct picomesh_string_result trace_collector_store_get_trace_impl(
+PICOMESH_CLASS_ANNOTATE("override@trace_collector:trace_collector:trace_collector_get_trace")
+struct picomesh_string_result trace_collector_trace_collector_get_trace_impl(
     struct ctx *ctx, struct object *obj, struct yheaders *hdrs, const char *trace_id)
 {
     (void)ctx; (void)obj; (void)hdrs;
@@ -109,8 +110,8 @@ static void emit_services(struct yjson_writer *w, void *ud)
     ytelemetry_store_write_services(w);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@trace_collector:store:store_services")
-struct picomesh_string_result trace_collector_store_services_impl(
+PICOMESH_CLASS_ANNOTATE("override@trace_collector:trace_collector:trace_collector_services")
+struct picomesh_string_result trace_collector_trace_collector_services_impl(
     struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
     (void)ctx; (void)obj; (void)hdrs;
@@ -123,8 +124,8 @@ static void emit_operations(struct yjson_writer *w, void *ud)
     ytelemetry_store_write_operations(w, (svc && *svc) ? svc : NULL);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@trace_collector:store:store_operations")
-struct picomesh_string_result trace_collector_store_operations_impl(
+PICOMESH_CLASS_ANNOTATE("override@trace_collector:trace_collector:trace_collector_operations")
+struct picomesh_string_result trace_collector_trace_collector_operations_impl(
     struct ctx *ctx, struct object *obj, struct yheaders *hdrs, const char *service)
 {
     (void)ctx; (void)obj; (void)hdrs;
@@ -139,8 +140,8 @@ static void emit_latency(struct yjson_writer *w, void *ud)
                                    (t->b && *t->b) ? t->b : NULL, t->n);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@trace_collector:store:store_latency")
-struct picomesh_string_result trace_collector_store_latency_impl(
+PICOMESH_CLASS_ANNOTATE("override@trace_collector:trace_collector:trace_collector_latency")
+struct picomesh_string_result trace_collector_trace_collector_latency_impl(
     struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
     const char *service, const char *operation, uint32_t window_secs)
 {
@@ -156,8 +157,8 @@ static void emit_stats(struct yjson_writer *w, void *ud)
     ytelemetry_store_write_stats(w);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@trace_collector:store:store_stats")
-struct picomesh_string_result trace_collector_store_stats_impl(
+PICOMESH_CLASS_ANNOTATE("override@trace_collector:trace_collector:trace_collector_stats")
+struct picomesh_string_result trace_collector_trace_collector_stats_impl(
     struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
     (void)ctx; (void)obj; (void)hdrs;
@@ -170,8 +171,8 @@ static void emit_errors(struct yjson_writer *w, void *ud)
     ytelemetry_store_write_errors(w, ((struct trace_arg *)ud)->n);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@trace_collector:store:store_errors")
-struct picomesh_string_result trace_collector_store_errors_impl(
+PICOMESH_CLASS_ANNOTATE("override@trace_collector:trace_collector:trace_collector_errors")
+struct picomesh_string_result trace_collector_trace_collector_errors_impl(
     struct ctx *ctx, struct object *obj, struct yheaders *hdrs, uint32_t since_secs)
 {
     (void)ctx; (void)obj; (void)hdrs;

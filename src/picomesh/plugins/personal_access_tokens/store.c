@@ -15,8 +15,11 @@
 #include <picomesh/ycore/result.h>
 #include <picomesh/ycore/ytrace.h>
 #include <picomesh/yclass/class.h>
+#include <picomesh/yjson/yjson.h>
 
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 
 #define PAT_MAX 512
 
@@ -26,26 +29,26 @@ struct pat_entry {
     int used;
 };
 
-struct PICOMESH_CLASS_ANNOTATE("class@personal_access_tokens:store") personal_access_tokens_store_data {
+struct PICOMESH_CLASS_ANNOTATE("class@personal_access_tokens:personal_access_tokens") personal_access_tokens_personal_access_tokens_data {
     struct pat_entry entries[PAT_MAX];
     size_t count;
     uint32_t next_id;
 };
 
-static struct personal_access_tokens_store_data *pat(struct object *obj)
+static struct personal_access_tokens_personal_access_tokens_data *pat(struct object *obj)
 {
-    return (struct personal_access_tokens_store_data *)
+    return (struct personal_access_tokens_personal_access_tokens_data *)
            ((char *)obj + sizeof(struct object));
 }
 
-PICOMESH_CLASS_ANNOTATE("override@personal_access_tokens:store:store_mint")
-struct picomesh_uint32_result personal_access_tokens_store_mint_impl(struct ctx *ctx,
+PICOMESH_CLASS_ANNOTATE("override@personal_access_tokens:personal_access_tokens:personal_access_tokens_mint")
+struct picomesh_uint32_result personal_access_tokens_personal_access_tokens_mint_impl(struct ctx *ctx,
                                                                   struct object *obj,
                                                                   struct yheaders *hdrs,
                                                                   uint32_t user_id)
 {
     (void)ctx;
-    struct personal_access_tokens_store_data *d = pat(obj);
+    struct personal_access_tokens_personal_access_tokens_data *d = pat(obj);
     if (d->next_id == 0) d->next_id = 1;
     for (size_t i = 0; i < PAT_MAX; ++i) {
         if (!d->entries[i].used) {
@@ -60,14 +63,14 @@ struct picomesh_uint32_result personal_access_tokens_store_mint_impl(struct ctx 
     return PICOMESH_ERR(picomesh_uint32, "pat_mint: table full");
 }
 
-PICOMESH_CLASS_ANNOTATE("override@personal_access_tokens:store:store_lookup")
-struct picomesh_uint32_result personal_access_tokens_store_lookup_impl(struct ctx *ctx,
+PICOMESH_CLASS_ANNOTATE("override@personal_access_tokens:personal_access_tokens:personal_access_tokens_lookup")
+struct picomesh_uint32_result personal_access_tokens_personal_access_tokens_lookup_impl(struct ctx *ctx,
                                                                     struct object *obj,
                                                                     struct yheaders *hdrs,
                                                                     uint32_t pat_id)
 {
     (void)ctx;
-    struct personal_access_tokens_store_data *d = pat(obj);
+    struct personal_access_tokens_personal_access_tokens_data *d = pat(obj);
     for (size_t i = 0; i < PAT_MAX; ++i) {
         if (d->entries[i].used && d->entries[i].pat_id == pat_id) {
             return PICOMESH_OK(picomesh_uint32, d->entries[i].user_id);
@@ -76,14 +79,14 @@ struct picomesh_uint32_result personal_access_tokens_store_lookup_impl(struct ct
     return PICOMESH_OK(picomesh_uint32, 0);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@personal_access_tokens:store:store_revoke")
-struct picomesh_int_result personal_access_tokens_store_revoke_impl(struct ctx *ctx,
+PICOMESH_CLASS_ANNOTATE("override@personal_access_tokens:personal_access_tokens:personal_access_tokens_revoke")
+struct picomesh_int_result personal_access_tokens_personal_access_tokens_revoke_impl(struct ctx *ctx,
                                                                  struct object *obj,
                                                                  struct yheaders *hdrs,
                                                                  uint32_t pat_id)
 {
     (void)ctx;
-    struct personal_access_tokens_store_data *d = pat(obj);
+    struct personal_access_tokens_personal_access_tokens_data *d = pat(obj);
     for (size_t i = 0; i < PAT_MAX; ++i) {
         if (d->entries[i].used && d->entries[i].pat_id == pat_id) {
             d->entries[i].used = 0;
@@ -94,12 +97,12 @@ struct picomesh_int_result personal_access_tokens_store_revoke_impl(struct ctx *
     return PICOMESH_OK(picomesh_int, 0);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@personal_access_tokens:store:store_list_for_user")
-struct picomesh_size_result personal_access_tokens_store_list_for_user_impl(
+PICOMESH_CLASS_ANNOTATE("override@personal_access_tokens:personal_access_tokens:personal_access_tokens_list_for_user")
+struct picomesh_size_result personal_access_tokens_personal_access_tokens_list_for_user_impl(
     struct ctx *ctx, struct object *obj, struct yheaders *hdrs, uint32_t user_id)
 {
     (void)ctx;
-    struct personal_access_tokens_store_data *d = pat(obj);
+    struct personal_access_tokens_personal_access_tokens_data *d = pat(obj);
     size_t n = 0;
     for (size_t i = 0; i < PAT_MAX; ++i) {
         if (d->entries[i].used && d->entries[i].user_id == user_id) n++;
@@ -107,13 +110,65 @@ struct picomesh_size_result personal_access_tokens_store_list_for_user_impl(
     return PICOMESH_OK(picomesh_size, n);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@personal_access_tokens:store:store_count_active")
-struct picomesh_size_result personal_access_tokens_store_count_active_impl(struct ctx *ctx,
+PICOMESH_CLASS_ANNOTATE("override@personal_access_tokens:personal_access_tokens:personal_access_tokens_count_active")
+struct picomesh_size_result personal_access_tokens_personal_access_tokens_count_active_impl(struct ctx *ctx,
                                                                         struct object *obj,
                                                                         struct yheaders *hdrs)
 {
     (void)ctx;
     return PICOMESH_OK(picomesh_size, pat(obj)->count);
+}
+
+/* List ALL personal access tokens this service manages, as a JSON array
+ * `[{"pat_id":…,"user_id":…}, …]` (gh#15) — every token, not per user, not
+ * a count. State is the in-memory entry table. */
+/* Build the PAT list as JSON, skipping `offset` and stopping after `limit`
+ * (< 0 == unbounded). Shared by the paginated list + list_all. */
+static struct picomesh_json_result pat_list_window(struct object *obj, int64_t offset, int64_t limit)
+{
+    struct personal_access_tokens_personal_access_tokens_data *d = pat(obj);
+    struct yjson_writer *w = yjson_writer_new();
+    if (!w) return PICOMESH_ERR(picomesh_json, "pat_list: writer alloc failed");
+    yjson_writer_begin_array(w);
+    int64_t skip = offset > 0 ? offset : 0, emitted = 0;
+    for (size_t i = 0; i < PAT_MAX && (limit < 0 || emitted < limit); ++i) {
+        if (!d->entries[i].used) continue;
+        if (skip > 0) { --skip; continue; }
+        yjson_writer_begin_object(w);
+        yjson_writer_key(w, "pat_id");  yjson_writer_int(w, (int64_t)d->entries[i].pat_id);
+        yjson_writer_key(w, "user_id"); yjson_writer_int(w, (int64_t)d->entries[i].user_id);
+        yjson_writer_end_object(w);
+        ++emitted;
+    }
+    yjson_writer_end_array(w);
+    size_t len = 0;
+    const char *data = yjson_writer_data(w, &len);
+    char *out = strdup(data ? data : "[]");
+    yjson_writer_free(w);
+    if (!out) return PICOMESH_ERR(picomesh_json, "pat_list: strdup failed");
+    return PICOMESH_OK(picomesh_json, out);
+}
+
+/* List ALL personal access tokens as a JSON array, paginated (gh#15). */
+PICOMESH_CLASS_ANNOTATE("override@personal_access_tokens:personal_access_tokens:personal_access_tokens_list")
+struct picomesh_json_result personal_access_tokens_personal_access_tokens_list_impl(struct ctx *ctx,
+                                                                   struct object *obj,
+                                                                   struct yheaders *hdrs,
+                                                                   int64_t offset, int64_t limit)
+{
+    (void)ctx; (void)hdrs;
+    if (limit <= 0) limit = 100;
+    return pat_list_window(obj, offset, limit);
+}
+
+/* Unbounded variant — every token (the in-memory table is bounded anyway). */
+PICOMESH_CLASS_ANNOTATE("override@personal_access_tokens:personal_access_tokens:personal_access_tokens_list_all")
+struct picomesh_json_result personal_access_tokens_personal_access_tokens_list_all_impl(struct ctx *ctx,
+                                                                       struct object *obj,
+                                                                       struct yheaders *hdrs)
+{
+    (void)ctx; (void)hdrs;
+    return pat_list_window(obj, 0, -1);
 }
 
 #include "store.gen.c"

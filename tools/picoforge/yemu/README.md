@@ -70,7 +70,7 @@ with the riscv64 picomesh binary swapped in.
 The launcher (baked at `/opt/picoforge/run.sh` inside the image)
 mounts /proc /sys /dev, brings up slirp net, starts a control picomesh
 on `127.0.0.1:8800`, then POSTs `/create` + `/invoke
-mesh_store_reconcile_from_config` so the full mesh comes up:
+mesh_mesh_reconcile_from_config` so the full mesh comes up:
 gateway on `0.0.0.0:8080` plus 11 backends on `127.0.0.1:820X`.
 From the host:
 

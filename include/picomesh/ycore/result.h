@@ -48,6 +48,12 @@ PICOMESH_RESULT_DECLARE(picomesh_uint32, uint32_t);
  * free() it. Used by the storage `get` methods, whose values are
  * strings/bytes rather than fixed-width integers. */
 PICOMESH_RESULT_DECLARE(picomesh_string, char *);
+/* Owned, heap-allocated, NUL-terminated string that already holds a
+ * serialized JSON value (array/object/etc.). Identical to picomesh_string
+ * on the binary wire (packed as a string the caller frees), but the JSON
+ * frontend emits `.value` verbatim instead of quoting it — so a method
+ * that returns a list returns a real JSON array, not a delimited blob. */
+PICOMESH_RESULT_DECLARE(picomesh_json, char *);
 
 struct picomesh_error *picomesh_error_chain(struct picomesh_error prev);
 void picomesh_error_destroy(struct picomesh_error err);

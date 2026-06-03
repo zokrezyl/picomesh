@@ -130,6 +130,26 @@ struct peer_channel *peer_channel_create(int fd);
  * stashed as the HTTP Host header. */
 struct peer_channel *peer_channel_create_http(int fd, const char *host);
 
+/* MessagePack transport (outbound to a foreign msgpack service): each call is
+ * a Picomesh msgpack envelope ({op:"invoke", path, args, headers}) over a
+ * big-endian length-framed connection — the same wire the msgpack frontend
+ * serves. Blocking fd I/O, for the CLI / worker-pool client path. */
+struct peer_channel *peer_channel_create_msgpack(int fd);
+
+/* True if the channel was created as a msgpack transport. The codegen remote
+ * stub branches on this to pick the msgpack client path. */
+int peer_channel_is_msgpack(const struct peer_channel *s);
+
+/* One outbound msgpack call. `args` is a complete, pre-encoded msgpack array
+ * value (the positional args); it is wrapped in the envelope at `path`. On
+ * success the response's `result` value bytes (a complete msgpack value) are
+ * copied into `out`/`out_len` and 1 is returned; on a remote or transport
+ * error 0 is returned and `err` is filled. `hdrs` may be NULL. */
+int peer_channel_msgpack_call(struct peer_channel *s, const char *path,
+                              struct yheaders *hdrs, const void *args, size_t args_len,
+                              void *out, size_t out_cap, size_t *out_len,
+                              char *err, size_t err_cap);
+
 void peer_channel_destroy(struct peer_channel *s);
 
 /* Set auth headers attached to subsequent calls. Only meaningful for

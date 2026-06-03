@@ -1,6 +1,7 @@
 /* GENERATED — do not edit. */
 #include <picomesh/yclass/rpc.h>
 #include <picomesh/yclass/jinvoke.h>
+#include <picomesh/yclass/minvoke.h>
 #include <picomesh/yclass/yheaders.h>
 #include <picomesh/yjson/yjson.h>
 #include <picomesh/ycore/result.h>
@@ -9,205 +10,11 @@
 #include <picomesh/ycore/ytelemetry.h>
 #include <picomesh/yclass/class.h>
 #include "storage.internal.h"
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-static size_t storage_kv_set_skel(const void *_body, size_t _body_len,
-                          void *_resp, size_t _resp_max)
-{
-    size_t _off = 0;
-    struct ctx _local = {0};
-    /* The framework header section is first on every CALL body — parse
-     * it back into the `hdrs` argument before the packed business args. */
-    struct yheaders *_hdrs = NULL;
-    {
-        size_t _hconsumed = 0;
-        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
-        if (!_hdrs) goto _short_body;
-        _off = _hconsumed;
-    }
-    struct object *_obj = NULL;
-    {
-        if (_off + 8 > _body_len) goto _short_body;
-        uint64_t _h;
-        memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
-        _obj = (struct object *)rpc_handle_resolve(_h);
-    }
-    char _s1[4096];
-    {
-        if (_off + 4 > _body_len) goto _short_body;
-        uint32_t _slen;
-        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
-        if (_off + _slen > _body_len) goto _short_body;
-        if (_slen >= sizeof(_s1)) goto _short_body;
-        if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
-        _s1[_slen] = 0; _off += _slen;
-    }
-    char _s2[4096];
-    {
-        if (_off + 4 > _body_len) goto _short_body;
-        uint32_t _slen;
-        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
-        if (_off + _slen > _body_len) goto _short_body;
-        if (_slen >= sizeof(_s2)) goto _short_body;
-        if (_slen) memcpy(_s2, (const uint8_t *)_body + _off, _slen);
-        _s2[_slen] = 0; _off += _slen;
-    }
-    struct ytelemetry_span _tsp;
-    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.storage_kv_set");
-    struct picomesh_int_result _r = storage_kv_set(&_local, _obj, _hdrs, _s1, _s2);
-    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
-    yheaders_free(_hdrs); _hdrs = NULL;
-    if (_resp_max < 1) return 0;
-    if (PICOMESH_IS_ERR(_r)) {
-        picomesh_error_print(stderr, "[skel] storage_kv_set", _r.error);
-        const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
-        uint32_t _ml = (uint32_t)strlen(_msg);
-        if (_ml > 256) _ml = 256;
-        if (_resp_max < 1 + 4 + _ml) {
-            picomesh_error_destroy(_r.error);
-            ((uint8_t *)_resp)[0] = 1;
-            return _resp_max >= 1 ? 1 : 0;
-        }
-        ((uint8_t *)_resp)[0] = 1;
-        memcpy((uint8_t *)_resp + 1, &_ml, 4);
-        memcpy((uint8_t *)_resp + 5, _msg, _ml);
-        picomesh_error_destroy(_r.error);
-        return 1 + 4 + _ml;
-    }
-    if (_resp_max < 1 + sizeof(_r.value)) return 0;
-    ((uint8_t *)_resp)[0] = 0;
-    memcpy((uint8_t *)_resp + 1, &_r.value, sizeof(_r.value));
-    return 1 + sizeof(_r.value);
-_short_body:
-    yheaders_free(_hdrs);
-    if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
-    return _resp_max >= 1 ? 1 : 0;
-}
-
-static size_t storage_kv_get_skel(const void *_body, size_t _body_len,
-                          void *_resp, size_t _resp_max)
-{
-    size_t _off = 0;
-    struct ctx _local = {0};
-    /* The framework header section is first on every CALL body — parse
-     * it back into the `hdrs` argument before the packed business args. */
-    struct yheaders *_hdrs = NULL;
-    {
-        size_t _hconsumed = 0;
-        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
-        if (!_hdrs) goto _short_body;
-        _off = _hconsumed;
-    }
-    struct object *_obj = NULL;
-    {
-        if (_off + 8 > _body_len) goto _short_body;
-        uint64_t _h;
-        memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
-        _obj = (struct object *)rpc_handle_resolve(_h);
-    }
-    char _s1[4096];
-    {
-        if (_off + 4 > _body_len) goto _short_body;
-        uint32_t _slen;
-        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
-        if (_off + _slen > _body_len) goto _short_body;
-        if (_slen >= sizeof(_s1)) goto _short_body;
-        if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
-        _s1[_slen] = 0; _off += _slen;
-    }
-    struct ytelemetry_span _tsp;
-    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.storage_kv_get");
-    struct picomesh_string_result _r = storage_kv_get(&_local, _obj, _hdrs, _s1);
-    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
-    yheaders_free(_hdrs); _hdrs = NULL;
-    if (_resp_max < 1) return 0;
-    if (PICOMESH_IS_ERR(_r)) {
-        picomesh_error_print(stderr, "[skel] storage_kv_get", _r.error);
-        const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
-        uint32_t _ml = (uint32_t)strlen(_msg);
-        if (_ml > 256) _ml = 256;
-        if (_resp_max < 1 + 4 + _ml) {
-            picomesh_error_destroy(_r.error);
-            ((uint8_t *)_resp)[0] = 1;
-            return _resp_max >= 1 ? 1 : 0;
-        }
-        ((uint8_t *)_resp)[0] = 1;
-        memcpy((uint8_t *)_resp + 1, &_ml, 4);
-        memcpy((uint8_t *)_resp + 5, _msg, _ml);
-        picomesh_error_destroy(_r.error);
-        return 1 + 4 + _ml;
-    }
-    {
-        const char *_sv = _r.value ? _r.value : "";
-        uint32_t _svlen = (uint32_t)strlen(_sv);
-        if (_resp_max < 1 + 4 + (size_t)_svlen) { free(_r.value); return 0; }
-        ((uint8_t *)_resp)[0] = 0;
-        memcpy((uint8_t *)_resp + 1, &_svlen, 4);
-        if (_svlen) memcpy((uint8_t *)_resp + 5, _sv, _svlen);
-        free(_r.value);
-        return 1 + 4 + (size_t)_svlen;
-    }
-_short_body:
-    yheaders_free(_hdrs);
-    if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
-    return _resp_max >= 1 ? 1 : 0;
-}
-
-static size_t storage_kv_count_skel(const void *_body, size_t _body_len,
-                          void *_resp, size_t _resp_max)
-{
-    size_t _off = 0;
-    struct ctx _local = {0};
-    /* The framework header section is first on every CALL body — parse
-     * it back into the `hdrs` argument before the packed business args. */
-    struct yheaders *_hdrs = NULL;
-    {
-        size_t _hconsumed = 0;
-        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
-        if (!_hdrs) goto _short_body;
-        _off = _hconsumed;
-    }
-    struct object *_obj = NULL;
-    {
-        if (_off + 8 > _body_len) goto _short_body;
-        uint64_t _h;
-        memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
-        _obj = (struct object *)rpc_handle_resolve(_h);
-    }
-    struct ytelemetry_span _tsp;
-    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.storage_kv_count");
-    struct picomesh_size_result _r = storage_kv_count(&_local, _obj, _hdrs);
-    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
-    yheaders_free(_hdrs); _hdrs = NULL;
-    if (_resp_max < 1) return 0;
-    if (PICOMESH_IS_ERR(_r)) {
-        picomesh_error_print(stderr, "[skel] storage_kv_count", _r.error);
-        const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
-        uint32_t _ml = (uint32_t)strlen(_msg);
-        if (_ml > 256) _ml = 256;
-        if (_resp_max < 1 + 4 + _ml) {
-            picomesh_error_destroy(_r.error);
-            ((uint8_t *)_resp)[0] = 1;
-            return _resp_max >= 1 ? 1 : 0;
-        }
-        ((uint8_t *)_resp)[0] = 1;
-        memcpy((uint8_t *)_resp + 1, &_ml, 4);
-        memcpy((uint8_t *)_resp + 5, _msg, _ml);
-        picomesh_error_destroy(_r.error);
-        return 1 + 4 + _ml;
-    }
-    if (_resp_max < 1 + sizeof(_r.value)) return 0;
-    ((uint8_t *)_resp)[0] = 0;
-    memcpy((uint8_t *)_resp + 1, &_r.value, sizeof(_r.value));
-    return 1 + sizeof(_r.value);
-_short_body:
-    yheaders_free(_hdrs);
-    if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
-    return _resp_max >= 1 ? 1 : 0;
-}
 
 static size_t storage_set_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
@@ -580,61 +387,6 @@ _short_body:
     return _resp_max >= 1 ? 1 : 0;
 }
 
-static int storage_kv_set_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
-                          const struct yjson_value *args,
-                          struct yjson_writer *result, char *err, size_t err_cap)
-{
-    const char *arg0 = yjson_as_string(yjson_array_at(args, 0), "");
-    const char *arg1 = yjson_as_string(yjson_array_at(args, 1), "");
-    struct ctx local_ctx = {0};
-    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct picomesh_int_result call_result = storage_kv_set(call_ctx, obj, hdrs, arg0, arg1);
-    if (PICOMESH_IS_ERR(call_result)) {
-        snprintf(err, err_cap, "%s: %s", "storage_kv_set",
-                 call_result.error.msg ? call_result.error.msg : "<no message>");
-        picomesh_error_destroy(call_result.error);
-        return -1;
-    }
-    yjson_w_int(result, (int64_t)call_result.value);
-    return 0;
-}
-
-static int storage_kv_get_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
-                          const struct yjson_value *args,
-                          struct yjson_writer *result, char *err, size_t err_cap)
-{
-    const char *arg0 = yjson_as_string(yjson_array_at(args, 0), "");
-    struct ctx local_ctx = {0};
-    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct picomesh_string_result call_result = storage_kv_get(call_ctx, obj, hdrs, arg0);
-    if (PICOMESH_IS_ERR(call_result)) {
-        snprintf(err, err_cap, "%s: %s", "storage_kv_get",
-                 call_result.error.msg ? call_result.error.msg : "<no message>");
-        picomesh_error_destroy(call_result.error);
-        return -1;
-    }
-    yjson_w_string(result, call_result.value ? call_result.value : "");
-    free(call_result.value);
-    return 0;
-}
-
-static int storage_kv_count_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
-                          const struct yjson_value *args,
-                          struct yjson_writer *result, char *err, size_t err_cap)
-{
-    struct ctx local_ctx = {0};
-    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct picomesh_size_result call_result = storage_kv_count(call_ctx, obj, hdrs);
-    if (PICOMESH_IS_ERR(call_result)) {
-        snprintf(err, err_cap, "%s: %s", "storage_kv_count",
-                 call_result.error.msg ? call_result.error.msg : "<no message>");
-        picomesh_error_destroy(call_result.error);
-        return -1;
-    }
-    yjson_w_int(result, (int64_t)call_result.value);
-    return 0;
-}
-
 static int storage_set_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
@@ -651,7 +403,7 @@ static int storage_set_jinvoke(struct ctx *ctx, struct object *obj, struct yhead
         picomesh_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(result, (int64_t)call_result.value);
+    yjson_writer_int(result, (int64_t)call_result.value);
     return 0;
 }
 
@@ -670,7 +422,7 @@ static int storage_get_jinvoke(struct ctx *ctx, struct object *obj, struct yhead
         picomesh_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_string(result, call_result.value ? call_result.value : "");
+    yjson_writer_string(result, call_result.value ? call_result.value : "");
     free(call_result.value);
     return 0;
 }
@@ -690,7 +442,7 @@ static int storage_exists_jinvoke(struct ctx *ctx, struct object *obj, struct yh
         picomesh_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(result, (int64_t)call_result.value);
+    yjson_writer_int(result, (int64_t)call_result.value);
     return 0;
 }
 
@@ -709,7 +461,7 @@ static int storage_del_jinvoke(struct ctx *ctx, struct object *obj, struct yhead
         picomesh_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(result, (int64_t)call_result.value);
+    yjson_writer_int(result, (int64_t)call_result.value);
     return 0;
 }
 
@@ -727,19 +479,202 @@ static int storage_count_jinvoke(struct ctx *ctx, struct object *obj, struct yhe
         picomesh_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(result, (int64_t)call_result.value);
+    yjson_writer_int(result, (int64_t)call_result.value);
     return 0;
 }
 
-struct object_ptr_result storage_kv_create(struct ctx *ctx)
+static int storage_set_minvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          cmp_ctx_t *_mr, uint32_t _argc, cmp_ctx_t *_mw,
+                          char *_err, size_t _err_cap)
 {
-    ydebug("class=storage_kv");
-    struct class_ptr_result _kr = storage_kv_class_get();
-    if (PICOMESH_IS_ERR(_kr))
-        return PICOMESH_ERR(object_ptr, "storage_kv_create: class accessor failed", _kr);
-    /* A service dependency is acquired once and cached for the connection
-     * (remote) / process (in-process) lifetime — no per-call create. */
-    return rpc_object_acquire(ctx, _kr.value, "storage_kv");
+    (void)_mr;
+    if (_argc != 3u) {
+        snprintf(_err, _err_cap, "storage_set: expected 3 arg(s), got %u", _argc);
+        return -1;
+    }
+    char _v0[4096];
+    {
+        uint32_t _sz = (uint32_t)sizeof(_v0);
+        if (!cmp_read_str(_mr, _v0, &_sz)) {
+            snprintf(_err, _err_cap, "context: expected str arg (%s)", cmp_strerror(_mr));
+            return -1;
+        }
+    }
+    char _v1[4096];
+    {
+        uint32_t _sz = (uint32_t)sizeof(_v1);
+        if (!cmp_read_str(_mr, _v1, &_sz)) {
+            snprintf(_err, _err_cap, "key: expected str arg (%s)", cmp_strerror(_mr));
+            return -1;
+        }
+    }
+    char _v2[4096];
+    {
+        uint32_t _sz = (uint32_t)sizeof(_v2);
+        if (!cmp_read_str(_mr, _v2, &_sz)) {
+            snprintf(_err, _err_cap, "value: expected str arg (%s)", cmp_strerror(_mr));
+            return -1;
+        }
+    }
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_int_result call_result = storage_set(call_ctx, obj, hdrs, _v0, _v1, _v2);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(_err, _err_cap, "%s: %s", "storage_set",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    cmp_write_integer(_mw, (int64_t)call_result.value);
+    return 0;
+}
+
+static int storage_get_minvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          cmp_ctx_t *_mr, uint32_t _argc, cmp_ctx_t *_mw,
+                          char *_err, size_t _err_cap)
+{
+    (void)_mr;
+    if (_argc != 2u) {
+        snprintf(_err, _err_cap, "storage_get: expected 2 arg(s), got %u", _argc);
+        return -1;
+    }
+    char _v0[4096];
+    {
+        uint32_t _sz = (uint32_t)sizeof(_v0);
+        if (!cmp_read_str(_mr, _v0, &_sz)) {
+            snprintf(_err, _err_cap, "context: expected str arg (%s)", cmp_strerror(_mr));
+            return -1;
+        }
+    }
+    char _v1[4096];
+    {
+        uint32_t _sz = (uint32_t)sizeof(_v1);
+        if (!cmp_read_str(_mr, _v1, &_sz)) {
+            snprintf(_err, _err_cap, "key: expected str arg (%s)", cmp_strerror(_mr));
+            return -1;
+        }
+    }
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_string_result call_result = storage_get(call_ctx, obj, hdrs, _v0, _v1);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(_err, _err_cap, "%s: %s", "storage_get",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    {
+        const char *_sv = call_result.value ? call_result.value : "";
+        cmp_write_str(_mw, _sv, (uint32_t)strlen(_sv));
+        free(call_result.value);
+    }
+    return 0;
+}
+
+static int storage_exists_minvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          cmp_ctx_t *_mr, uint32_t _argc, cmp_ctx_t *_mw,
+                          char *_err, size_t _err_cap)
+{
+    (void)_mr;
+    if (_argc != 2u) {
+        snprintf(_err, _err_cap, "storage_exists: expected 2 arg(s), got %u", _argc);
+        return -1;
+    }
+    char _v0[4096];
+    {
+        uint32_t _sz = (uint32_t)sizeof(_v0);
+        if (!cmp_read_str(_mr, _v0, &_sz)) {
+            snprintf(_err, _err_cap, "context: expected str arg (%s)", cmp_strerror(_mr));
+            return -1;
+        }
+    }
+    char _v1[4096];
+    {
+        uint32_t _sz = (uint32_t)sizeof(_v1);
+        if (!cmp_read_str(_mr, _v1, &_sz)) {
+            snprintf(_err, _err_cap, "key: expected str arg (%s)", cmp_strerror(_mr));
+            return -1;
+        }
+    }
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_int_result call_result = storage_exists(call_ctx, obj, hdrs, _v0, _v1);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(_err, _err_cap, "%s: %s", "storage_exists",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    cmp_write_integer(_mw, (int64_t)call_result.value);
+    return 0;
+}
+
+static int storage_del_minvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          cmp_ctx_t *_mr, uint32_t _argc, cmp_ctx_t *_mw,
+                          char *_err, size_t _err_cap)
+{
+    (void)_mr;
+    if (_argc != 2u) {
+        snprintf(_err, _err_cap, "storage_del: expected 2 arg(s), got %u", _argc);
+        return -1;
+    }
+    char _v0[4096];
+    {
+        uint32_t _sz = (uint32_t)sizeof(_v0);
+        if (!cmp_read_str(_mr, _v0, &_sz)) {
+            snprintf(_err, _err_cap, "context: expected str arg (%s)", cmp_strerror(_mr));
+            return -1;
+        }
+    }
+    char _v1[4096];
+    {
+        uint32_t _sz = (uint32_t)sizeof(_v1);
+        if (!cmp_read_str(_mr, _v1, &_sz)) {
+            snprintf(_err, _err_cap, "key: expected str arg (%s)", cmp_strerror(_mr));
+            return -1;
+        }
+    }
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_int_result call_result = storage_del(call_ctx, obj, hdrs, _v0, _v1);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(_err, _err_cap, "%s: %s", "storage_del",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    cmp_write_integer(_mw, (int64_t)call_result.value);
+    return 0;
+}
+
+static int storage_count_minvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          cmp_ctx_t *_mr, uint32_t _argc, cmp_ctx_t *_mw,
+                          char *_err, size_t _err_cap)
+{
+    (void)_mr;
+    if (_argc != 1u) {
+        snprintf(_err, _err_cap, "storage_count: expected 1 arg(s), got %u", _argc);
+        return -1;
+    }
+    char _v0[4096];
+    {
+        uint32_t _sz = (uint32_t)sizeof(_v0);
+        if (!cmp_read_str(_mr, _v0, &_sz)) {
+            snprintf(_err, _err_cap, "context: expected str arg (%s)", cmp_strerror(_mr));
+            return -1;
+        }
+    }
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_size_result call_result = storage_count(call_ctx, obj, hdrs, _v0);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(_err, _err_cap, "%s: %s", "storage_count",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    cmp_write_uinteger(_mw, (uint64_t)call_result.value);
+    return 0;
 }
 
 struct object_ptr_result storage_db_create(struct ctx *ctx)
@@ -759,9 +694,6 @@ struct object_ptr_result storage_db_create(struct ctx *ctx)
 struct storage_jinvoke_row { const char *name; jinvoke_fn fn; };
 
 static const struct storage_jinvoke_row storage_jinvoke_rows[] = {
-    {"storage_kv_set", storage_kv_set_jinvoke},
-    {"storage_kv_get", storage_kv_get_jinvoke},
-    {"storage_kv_count", storage_kv_count_jinvoke},
     {"storage_set", storage_set_jinvoke},
     {"storage_get", storage_get_jinvoke},
     {"storage_exists", storage_exists_jinvoke},
@@ -777,11 +709,72 @@ static jinvoke_fn storage_jinvoke_lookup(const char *qname)
             return storage_jinvoke_rows[i].fn;
     return NULL;
 }
+
+/* ---- storage: minvoke table ------------------------------------ */
+
+struct storage_minvoke_row { const char *name; minvoke_fn fn; };
+
+static const struct storage_minvoke_row storage_minvoke_rows[] = {
+    {"storage_set", storage_set_minvoke},
+    {"storage_get", storage_get_minvoke},
+    {"storage_exists", storage_exists_minvoke},
+    {"storage_del", storage_del_minvoke},
+    {"storage_count", storage_count_minvoke}
+};
+
+static minvoke_fn storage_minvoke_lookup(const char *qname)
+{
+    for (size_t i = 0;
+         i < sizeof(storage_minvoke_rows) / sizeof(storage_minvoke_rows[0]); ++i)
+        if (strcmp(storage_minvoke_rows[i].name, qname) == 0)
+            return storage_minvoke_rows[i].fn;
+    return NULL;
+}
+
+/* ---- storage: per-method parameter signatures (runtime reflection) -- */
+
+static const struct jinvoke_param storage_set_params[] = {
+    {"context", "const char *"},
+    {"key", "const char *"},
+    {"value", "const char *"}
+};
+static const struct jinvoke_param storage_get_params[] = {
+    {"context", "const char *"},
+    {"key", "const char *"}
+};
+static const struct jinvoke_param storage_exists_params[] = {
+    {"context", "const char *"},
+    {"key", "const char *"}
+};
+static const struct jinvoke_param storage_del_params[] = {
+    {"context", "const char *"},
+    {"key", "const char *"}
+};
+static const struct jinvoke_param storage_count_params[] = {
+    {"context", "const char *"}
+};
+struct storage_params_row { const char *name; struct jinvoke_params params; };
+
+static const struct storage_params_row storage_params_rows[] = {
+    {"storage_set", {storage_set_params, 3}},
+    {"storage_get", {storage_get_params, 2}},
+    {"storage_exists", {storage_exists_params, 2}},
+    {"storage_del", {storage_del_params, 2}},
+    {"storage_count", {storage_count_params, 1}}
+};
+
+static const struct jinvoke_params *storage_params_lookup(const char *qname)
+{
+    for (size_t i = 0;
+         i < sizeof(storage_params_rows) / sizeof(storage_params_rows[0]); ++i)
+        if (strcmp(storage_params_rows[i].name, qname) == 0)
+            return &storage_params_rows[i].params;
+    return NULL;
+}
 /* ---- storage: class name → accessor (lazy) ---------------------- */
 
 static struct class_ptr_result storage_accessor_lookup(const char *name)
 {
-    if (strcmp(name, "storage_kv") == 0) return storage_kv_class_get();
     if (strcmp(name, "storage_db") == 0) return storage_db_class_get();
     return PICOMESH_OK(class_ptr, NULL);
 }
@@ -791,9 +784,6 @@ static struct class_ptr_result storage_accessor_lookup(const char *name)
 struct storage_skel_row { const char *name; rpc_skel_fn fn; };
 
 static const struct storage_skel_row storage_skel_rows[] = {
-    {"storage_kv_set", storage_kv_set_skel},
-    {"storage_kv_get", storage_kv_get_skel},
-    {"storage_kv_count", storage_kv_count_skel},
     {"storage_set", storage_set_skel},
     {"storage_get", storage_get_skel},
     {"storage_exists", storage_exists_skel},
@@ -825,8 +815,8 @@ void picomesh_plugin_storage_register(void)
     }
     rpc_add_skel_lookup(storage_skel_lookup);
     jinvoke_add_lookup(storage_jinvoke_lookup);
-    { struct class_ptr_result reg = storage_kv_class_get();
-      if (PICOMESH_IS_ERR(reg)) picomesh_error_destroy(reg.error); }
+    minvoke_add_lookup(storage_minvoke_lookup);
+    jinvoke_params_add_lookup(storage_params_lookup);
     { struct class_ptr_result reg = storage_db_class_get();
       if (PICOMESH_IS_ERR(reg)) picomesh_error_destroy(reg.error); }
 }

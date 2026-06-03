@@ -33,7 +33,7 @@
 #define PIPE_CTX "git_pipeline"
 
 /* No in-memory state — every op delegates to storage. */
-struct PICOMESH_CLASS_ANNOTATE("class@git_pipeline:store") git_pipeline_store_data {
+struct PICOMESH_CLASS_ANNOTATE("class@git_pipeline:git_pipeline") git_pipeline_git_pipeline_data {
     char _unused;
 };
 
@@ -118,8 +118,8 @@ static struct picomesh_void_result job_store(struct gp_storage *h, struct yheade
     return PICOMESH_OK_VOID();
 }
 
-PICOMESH_CLASS_ANNOTATE("override@git_pipeline:store:store_enqueue")
-struct picomesh_uint32_result git_pipeline_store_enqueue_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@git_pipeline:git_pipeline:git_pipeline_enqueue")
+struct picomesh_uint32_result git_pipeline_git_pipeline_enqueue_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                            uint32_t repo_id)
 {
     (void)ctx; (void)obj;
@@ -136,8 +136,8 @@ struct picomesh_uint32_result git_pipeline_store_enqueue_impl(struct ctx *ctx, s
     return PICOMESH_OK(picomesh_uint32, id);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@git_pipeline:store:store_lease")
-struct picomesh_uint32_result git_pipeline_store_lease_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@git_pipeline:git_pipeline:git_pipeline_lease")
+struct picomesh_uint32_result git_pipeline_git_pipeline_lease_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                          uint32_t runner_id)
 {
     (void)ctx; (void)obj;
@@ -175,8 +175,8 @@ struct picomesh_uint32_result git_pipeline_store_lease_impl(struct ctx *ctx, str
     return PICOMESH_OK(picomesh_uint32, 0);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@git_pipeline:store:store_complete")
-struct picomesh_int_result git_pipeline_store_complete_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@git_pipeline:git_pipeline:git_pipeline_complete")
+struct picomesh_int_result git_pipeline_git_pipeline_complete_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                          uint32_t job_id, int32_t status)
 {
     (void)ctx; (void)obj;
@@ -211,8 +211,8 @@ struct picomesh_int_result git_pipeline_store_complete_impl(struct ctx *ctx, str
     return PICOMESH_OK(picomesh_int, 1);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@git_pipeline:store:store_count_pending")
-struct picomesh_size_result git_pipeline_store_count_pending_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
+PICOMESH_CLASS_ANNOTATE("override@git_pipeline:git_pipeline:git_pipeline_count_pending")
+struct picomesh_size_result git_pipeline_git_pipeline_count_pending_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
     (void)ctx; (void)obj;
     struct gp_storage_result sr = gp_open();
@@ -223,8 +223,8 @@ struct picomesh_size_result git_pipeline_store_count_pending_impl(struct ctx *ct
     return PICOMESH_OK(picomesh_size, (size_t)(nr.value < 0 ? 0 : nr.value));
 }
 
-PICOMESH_CLASS_ANNOTATE("override@git_pipeline:store:store_count_running")
-struct picomesh_size_result git_pipeline_store_count_running_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
+PICOMESH_CLASS_ANNOTATE("override@git_pipeline:git_pipeline:git_pipeline_count_running")
+struct picomesh_size_result git_pipeline_git_pipeline_count_running_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
     (void)ctx; (void)obj;
     struct gp_storage_result sr = gp_open();
@@ -235,8 +235,8 @@ struct picomesh_size_result git_pipeline_store_count_running_impl(struct ctx *ct
     return PICOMESH_OK(picomesh_size, (size_t)(nr.value < 0 ? 0 : nr.value));
 }
 
-PICOMESH_CLASS_ANNOTATE("override@git_pipeline:store:store_count_done")
-struct picomesh_size_result git_pipeline_store_count_done_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
+PICOMESH_CLASS_ANNOTATE("override@git_pipeline:git_pipeline:git_pipeline_count_done")
+struct picomesh_size_result git_pipeline_git_pipeline_count_done_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
     (void)ctx; (void)obj;
     struct gp_storage_result sr = gp_open();
@@ -245,6 +245,32 @@ struct picomesh_size_result git_pipeline_store_count_done_impl(struct ctx *ctx, 
     struct picomesh_int64_result nr = gp_get(&h, hdrs, "done", 0);
     if (PICOMESH_IS_ERR(nr)) return PICOMESH_ERR(picomesh_size, "git_pipeline_count_done: read failed", nr);
     return PICOMESH_OK(picomesh_size, (size_t)(nr.value < 0 ? 0 : nr.value));
+}
+
+/* List ALL pipeline runs' stored entries as a JSON array (gh#15) — every
+ * object, not a pending/running/done count. Delegates to the namespace scan. */
+PICOMESH_CLASS_ANNOTATE("override@git_pipeline:git_pipeline:git_pipeline_list")
+struct picomesh_json_result git_pipeline_git_pipeline_list_impl(struct ctx *ctx, struct object *obj,
+                                                         struct yheaders *hdrs,
+                                                         int64_t offset, int64_t limit)
+{
+    (void)ctx; (void)obj;
+    struct gp_storage_result sr = gp_open();
+    if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_json, "git_pipeline_list: storage open failed", sr);
+    struct gp_storage h = sr.value;
+    return sharded_storage_db_list(&h.c, h.obj, hdrs, PIPE_CTX, "job:", offset, limit);
+}
+
+/* Unbounded variant — every run. Use with care on large deployments. */
+PICOMESH_CLASS_ANNOTATE("override@git_pipeline:git_pipeline:git_pipeline_list_all")
+struct picomesh_json_result git_pipeline_git_pipeline_list_all_impl(struct ctx *ctx, struct object *obj,
+                                                                    struct yheaders *hdrs)
+{
+    (void)ctx; (void)obj;
+    struct gp_storage_result sr = gp_open();
+    if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_json, "git_pipeline_list_all: storage open failed", sr);
+    struct gp_storage h = sr.value;
+    return sharded_storage_db_list_all(&h.c, h.obj, hdrs, PIPE_CTX, "job:");
 }
 
 #include "store.gen.c"

@@ -104,6 +104,11 @@ def ret_value_type(rid: str):
         return "uint32_t"
     if rid == "picomesh_string":
         return "char *"
+    if rid == "picomesh_json":
+        # JSON text on the wire is just a heap string; the JSON frontend
+        # emits it raw (see emit_jinvoke), every other path treats it as a
+        # string (is_string_ret keys off this "char *").
+        return "char *"
     if rid.endswith("_ptr"):
         return f"struct {rid[:-4]} *"
     return f"struct {rid}"
@@ -631,6 +636,128 @@ def emit_pack_arg(a: dict, slot: str, rid: str, indent: str = "        ") -> str
     )
 
 
+def dotted_path(m: dict) -> str:
+    """The dotted "service.class.method" path a foreign msgpack service
+    receives. Inverse of the inbound resolver's dotted→underscore mapping:
+    service=domain, class=owning_class, method=slot minus the class prefix
+    (the codegen slot is `<class>_<method>`)."""
+    domain = m["domain"]
+    cls = m.get("owning_class") or ""
+    slot = m["slot"]
+    if not cls:
+        return f"{domain}.{slot}"
+    prefix = cls + "_"
+    method = slot[len(prefix):] if slot.startswith(prefix) else slot
+    return f"{domain}.{cls}.{method}"
+
+
+def emit_mpack_write_arg(a: dict) -> str:
+    """Encode one positional arg into the msgpack args array (`_maw`),
+    preserving width/signedness. Same type mapping as the inbound unpack."""
+    t = a["type"].strip()
+    name = a["name"]
+    if is_string_arg(t):
+        return (f"            cmp_write_str(&_maw, {name} ? {name} : \"\", "
+                f"(uint32_t)({name} ? strlen({name}) : 0));\n")
+    if t in ("uint32_t", "uint16_t", "uint8_t", "size_t", "uint64_t"):
+        return f"            cmp_write_uinteger(&_maw, (uint64_t){name});\n"
+    if t in ("double", "float"):
+        return f"            cmp_write_decimal(&_maw, (double){name});\n"
+    return f"            cmp_write_integer(&_maw, (int64_t){name});\n"
+
+
+def emit_mpack_read_result(rid: str, vt, slot: str) -> str:
+    """Decode the response `result` value (reader `_mrr` over `_mresp`/`_mrlen`)
+    into the local `_mret` result. Mirrors emit_minvoke_write_result."""
+    if vt is None:
+        return "            (void)_mrr; (void)_mrb;\n            _mret = PICOMESH_OK_VOID();\n"
+    if vt == "char *":
+        return (
+            "            uint32_t _mssz = 0;\n"
+            "            if (!cmp_read_str_size(&_mrr, &_mssz)) {\n"
+            f"                _mret = PICOMESH_ERR({rid}, \"{slot}: bad msgpack string result\");\n"
+            "            } else if (_mrb.offset + _mssz > _mrlen) {\n"
+            f"                _mret = PICOMESH_ERR({rid}, \"{slot}: truncated msgpack string\");\n"
+            "            } else {\n"
+            "                char *_msv = malloc((size_t)_mssz + 1);\n"
+            f"                if (!_msv) _mret = PICOMESH_ERR({rid}, \"{slot}: out of memory\");\n"
+            "                else {\n"
+            "                    if (_mssz) memcpy(_msv, _mresp + _mrb.offset, _mssz);\n"
+            "                    _msv[_mssz] = 0;\n"
+            f"                    _mret = PICOMESH_OK({rid}, _msv);\n"
+            "                }\n"
+            "            }\n"
+        )
+    if vt in ("uint32_t", "size_t", "uint64_t", "uint16_t", "uint8_t"):
+        return (
+            "            uint64_t _mv = 0;\n"
+            "            if (!cmp_read_uinteger(&_mrr, &_mv))\n"
+            f"                _mret = PICOMESH_ERR({rid}, \"{slot}: bad msgpack uint result\");\n"
+            f"            else _mret = PICOMESH_OK({rid}, ({vt})_mv);\n"
+        )
+    if vt in ("int", "int64_t", "int32_t", "int16_t", "int8_t", "short", "long"):
+        return (
+            "            int64_t _mv = 0;\n"
+            "            if (!cmp_read_integer(&_mrr, &_mv))\n"
+            f"                _mret = PICOMESH_ERR({rid}, \"{slot}: bad msgpack int result\");\n"
+            f"            else _mret = PICOMESH_OK({rid}, ({vt})_mv);\n"
+        )
+    if vt in ("double", "float"):
+        return (
+            "            double _mv = 0;\n"
+            "            if (!cmp_read_decimal(&_mrr, &_mv))\n"
+            f"                _mret = PICOMESH_ERR({rid}, \"{slot}: bad msgpack float result\");\n"
+            f"            else _mret = PICOMESH_OK({rid}, ({vt})_mv);\n"
+        )
+    return f"            _mret = PICOMESH_ERR({rid}, \"{slot}: msgpack return type unsupported\");\n"
+
+
+def emit_msgpack_remote_branch(m: dict) -> str:
+    """Outbound msgpack client path, taken when the peer is a msgpack channel.
+    Encodes the positional args, makes one envelope round-trip, decodes the
+    result. Heap buffers (off the hot path) keep the stub's stack small."""
+    rid = result_type_id(m["return_type"])
+    vt = ret_value_type(rid)
+    slot = qualified_slot(m)
+    user_args = m["args"][3:]
+    n = len(user_args)
+    hdrs_name = m["args"][2]["name"]
+    path = dotted_path(m)
+    resp_sz = (8 + WIRE_STRING_RESP_MAX) if is_string_ret(vt) else 256
+    writes = "".join(emit_mpack_write_arg(a) for a in user_args)
+    read = emit_mpack_read_result(rid, vt, slot)
+    return f"""\
+        if (peer_channel_is_msgpack(_s->peer)) {{
+            struct {rid}_result _mret;
+            uint8_t *_margs = malloc({WIRE_ARG_BUFFER_BYTES});
+            uint8_t *_mresp = malloc({resp_sz});
+            if (!_margs || !_mresp) {{
+                free(_margs); free(_mresp);
+                return PICOMESH_ERR({rid}, "{slot}: out of memory");
+            }}
+            struct picomesh_msgpack_buffer _mab;
+            cmp_ctx_t _maw;
+            picomesh_msgpack_writer_init(&_maw, &_mab, _margs, {WIRE_ARG_BUFFER_BYTES});
+            cmp_write_array(&_maw, {n}u);
+{writes}\
+            size_t _mrlen = 0;
+            char _merr[256] = {{0}};
+            if (!peer_channel_msgpack_call(_s->peer, "{path}", {hdrs_name},
+                                           _margs, _mab.offset, _mresp, {resp_sz},
+                                           &_mrlen, _merr, sizeof(_merr))) {{
+                _mret = PICOMESH_ERR({rid}, _merr[0] ? strdup(_merr) : "{slot}: msgpack call failed");
+            }} else {{
+                struct picomesh_msgpack_buffer _mrb;
+                cmp_ctx_t _mrr;
+                picomesh_msgpack_reader_init(&_mrr, &_mrb, _mresp, _mrlen);
+{read}\
+            }}
+            free(_margs); free(_mresp);
+            return _mret;
+        }}
+"""
+
+
 def emit_dispatch_body(m: dict) -> str:
     args = m["args"]
     rid = result_type_id(m["return_type"])
@@ -644,6 +771,7 @@ def emit_dispatch_body(m: dict) -> str:
 
     pack_block = "".join(emit_pack_arg(a, slot_qname, rid, indent="        ")
                          for a in wire_args(m))
+    msgpack_branch = emit_msgpack_remote_branch(m)
 
     # Wire response: u8 status; status==0 → value_bytes; status==1 →
     # u32 msg_len + msg_bytes (gh#2: preserve structured remote errors).
@@ -712,6 +840,7 @@ def emit_dispatch_body(m: dict) -> str:
 
     struct ctx *_s = {ctx_name};
     if (_s && _s->peer) {{
+{msgpack_branch}\
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR({rid}, "{slot_qname}: remote id unresolved");
@@ -754,6 +883,7 @@ def emit_methods_c(model: dict, module: str, out_path: Path):
              '#include <picomesh/ycore/ytelemetry.h>\n',
              '#include <picomesh/yclass/rpc.h>\n',
              '#include <picomesh/yclass/yheaders.h>\n',
+             '#include <picomesh/msgpack/msgpack.h>\n',
              '#include <stdint.h>\n#include <stdlib.h>\n#include <string.h>\n\n']
     for m in model["methods"]:
         params = ", ".join(f"{a['type']} {a['name']}" for a in m["args"])
@@ -1106,8 +1236,12 @@ static struct class_ptr_result {module}_accessor_lookup(const char *name)
         skel_install = ""
         skel_section = ""
         jinvoke_install = ""
+        minvoke_install = ""
+        params_install = ""
     else:
         jinvoke_install = f"    jinvoke_add_lookup({module}_jinvoke_lookup);\n"
+        minvoke_install = f"    minvoke_add_lookup({module}_minvoke_lookup);\n"
+        params_install = f"    jinvoke_params_add_lookup({module}_params_lookup);\n"
         skel_rows = ",\n".join(
             f'    {{"{qualified_slot(m)}", {qualified_slot(m)}_skel}}'
             for m in methods
@@ -1175,6 +1309,8 @@ void picomesh_plugin_{module}_register(void)
     }}
 {skel_install}\
 {jinvoke_install}\
+{minvoke_install}\
+{params_install}\
 {prewarm_section}\
 }}
 """
@@ -1234,22 +1370,28 @@ def emit_jinvoke(m: dict) -> str:
     call = ", ".join(call_parts)
     rt = f"struct {rid}_result"
 
-    if vt is None:
-        write_result = "    yjson_w_null(result);\n"
+    if rid == "picomesh_json":
+        # Owned heap string that already IS serialized JSON — emit verbatim
+        # (no quoting) so a list method returns a real JSON array, then free.
+        write_result = (
+            "    yjson_writer_raw(result, call_result.value ? call_result.value : \"null\");\n"
+            "    free(call_result.value);\n")
+    elif vt is None:
+        write_result = "    yjson_writer_null(result);\n"
     elif vt in ("int", "int64_t", "uint32_t", "size_t"):
-        write_result = "    yjson_w_int(result, (int64_t)call_result.value);\n"
+        write_result = "    yjson_writer_int(result, (int64_t)call_result.value);\n"
     elif vt in ("double", "float"):
-        write_result = "    yjson_w_float(result, (double)call_result.value);\n"
+        write_result = "    yjson_writer_float(result, (double)call_result.value);\n"
     elif vt == "char *":
         # picomesh_string: owned heap return — write it, then free it.
         write_result = (
-            "    yjson_w_string(result, call_result.value ? call_result.value : \"\");\n"
+            "    yjson_writer_string(result, call_result.value ? call_result.value : \"\");\n"
             "    free(call_result.value);\n")
     elif vt.startswith("const char"):
         # Borrowed string (not owned) — write, do not free.
-        write_result = "    yjson_w_string(result, call_result.value ? call_result.value : \"\");\n"
+        write_result = "    yjson_writer_string(result, call_result.value ? call_result.value : \"\");\n"
     else:
-        write_result = ("    yjson_w_null(result);  "
+        write_result = ("    yjson_writer_null(result);  "
                         "/* return type not yet supported in JSON */\n")
 
     return f"""\
@@ -1302,10 +1444,252 @@ static jinvoke_fn {module}_jinvoke_lookup(const char *qname)
 """
 
 
+def emit_params_table(model: dict, module: str) -> str:
+    """Per-method USER parameter signatures (args after ctx/obj/hdrs),
+    baked into the binary so /_describe can reflect the call shape at
+    runtime — the deployment image carries no model.yaml. Names+types are
+    emitted in declared (positional) order."""
+    methods = model.get("methods", [])
+    if not methods:
+        return ""
+    blocks = []
+    rows = []
+    for m in methods:
+        slot = qualified_slot(m)
+        user = m["args"][3:]
+        if user:
+            items = ",\n".join(
+                f'    {{"{a["name"]}", "{a["type"]}"}}' for a in user
+            )
+            blocks.append(
+                f"static const struct jinvoke_param {slot}_params[] = {{\n{items}\n}};\n"
+            )
+            rows.append(f'    {{"{slot}", {{{slot}_params, {len(user)}}}}}')
+        else:
+            rows.append(f'    {{"{slot}", {{NULL, 0}}}}')
+    rows_s = ",\n".join(rows)
+    blocks_s = "".join(blocks)
+    return f"""\
+
+/* ---- {module}: per-method parameter signatures (runtime reflection) -- */
+
+{blocks_s}\
+struct {module}_params_row {{ const char *name; struct jinvoke_params params; }};
+
+static const struct {module}_params_row {module}_params_rows[] = {{
+{rows_s}
+}};
+
+static const struct jinvoke_params *{module}_params_lookup(const char *qname)
+{{
+    for (size_t i = 0;
+         i < sizeof({module}_params_rows) / sizeof({module}_params_rows[0]); ++i)
+        if (strcmp({module}_params_rows[i].name, qname) == 0)
+            return &{module}_params_rows[i].params;
+    return NULL;
+}}
+"""
+
+
+def emit_munpack_arg(a: dict, idx: int) -> tuple:
+    """Emit the decl + msgpack read for user arg #idx, read from the cmp
+    reader `_mr` with per-type width/signedness/range validation. On a read,
+    type or range failure it sets `_err` and `return -1;`. Returns
+    (decl_block, call_expr)."""
+    t = a["type"].strip()
+    name = a["name"]
+    var = f"_v{idx}"
+    if is_string_arg(t):
+        return (
+            f"    char {var}[{WIRE_STRING_MAX}];\n"
+            f"    {{\n"
+            f"        uint32_t _sz = (uint32_t)sizeof({var});\n"
+            f"        if (!cmp_read_str(_mr, {var}, &_sz)) {{\n"
+            f'            snprintf(_err, _err_cap, "{name}: expected str arg (%s)", cmp_strerror(_mr));\n'
+            f"            return -1;\n"
+            f"        }}\n"
+            f"    }}\n",
+            var,
+        )
+    if t in ("uint32_t", "uint16_t", "uint8_t"):
+        cap = {"uint32_t": "UINT32_MAX", "uint16_t": "UINT16_MAX", "uint8_t": "UINT8_MAX"}[t]
+        return (
+            f"    {t} {var};\n"
+            f"    {{\n"
+            f"        uint64_t _u;\n"
+            f'        if (!cmp_read_uinteger(_mr, &_u)) {{ snprintf(_err, _err_cap, "{name}: expected unsigned int (%s)", cmp_strerror(_mr)); return -1; }}\n'
+            f'        if (_u > {cap}) {{ snprintf(_err, _err_cap, "{name}: value %llu out of range for {t}", (unsigned long long)_u); return -1; }}\n'
+            f"        {var} = ({t})_u;\n"
+            f"    }}\n",
+            var,
+        )
+    if t in ("size_t", "uint64_t"):
+        return (
+            f"    {t} {var};\n"
+            f"    {{\n"
+            f"        uint64_t _u;\n"
+            f'        if (!cmp_read_uinteger(_mr, &_u)) {{ snprintf(_err, _err_cap, "{name}: expected unsigned int (%s)", cmp_strerror(_mr)); return -1; }}\n'
+            f"        {var} = ({t})_u;\n"
+            f"    }}\n",
+            var,
+        )
+    if t == "int64_t":
+        return (
+            f"    int64_t {var};\n"
+            f'    if (!cmp_read_integer(_mr, &{var})) {{ snprintf(_err, _err_cap, "{name}: expected int (%s)", cmp_strerror(_mr)); return -1; }}\n',
+            var,
+        )
+    if t == "float":
+        return (
+            f"    float {var};\n"
+            f"    {{\n"
+            f"        double _d;\n"
+            f'        if (!cmp_read_decimal(_mr, &_d)) {{ snprintf(_err, _err_cap, "{name}: expected float (%s)", cmp_strerror(_mr)); return -1; }}\n'
+            f"        {var} = (float)_d;\n"
+            f"    }}\n",
+            var,
+        )
+    if t == "double":
+        return (
+            f"    double {var};\n"
+            f'    if (!cmp_read_decimal(_mr, &{var})) {{ snprintf(_err, _err_cap, "{name}: expected float (%s)", cmp_strerror(_mr)); return -1; }}\n',
+            var,
+        )
+    # Remaining signed integer types (int, int32_t, int16_t, int8_t, short,
+    # …): read as int64, range-check against the target's limits.
+    limits = {
+        "int": ("INT_MIN", "INT_MAX"),
+        "int32_t": ("INT32_MIN", "INT32_MAX"),
+        "int16_t": ("INT16_MIN", "INT16_MAX"),
+        "int8_t": ("INT8_MIN", "INT8_MAX"),
+        "short": ("SHRT_MIN", "SHRT_MAX"),
+        "long": ("LONG_MIN", "LONG_MAX"),
+    }
+    lo, hi = limits.get(t, ("INT_MIN", "INT_MAX"))
+    return (
+        f"    {t} {var};\n"
+        f"    {{\n"
+        f"        int64_t _i;\n"
+        f'        if (!cmp_read_integer(_mr, &_i)) {{ snprintf(_err, _err_cap, "{name}: expected int (%s)", cmp_strerror(_mr)); return -1; }}\n'
+        f'        if (_i < ({lo}) || _i > ({hi})) {{ snprintf(_err, _err_cap, "{name}: value %lld out of range for {t}", (long long)_i); return -1; }}\n'
+        f"        {var} = ({t})_i;\n"
+        f"    }}\n",
+        var,
+    )
+
+
+def emit_minvoke_write_result(vt) -> str:
+    """Write the method's return value as ONE msgpack value into `_mw`,
+    preserving width/signedness. Owned string returns are freed after."""
+    if vt is None:
+        return "    cmp_write_nil(_mw);\n"
+    if vt in ("uint32_t", "size_t", "uint64_t", "uint16_t", "uint8_t"):
+        return "    cmp_write_uinteger(_mw, (uint64_t)call_result.value);\n"
+    if vt in ("int", "int64_t", "int32_t", "int16_t", "int8_t", "short", "long"):
+        return "    cmp_write_integer(_mw, (int64_t)call_result.value);\n"
+    if vt in ("double", "float"):
+        return "    cmp_write_decimal(_mw, (double)call_result.value);\n"
+    if vt == "char *":
+        # picomesh_string / picomesh_json: owned heap return — write then free.
+        return (
+            "    {\n"
+            "        const char *_sv = call_result.value ? call_result.value : \"\";\n"
+            "        cmp_write_str(_mw, _sv, (uint32_t)strlen(_sv));\n"
+            "        free(call_result.value);\n"
+            "    }\n"
+        )
+    if vt.startswith("const char"):
+        return (
+            "    {\n"
+            "        const char *_sv = call_result.value ? call_result.value : \"\";\n"
+            "        cmp_write_str(_mw, _sv, (uint32_t)strlen(_sv));\n"
+            "    }\n"
+        )
+    return "    cmp_write_nil(_mw);  /* return type not yet supported in msgpack */\n"
+
+
+def emit_minvoke(m: dict) -> str:
+    """One per method. Reads positional msgpack args from `_mr` and calls the
+    public stub, writing the return through `_mw`. Mirrors emit_jinvoke: the
+    caller's `ctx` forwards straight into the stub (NULL/zeroed → local;
+    live session → forward to the owning backend). Scalar / string args only,
+    same restriction as the binary skel and jinvoke."""
+    slot = qualified_slot(m)
+    rid = result_type_id(m["return_type"])
+    vt = ret_value_type(rid)
+    args = m["args"][3:]
+    n = len(args)
+
+    arg_decls = []
+    call_parts = ["call_ctx", "obj", "hdrs"]
+    for i, a in enumerate(args):
+        decl, expr = emit_munpack_arg(a, i)
+        arg_decls.append(decl)
+        call_parts.append(expr)
+    call = ", ".join(call_parts)
+    rt = f"struct {rid}_result"
+    write_result = emit_minvoke_write_result(vt)
+
+    return f"""\
+static int {slot}_minvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          cmp_ctx_t *_mr, uint32_t _argc, cmp_ctx_t *_mw,
+                          char *_err, size_t _err_cap)
+{{
+    (void)_mr;
+    if (_argc != {n}u) {{
+        snprintf(_err, _err_cap, "{slot}: expected {n} arg(s), got %u", _argc);
+        return -1;
+    }}
+{''.join(arg_decls)}\
+    struct ctx local_ctx = {{0}};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    {rt} call_result = {slot}({call});
+    if (PICOMESH_IS_ERR(call_result)) {{
+        snprintf(_err, _err_cap, "%s: %s", "{slot}",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }}
+{write_result}\
+    return 0;
+}}
+"""
+
+
+def emit_minvoke_table(model: dict, module: str) -> str:
+    methods = model.get("methods", [])
+    if not methods:
+        return ""
+    rows = ",\n".join(
+        f'    {{"{qualified_slot(m)}", {qualified_slot(m)}_minvoke}}'
+        for m in methods
+    )
+    return f"""\
+
+/* ---- {module}: minvoke table ------------------------------------ */
+
+struct {module}_minvoke_row {{ const char *name; minvoke_fn fn; }};
+
+static const struct {module}_minvoke_row {module}_minvoke_rows[] = {{
+{rows}
+}};
+
+static minvoke_fn {module}_minvoke_lookup(const char *qname)
+{{
+    for (size_t i = 0;
+         i < sizeof({module}_minvoke_rows) / sizeof({module}_minvoke_rows[0]); ++i)
+        if (strcmp({module}_minvoke_rows[i].name, qname) == 0)
+            return {module}_minvoke_rows[i].fn;
+    return NULL;
+}}
+"""
+
+
 def emit_rpc_c(model: dict, module: str, out_path: Path):
     parts = [HEADER,
              '#include <picomesh/yclass/rpc.h>\n',
              '#include <picomesh/yclass/jinvoke.h>\n',
+             '#include <picomesh/yclass/minvoke.h>\n',
              '#include <picomesh/yclass/yheaders.h>\n',
              '#include <picomesh/yjson/yjson.h>\n',
              '#include <picomesh/ycore/result.h>\n',
@@ -1314,7 +1698,7 @@ def emit_rpc_c(model: dict, module: str, out_path: Path):
              '#include <picomesh/ycore/ytelemetry.h>\n',
              '#include <picomesh/yclass/class.h>\n',
              f'#include "{module}.internal.h"\n',
-             '#include <stdint.h>\n#include <stdio.h>\n#include <stdlib.h>\n'
+             '#include <limits.h>\n#include <stdint.h>\n#include <stdio.h>\n#include <stdlib.h>\n'
              '#include <string.h>\n\n']
     for m in model["methods"]:
         parts.append(emit_skel(m))
@@ -1322,12 +1706,18 @@ def emit_rpc_c(model: dict, module: str, out_path: Path):
     for m in model["methods"]:
         parts.append(emit_jinvoke(m))
         parts.append("\n")
+    for m in model["methods"]:
+        parts.append(emit_minvoke(m))
+        parts.append("\n")
     for c in regular_classes(model):
         parts.append(emit_create_fn(c))
         parts.append("\n")
-    # jinvoke table must come BEFORE the install-hooks constructor so
-    # the constructor's reference to <module>_jinvoke_lookup resolves.
+    # jinvoke + params tables must come BEFORE the register entry point so
+    # its references to <module>_jinvoke_lookup / <module>_params_lookup
+    # resolve.
     parts.append(emit_jinvoke_table(model, module))
+    parts.append(emit_minvoke_table(model, module))
+    parts.append(emit_params_table(model, module))
     parts.append(emit_lookup_tables(model, module))
     out_path.write_text("".join(parts))
 

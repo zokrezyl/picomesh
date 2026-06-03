@@ -1,7 +1,7 @@
 methods:
-  - slot: store_login
+  - slot: token_issuer_login
     domain: token_issuer
-    owning_class: store
+    owning_class: token_issuer
     return_type: struct picomesh_uint32_result
     args:
       - name: ctx
@@ -14,9 +14,9 @@ methods:
         type: uint32_t
       - name: provider_id
         type: uint32_t
-  - slot: store_validate
+  - slot: token_issuer_validate
     domain: token_issuer
-    owning_class: store
+    owning_class: token_issuer
     return_type: struct picomesh_uint32_result
     args:
       - name: ctx
@@ -27,9 +27,9 @@ methods:
         type: "struct yheaders *"
       - name: token_id
         type: uint32_t
-  - slot: store_refresh
+  - slot: token_issuer_refresh
     domain: token_issuer
-    owning_class: store
+    owning_class: token_issuer
     return_type: struct picomesh_uint32_result
     args:
       - name: ctx
@@ -40,9 +40,9 @@ methods:
         type: "struct yheaders *"
       - name: token_id
         type: uint32_t
-  - slot: store_revoke
+  - slot: token_issuer_revoke
     domain: token_issuer
-    owning_class: store
+    owning_class: token_issuer
     return_type: struct picomesh_int_result
     args:
       - name: ctx
@@ -53,9 +53,9 @@ methods:
         type: "struct yheaders *"
       - name: token_id
         type: uint32_t
-  - slot: store_count_active
+  - slot: token_issuer_count_active
     domain: token_issuer
-    owning_class: store
+    owning_class: token_issuer
     return_type: struct picomesh_size_result
     args:
       - name: ctx
@@ -64,28 +64,60 @@ methods:
         type: "struct object *"
       - name: hdrs
         type: "struct yheaders *"
-classes:
-  - name: store
+  - slot: token_issuer_list
     domain: token_issuer
-    accessor: token_issuer_store_class_get
+    owning_class: token_issuer
+    return_type: struct picomesh_json_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: offset
+        type: int64_t
+      - name: limit
+        type: int64_t
+  - slot: token_issuer_list_all
+    domain: token_issuer
+    owning_class: token_issuer
+    return_type: struct picomesh_json_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+classes:
+  - name: token_issuer
+    domain: token_issuer
+    accessor: token_issuer_token_issuer_class_get
     type: regular
     source_file: /home/misi/work/my/picomesh/src/picomesh/plugins/token_issuer/store.c
     parent: null
     mixins: []
-    data: struct token_issuer_store_data
+    data: struct token_issuer_token_issuer_data
     ops:
-      - slot: store_login
+      - slot: token_issuer_login
         slot_domain: token_issuer
-        impl: token_issuer_store_login_impl
-      - slot: store_validate
+        impl: token_issuer_token_issuer_login_impl
+      - slot: token_issuer_validate
         slot_domain: token_issuer
-        impl: token_issuer_store_validate_impl
-      - slot: store_refresh
+        impl: token_issuer_token_issuer_validate_impl
+      - slot: token_issuer_refresh
         slot_domain: token_issuer
-        impl: token_issuer_store_refresh_impl
-      - slot: store_revoke
+        impl: token_issuer_token_issuer_refresh_impl
+      - slot: token_issuer_revoke
         slot_domain: token_issuer
-        impl: token_issuer_store_revoke_impl
-      - slot: store_count_active
+        impl: token_issuer_token_issuer_revoke_impl
+      - slot: token_issuer_count_active
         slot_domain: token_issuer
-        impl: token_issuer_store_count_active_impl
+        impl: token_issuer_token_issuer_count_active_impl
+      - slot: token_issuer_list
+        slot_domain: token_issuer
+        impl: token_issuer_token_issuer_list_impl
+      - slot: token_issuer_list_all
+        slot_domain: token_issuer
+        impl: token_issuer_token_issuer_list_all_impl

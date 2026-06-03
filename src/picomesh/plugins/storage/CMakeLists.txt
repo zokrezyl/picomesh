@@ -1,5 +1,5 @@
 picomesh_add_plugin(storage
-    SOURCES kv.c storage.c
+    SOURCES storage.c
     EXTRA_INCLUDES
         $<TARGET_PROPERTY:sqlite3,INTERFACE_INCLUDE_DIRECTORIES>
         $<TARGET_PROPERTY:libmdbx,INTERFACE_INCLUDE_DIRECTORIES>

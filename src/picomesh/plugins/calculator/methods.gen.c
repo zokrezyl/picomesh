@@ -6,6 +6,7 @@
 #include <picomesh/ycore/ytelemetry.h>
 #include <picomesh/yclass/rpc.h>
 #include <picomesh/yclass/yheaders.h>
+#include <picomesh/msgpack/msgpack.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,6 +26,38 @@ struct picomesh_int64_result calculator_calc_add(struct ctx * ctx, struct object
 
     struct ctx *_s = ctx;
     if (_s && _s->peer) {
+        if (peer_channel_is_msgpack(_s->peer)) {
+            struct picomesh_int64_result _mret;
+            uint8_t *_margs = malloc(16384);
+            uint8_t *_mresp = malloc(256);
+            if (!_margs || !_mresp) {
+                free(_margs); free(_mresp);
+                return PICOMESH_ERR(picomesh_int64, "calculator_calc_add: out of memory");
+            }
+            struct picomesh_msgpack_buffer _mab;
+            cmp_ctx_t _maw;
+            picomesh_msgpack_writer_init(&_maw, &_mab, _margs, 16384);
+            cmp_write_array(&_maw, 2u);
+            cmp_write_integer(&_maw, (int64_t)x);
+            cmp_write_integer(&_maw, (int64_t)y);
+            size_t _mrlen = 0;
+            char _merr[256] = {0};
+            if (!peer_channel_msgpack_call(_s->peer, "calculator.calc.add", hdrs,
+                                           _margs, _mab.offset, _mresp, 256,
+                                           &_mrlen, _merr, sizeof(_merr))) {
+                _mret = PICOMESH_ERR(picomesh_int64, _merr[0] ? strdup(_merr) : "calculator_calc_add: msgpack call failed");
+            } else {
+                struct picomesh_msgpack_buffer _mrb;
+                cmp_ctx_t _mrr;
+                picomesh_msgpack_reader_init(&_mrr, &_mrb, _mresp, _mrlen);
+            int64_t _mv = 0;
+            if (!cmp_read_integer(&_mrr, &_mv))
+                _mret = PICOMESH_ERR(picomesh_int64, "calculator_calc_add: bad msgpack int result");
+            else _mret = PICOMESH_OK(picomesh_int64, (int64_t)_mv);
+            }
+            free(_margs); free(_mresp);
+            return _mret;
+        }
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int64, "calculator_calc_add: remote id unresolved");
@@ -100,6 +133,38 @@ struct picomesh_int64_result calculator_calc_sub(struct ctx * ctx, struct object
 
     struct ctx *_s = ctx;
     if (_s && _s->peer) {
+        if (peer_channel_is_msgpack(_s->peer)) {
+            struct picomesh_int64_result _mret;
+            uint8_t *_margs = malloc(16384);
+            uint8_t *_mresp = malloc(256);
+            if (!_margs || !_mresp) {
+                free(_margs); free(_mresp);
+                return PICOMESH_ERR(picomesh_int64, "calculator_calc_sub: out of memory");
+            }
+            struct picomesh_msgpack_buffer _mab;
+            cmp_ctx_t _maw;
+            picomesh_msgpack_writer_init(&_maw, &_mab, _margs, 16384);
+            cmp_write_array(&_maw, 2u);
+            cmp_write_integer(&_maw, (int64_t)x);
+            cmp_write_integer(&_maw, (int64_t)y);
+            size_t _mrlen = 0;
+            char _merr[256] = {0};
+            if (!peer_channel_msgpack_call(_s->peer, "calculator.calc.sub", hdrs,
+                                           _margs, _mab.offset, _mresp, 256,
+                                           &_mrlen, _merr, sizeof(_merr))) {
+                _mret = PICOMESH_ERR(picomesh_int64, _merr[0] ? strdup(_merr) : "calculator_calc_sub: msgpack call failed");
+            } else {
+                struct picomesh_msgpack_buffer _mrb;
+                cmp_ctx_t _mrr;
+                picomesh_msgpack_reader_init(&_mrr, &_mrb, _mresp, _mrlen);
+            int64_t _mv = 0;
+            if (!cmp_read_integer(&_mrr, &_mv))
+                _mret = PICOMESH_ERR(picomesh_int64, "calculator_calc_sub: bad msgpack int result");
+            else _mret = PICOMESH_OK(picomesh_int64, (int64_t)_mv);
+            }
+            free(_margs); free(_mresp);
+            return _mret;
+        }
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int64, "calculator_calc_sub: remote id unresolved");
@@ -175,6 +240,38 @@ struct picomesh_int64_result calculator_calc_mul(struct ctx * ctx, struct object
 
     struct ctx *_s = ctx;
     if (_s && _s->peer) {
+        if (peer_channel_is_msgpack(_s->peer)) {
+            struct picomesh_int64_result _mret;
+            uint8_t *_margs = malloc(16384);
+            uint8_t *_mresp = malloc(256);
+            if (!_margs || !_mresp) {
+                free(_margs); free(_mresp);
+                return PICOMESH_ERR(picomesh_int64, "calculator_calc_mul: out of memory");
+            }
+            struct picomesh_msgpack_buffer _mab;
+            cmp_ctx_t _maw;
+            picomesh_msgpack_writer_init(&_maw, &_mab, _margs, 16384);
+            cmp_write_array(&_maw, 2u);
+            cmp_write_integer(&_maw, (int64_t)x);
+            cmp_write_integer(&_maw, (int64_t)y);
+            size_t _mrlen = 0;
+            char _merr[256] = {0};
+            if (!peer_channel_msgpack_call(_s->peer, "calculator.calc.mul", hdrs,
+                                           _margs, _mab.offset, _mresp, 256,
+                                           &_mrlen, _merr, sizeof(_merr))) {
+                _mret = PICOMESH_ERR(picomesh_int64, _merr[0] ? strdup(_merr) : "calculator_calc_mul: msgpack call failed");
+            } else {
+                struct picomesh_msgpack_buffer _mrb;
+                cmp_ctx_t _mrr;
+                picomesh_msgpack_reader_init(&_mrr, &_mrb, _mresp, _mrlen);
+            int64_t _mv = 0;
+            if (!cmp_read_integer(&_mrr, &_mv))
+                _mret = PICOMESH_ERR(picomesh_int64, "calculator_calc_mul: bad msgpack int result");
+            else _mret = PICOMESH_OK(picomesh_int64, (int64_t)_mv);
+            }
+            free(_margs); free(_mresp);
+            return _mret;
+        }
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int64, "calculator_calc_mul: remote id unresolved");
@@ -250,6 +347,38 @@ struct picomesh_int64_result calculator_calc_div(struct ctx * ctx, struct object
 
     struct ctx *_s = ctx;
     if (_s && _s->peer) {
+        if (peer_channel_is_msgpack(_s->peer)) {
+            struct picomesh_int64_result _mret;
+            uint8_t *_margs = malloc(16384);
+            uint8_t *_mresp = malloc(256);
+            if (!_margs || !_mresp) {
+                free(_margs); free(_mresp);
+                return PICOMESH_ERR(picomesh_int64, "calculator_calc_div: out of memory");
+            }
+            struct picomesh_msgpack_buffer _mab;
+            cmp_ctx_t _maw;
+            picomesh_msgpack_writer_init(&_maw, &_mab, _margs, 16384);
+            cmp_write_array(&_maw, 2u);
+            cmp_write_integer(&_maw, (int64_t)x);
+            cmp_write_integer(&_maw, (int64_t)y);
+            size_t _mrlen = 0;
+            char _merr[256] = {0};
+            if (!peer_channel_msgpack_call(_s->peer, "calculator.calc.div", hdrs,
+                                           _margs, _mab.offset, _mresp, 256,
+                                           &_mrlen, _merr, sizeof(_merr))) {
+                _mret = PICOMESH_ERR(picomesh_int64, _merr[0] ? strdup(_merr) : "calculator_calc_div: msgpack call failed");
+            } else {
+                struct picomesh_msgpack_buffer _mrb;
+                cmp_ctx_t _mrr;
+                picomesh_msgpack_reader_init(&_mrr, &_mrb, _mresp, _mrlen);
+            int64_t _mv = 0;
+            if (!cmp_read_integer(&_mrr, &_mv))
+                _mret = PICOMESH_ERR(picomesh_int64, "calculator_calc_div: bad msgpack int result");
+            else _mret = PICOMESH_OK(picomesh_int64, (int64_t)_mv);
+            }
+            free(_margs); free(_mresp);
+            return _mret;
+        }
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int64, "calculator_calc_div: remote id unresolved");

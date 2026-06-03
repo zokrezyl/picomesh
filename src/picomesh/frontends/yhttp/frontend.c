@@ -4,7 +4,7 @@
  * Jinja templates → hand-emitted HTML, FastAPI routes → an inline URL
  * router, FastAPI's session cookie → a plain `picomesh-sid` cookie. That
  * cookie carries an OPAQUE 128-bit hex session token (not a parseable
- * integer); the gateway resolves it to a uid via `session_store_lookup`
+ * integer); the gateway resolves it to a uid via `session_session_lookup`
  * and forwards only the resolved uid to backends.
  *
  * Pages currently rendered (URL shape matches git-yaapp where it
@@ -18,13 +18,13 @@
  *   POST /logout                drops the session, clears cookie
  *
  *   GET  /repos                 git_repo list (count) + create form
- *   POST /repos/new             git_repo_store_make
+ *   POST /repos/new             git_repo_git_repo_make
  *   GET  /repo/<id>             repo show (issues + runs panels)
  *   GET  /repo/<id>/issues      issues list (with status filter)
- *   POST /repo/<id>/issues/new  issues_store_open
+ *   POST /repo/<id>/issues/new  issues_issues_open
  *   POST /repo/<id>/issues/<iid>/close
  *   GET  /repo/<id>/runs        pipeline list
- *   POST /repo/<id>/runs/new    git_pipeline_store_enqueue
+ *   POST /repo/<id>/runs/new    git_pipeline_git_pipeline_enqueue
  *
  *   GET  /admin/users           accounts roster (site-owner only)
  *
@@ -42,6 +42,7 @@
 #include "frontend.h"
 
 #include <picomesh/yengine/engine.h>
+#include <picomesh/yengine/resolve.h>
 #include <picomesh/yloop/yloop.h>
 #include <picomesh/yclass/class.h>
 #include <picomesh/yclass/rpc.h>
@@ -185,7 +186,6 @@ static int64_t hash_password(const char *s)
  * route_register_post (bootstrap). */
 static int is_site_admin(uint32_t uid);
 static void promote_to_site_admin(uint32_t uid);
-static void accounts_index_add(uint32_t uid, const char *uname);
 static const char *landing_url(uint32_t uid, const char *uname,
                                char *out, size_t cap);
 
@@ -860,10 +860,10 @@ static int auth_and_start_session(uint32_t uid, int64_t pw,
     struct picomesh_engine *e = picomesh_active_engine();
     if (!e) { *err = "no engine"; return 0; }
 
-    SVC_OPEN(pw_sv, "password_authn", password_authn_store_create);
+    SVC_OPEN(pw_sv, "password_authn", password_authn_password_authn_create);
     if (!pw_sv.ok) { *err = "password_authn unreachable"; return 0; }
     struct picomesh_int_result auth =
-        password_authn_store_authenticate(&pw_sv.c, pw_sv.obj, NULL, uid, pw);
+        password_authn_password_authn_authenticate(&pw_sv.c, pw_sv.obj, NULL, uid, pw);
     SVC_CLOSE(pw_sv);
     if (PICOMESH_IS_ERR(auth) || auth.value != 1) {
         if (PICOMESH_IS_ERR(auth)) picomesh_error_destroy(auth.error);
@@ -871,15 +871,15 @@ static int auth_and_start_session(uint32_t uid, int64_t pw,
         return 0;
     }
 
-    SVC_OPEN(ti, "token_issuer", token_issuer_store_create);
+    SVC_OPEN(ti, "token_issuer", token_issuer_token_issuer_create);
     if (!ti.ok) { *err = "token_issuer unreachable"; return 0; }
-    token_issuer_store_login(&ti.c, ti.obj, NULL, uid, /*provider*/1);
+    token_issuer_token_issuer_login(&ti.c, ti.obj, NULL, uid, /*provider*/1);
     SVC_CLOSE(ti);
 
-    SVC_OPEN(ses, "session", session_store_create);
+    SVC_OPEN(ses, "session", session_session_create);
     if (!ses.ok) { *err = "session unreachable"; return 0; }
     struct picomesh_string_result tok_r =
-        session_store_start(&ses.c, ses.obj, NULL, uid, /*provider*/1);
+        session_session_start(&ses.c, ses.obj, NULL, uid, /*provider*/1);
     SVC_CLOSE(ses);
     if (PICOMESH_IS_ERR(tok_r)) {
         picomesh_error_destroy(tok_r.error);
@@ -910,9 +910,9 @@ static void route_login_post(struct yloop_stream *s, const char *body,
 
     /* Refuse to authenticate if the user hasn't registered yet — that's
      * what differentiates /login from /register. */
-    SVC_OPEN(acc, "accounts", accounts_store_create);
+    SVC_OPEN(acc, "accounts", accounts_accounts_create);
     if (!acc.ok) { render_login(s, "accounts service unreachable", keep_alive); return; }
-    struct picomesh_int_result ex = accounts_store_exists(&acc.c, acc.obj, NULL, uid);
+    struct picomesh_int_result ex = accounts_accounts_exists(&acc.c, acc.obj, NULL, uid);
     SVC_CLOSE(acc);
     int exists = PICOMESH_IS_OK(ex) && ex.value;
     if (PICOMESH_IS_ERR(ex)) picomesh_error_destroy(ex.error);
@@ -963,10 +963,10 @@ static void route_register_post(struct yloop_stream *s, const char *body,
      * nothing half-created, so the user can just retry once the mesh is up
      * (the retry re-uses the now-stored hash: register returns 0 = already
      * present, which is fine here). */
-    SVC_OPEN(pw_sv, "password_authn", password_authn_store_create);
+    SVC_OPEN(pw_sv, "password_authn", password_authn_password_authn_create);
     if (!pw_sv.ok) { render_register(s, "password_authn unreachable", keep_alive); return; }
     struct picomesh_int_result pwreg =
-        password_authn_store_register(&pw_sv.c, pw_sv.obj, NULL, uid, pw);
+        password_authn_password_authn_register(&pw_sv.c, pw_sv.obj, NULL, uid, pw);
     SVC_CLOSE(pw_sv);
     if (PICOMESH_IS_ERR(pwreg)) {
         picomesh_error_destroy(pwreg.error);
@@ -974,9 +974,12 @@ static void route_register_post(struct yloop_stream *s, const char *body,
         return;
     }
 
-    SVC_OPEN(acc, "accounts", accounts_store_create);
+    SVC_OPEN(acc, "accounts", accounts_accounts_create);
     if (!acc.ok) { render_register(s, "accounts service unreachable", keep_alive); return; }
-    struct picomesh_int_result reg = accounts_store_register(&acc.c, acc.obj, NULL, uid);
+    /* The username is an account detail the accounts plugin OWNS — pass it
+     * to register so the plugin stores it (name:<uid> + roster index). The
+     * gateway no longer reaches around into accounts' storage. */
+    struct picomesh_int_result reg = accounts_accounts_register(&acc.c, acc.obj, NULL, uid, uname);
     SVC_CLOSE(acc);
     int was_new = PICOMESH_IS_OK(reg) && reg.value == 1;
     if (PICOMESH_IS_ERR(reg)) picomesh_error_destroy(reg.error);
@@ -985,15 +988,12 @@ static void route_register_post(struct yloop_stream *s, const char *body,
         return;
     }
 
-    /* Capture uid→username so the admin Users page can list real users. */
-    accounts_index_add(uid, uname);
-
     /* Bootstrap: the very first user becomes site-owner. After
      * `accounts.register` succeeds and the running total is 1, this
      * uid is the only registered account → promote it. */
-    SVC_OPEN(acc2, "accounts", accounts_store_create);
+    SVC_OPEN(acc2, "accounts", accounts_accounts_create);
     if (acc2.ok) {
-        struct picomesh_size_result cr = accounts_store_count(&acc2.c, acc2.obj, NULL);
+        struct picomesh_size_result cr = accounts_accounts_count(&acc2.c, acc2.obj, NULL);
         if (PICOMESH_IS_OK(cr) && cr.value == 1) {
             promote_to_site_admin(uid);
         } else if (PICOMESH_IS_ERR(cr)) {
@@ -1028,9 +1028,9 @@ static void route_logout(struct yloop_stream *s,
 {
     char tok[64];
     if (cookie_get(headers_raw, headers_raw_len, "picomesh-sid", tok, sizeof(tok)) && tok[0]) {
-        SVC_OPEN(ses, "session", session_store_create);
+        SVC_OPEN(ses, "session", session_session_create);
         if (ses.ok) {
-            struct picomesh_int_result r = session_store_destroy(&ses.c, ses.obj, NULL, tok);
+            struct picomesh_int_result r = session_session_destroy(&ses.c, ses.obj, NULL, tok);
             if (PICOMESH_IS_ERR(r)) picomesh_error_destroy(r.error);
             SVC_CLOSE(ses);
         }
@@ -1180,30 +1180,7 @@ static void promote_to_site_admin(uint32_t uid)
  * otherwise holds only uid hashes (usernames are mapped to uids here at the
  * boundary), so we capture the name where we still have it: a `name:<uid>`
  * key plus an append to the `index` ("<uid>\t<username>\n" per row).
- * accounts.store.list returns that index. */
-static void accounts_index_add(uint32_t uid, const char *uname)
-{
-    if (!uid || !uname || !*uname) return;
-    struct svc_ctx st = {0};
-    if (!repo_storage_open(&st)) return;
-    char k[64];
-    snprintf(k, sizeof(k), "name:%u", uid);
-    sharded_storage_db_set(&st.c, st.obj, NULL, "accounts", k, uname);
-
-    struct picomesh_string_result g =
-        sharded_storage_db_get(&st.c, st.obj, NULL, "accounts", "index");
-    const char *cur = (PICOMESH_IS_OK(g) && g.value) ? g.value : "";
-    size_t need = strlen(cur) + strlen(uname) + 32;
-    char *next = malloc(need);
-    if (next) {
-        snprintf(next, need, "%s%u\t%s\n", cur, uid, uname);
-        sharded_storage_db_set(&st.c, st.obj, NULL, "accounts", "index", next);
-        free(next);
-    }
-    if (PICOMESH_IS_OK(g)) free(g.value); else picomesh_error_destroy(g.error);
-    SVC_CLOSE(st);
-    yinfo("accounts: indexed uid=%u name=%s", uid, uname);
-}
+ * accounts.accounts.list returns that index. */
 
 /* Mark <account>/<name> as a registered repo and return its repo_id.
  * Storage layout in the `repos` context:
@@ -1263,9 +1240,9 @@ static void route_repos_new_post(struct yloop_stream *s, uint32_t uid,
     /* Mirror the binding into git_repo so its count_total reflects
      * reality AND a bare repo lands on disk under the per-user
      * parent dir (<repos_dir>/<uname>/<name>.git). */
-    SVC_OPEN(repo, "git_repo", git_repo_store_create);
+    SVC_OPEN(repo, "git_repo", git_repo_git_repo_create);
     if (repo.ok) {
-        git_repo_store_make(&repo.c, repo.obj, NULL, uid, uname, name);
+        git_repo_git_repo_make(&repo.c, repo.obj, NULL, uid, uname, name);
         SVC_CLOSE(repo);
     }
 
@@ -1284,9 +1261,9 @@ static void route_admin_tokens_mint_pat(struct yloop_stream *s,
     char uid_s[32];
     if (form_get(body, body_len, "uid", uid_s, sizeof(uid_s))) {
         uint32_t uid = (uint32_t)strtoul(uid_s, NULL, 10);
-        SVC_OPEN(pat, "personal_access_tokens", personal_access_tokens_store_create);
+        SVC_OPEN(pat, "personal_access_tokens", personal_access_tokens_personal_access_tokens_create);
         if (pat.ok && uid) {
-            personal_access_tokens_store_mint(&pat.c, pat.obj, NULL, uid);
+            personal_access_tokens_personal_access_tokens_mint(&pat.c, pat.obj, NULL, uid);
             SVC_CLOSE(pat);
         }
     }
@@ -1347,11 +1324,11 @@ static void send_json_error(struct yloop_stream *s, int status,
                             const char *message, int keep_alive)
 {
     struct yjson_writer *w = yjson_writer_new();
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "error"); yjson_w_string(w, message);
-    yjson_w_end_object(w);
+    yjson_writer_begin_object(w);
+    yjson_writer_key(w, "error"); yjson_writer_string(w, message);
+    yjson_writer_end_object(w);
     size_t len;
-    const char *data = yjson_w_data(w, &len);
+    const char *data = yjson_writer_data(w, &len);
     send_json(s, status, data, len, keep_alive);
     yjson_writer_free(w);
 }
@@ -1418,57 +1395,12 @@ static uint32_t uid_for_token(const char *token)
     if (!e) return 0;
     struct ctx c = picomesh_engine_service_ctx(e, "session");
     /* peer==NULL ⇒ session collocated in-process; create resolves it locally. */
-    struct object_ptr_result o = session_store_create(&c);
+    struct object_ptr_result o = session_session_create(&c);
     if (PICOMESH_IS_ERR(o)) { picomesh_error_destroy(o.error); return 0; }
-    struct picomesh_uint32_result lr = session_store_lookup(&c, o.value, NULL, token);
+    struct picomesh_uint32_result lr = session_session_lookup(&c, o.value, NULL, token);
     object_release_in_ctx(&c, o.value);
     if (PICOMESH_IS_ERR(lr)) { picomesh_error_destroy(lr.error); return 0; }
     return lr.value;
-}
-
-/* Split a dotted RPC path into the pieces the dispatcher needs.
- *
- *   "session.store.start"        → service "session"
- *                                   class   "session_store"
- *                                   method  "session_store_start"
- *   "git_pipeline.store.enqueue" → service "git_pipeline"
- *                                   class   "git_pipeline_store"
- *                                   method  "git_pipeline_store_enqueue"
- *
- * service = text up to the first '.'; class = text up to the LAST '.'
- * with '.'→'_'; method = the whole path with '.'→'_' (== the codegen's
- * qualified slot name, the jinvoke key). Requires at least two dots.
- * Returns 1 on success. */
-static int path_to_qnames(const char *path,
-                          char *service, size_t service_cap,
-                          char *class_qname, size_t class_cap,
-                          char *method_qname, size_t method_cap)
-{
-    const char *first = strchr(path, '.');
-    if (!first) return 0;
-    const char *last = strrchr(path, '.');
-    if (last == first) return 0; /* need two dots */
-
-    size_t slen = (size_t)(first - path);
-    size_t clen = (size_t)(last - path);
-    size_t mlen = strlen(path);
-    if (slen == 0 || slen >= service_cap) return 0;
-    if (clen >= class_cap) return 0;
-    if (mlen >= method_cap) return 0;
-
-    for (size_t i = 0; i < mlen; ++i) {
-        char ch = path[i];
-        if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-              (ch >= '0' && ch <= '9') || ch == '_' || ch == '.'))
-            return 0; /* keep junk out of class_by_name / jinvoke_for */
-    }
-
-    memcpy(service, path, slen); service[slen] = 0;
-    memcpy(class_qname, path, clen); class_qname[clen] = 0;
-    memcpy(method_qname, path, mlen); method_qname[mlen] = 0;
-    for (char *p = class_qname; *p; ++p) if (*p == '.') *p = '_';
-    for (char *p = method_qname; *p; ++p) if (*p == '.') *p = '_';
-    return 1;
 }
 
 /* POST /_rpc — yaapp-style public gateway dispatch. Body:
@@ -1496,38 +1428,34 @@ static void route_json_rpc(struct yloop_stream *s,
         return;
     }
 
-    char service[64], class_qname[160], method_qname[192];
-    if (!path_to_qnames(path, service, sizeof(service),
-                        class_qname, sizeof(class_qname),
-                        method_qname, sizeof(method_qname))) {
+    /* Resolve + gate the path through the shared active-service resolver:
+     * the service must be activated locally or configured as a remote on
+     * this node before any class/method is looked up. No global method
+     * table is reached without that gate. */
+    struct picomesh_service_call_result call_r = picomesh_resolve_service_call(e, path);
+    if (PICOMESH_IS_ERR(call_r)) {
+        const char *rmsg = call_r.error.msg ? call_r.error.msg : "resolve failed";
+        int code = strstr(rmsg, "bad path") ? 400 : strstr(rmsg, "not active") ? 404 : 502;
+        char msg[320];
+        snprintf(msg, sizeof(msg), "_rpc: %s", rmsg);
+        picomesh_error_destroy(call_r.error);
         yjson_doc_free(doc);
-        send_json_error(s, 400, "_rpc: malformed path (want service.class.method)", keep_alive);
+        send_json_error(s, code, msg, keep_alive);
         return;
     }
+    struct picomesh_service_call call = call_r.value;
 
     char token[64];
     uint32_t uid = 0;
     if (extract_session_token(headers_raw, headers_raw_len, token, sizeof(token)))
         uid = uid_for_token(token);
 
-    struct ctx c = picomesh_engine_service_ctx(e, service);
-    /* peer==NULL ⇒ the service is collocated locally; object_create_in_ctx
-     * resolves it in-process (and still errors below if the class is truly
-     * unknown). A non-NULL peer is the remote-mesh path. */
-    struct object_ptr_result obj_r = object_create_in_ctx(&c, class_qname);
-    if (PICOMESH_IS_ERR(obj_r)) {
-        picomesh_error_destroy(obj_r.error);
-        yjson_doc_free(doc);
-        send_json_error(s, 502, "_rpc: backend object create failed", keep_alive);
-        return;
-    }
-
-    jinvoke_fn fn = jinvoke_for(method_qname);
+    jinvoke_fn fn = jinvoke_for(call.method_qname);
     if (!fn) {
-        object_release_in_ctx(&c, obj_r.value);
+        picomesh_service_call_release(&call);
         yjson_doc_free(doc);
         char msg[256];
-        snprintf(msg, sizeof(msg), "_rpc: no method '%s'", method_qname);
+        snprintf(msg, sizeof(msg), "_rpc: no method '%s'", call.method_qname);
         send_json_error(s, 404, msg, keep_alive);
         return;
     }
@@ -1555,22 +1483,22 @@ static void route_json_rpc(struct yloop_stream *s,
     }
 
     struct yjson_writer *w = yjson_writer_new();
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "result");
+    yjson_writer_begin_object(w);
+    yjson_writer_key(w, "result");
     char err[256] = {0};
-    int rc = fn(&c, obj_r.value, hdrs, args, w, err, sizeof(err));
+    int rc = fn(&call.ctx, call.obj, hdrs, args, w, err, sizeof(err));
     if (hdrs) ytelemetry_span_end(&sp, rc == 0, rc != 0 ? err : NULL);
     yheaders_free(hdrs);
-    object_release_in_ctx(&c, obj_r.value);
+    picomesh_service_call_release(&call);
     if (rc != 0) {
         yjson_writer_free(w);
         yjson_doc_free(doc);
         send_json_error(s, 500, err[0] ? err : "_rpc: call failed", keep_alive);
         return;
     }
-    yjson_w_end_object(w);
+    yjson_writer_end_object(w);
     size_t len;
-    const char *data = yjson_w_data(w, &len);
+    const char *data = yjson_writer_data(w, &len);
     /* Echo the trace context (W3C traceparent) so clients/tests/UI can
      * correlate the response with the trace stored by the collector. */
     char tp_header[160] = {0};
@@ -1623,13 +1551,13 @@ static void route_whoami(struct yloop_stream *s,
     }
 
     struct yjson_writer *w = yjson_writer_new();
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "uid");      yjson_w_int(w, (int64_t)uid);
-    yjson_w_key(w, "username"); yjson_w_string(w, uname);
-    yjson_w_key(w, "is_admin"); yjson_w_bool(w, uid ? is_site_admin(uid) : 0);
-    yjson_w_end_object(w);
+    yjson_writer_begin_object(w);
+    yjson_writer_key(w, "uid");      yjson_writer_int(w, (int64_t)uid);
+    yjson_writer_key(w, "username"); yjson_writer_string(w, uname);
+    yjson_writer_key(w, "is_admin"); yjson_writer_bool(w, uid ? is_site_admin(uid) : 0);
+    yjson_writer_end_object(w);
     size_t len;
-    const char *data = yjson_w_data(w, &len);
+    const char *data = yjson_writer_data(w, &len);
     send_json(s, 200, data, len, keep_alive);
     yjson_writer_free(w);
 }
@@ -1640,7 +1568,7 @@ static void describe_slot_cb(const char *name, method_slot slot, void *ud)
 {
     (void)slot;
     struct describe_emit_ctx *dc = ud;
-    yjson_w_string(dc->w, name);
+    yjson_writer_string(dc->w, name);
 }
 
 /* --- root /_describe: list active services, each with a source tag ---
@@ -1675,7 +1603,7 @@ struct describe_class_ctx {
 static void describe_method_cb(const char *name, method_slot slot, void *ud)
 {
     (void)slot;
-    yjson_w_string((struct yjson_writer *)ud, name);
+    yjson_writer_string((struct yjson_writer *)ud, name);
 }
 
 static void describe_class_cb(const struct class *cls, const char *qname, void *ud)
@@ -1686,13 +1614,13 @@ static void describe_class_cb(const struct class *cls, const char *qname, void *
     if (!*class_part) return;
     char dotpath[192];
     snprintf(dotpath, sizeof(dotpath), "%s.%s", cc->service, class_part);
-    yjson_w_begin_object(cc->w);
-    yjson_w_key(cc->w, "class");   yjson_w_string(cc->w, dotpath);
-    yjson_w_key(cc->w, "qname");   yjson_w_string(cc->w, qname);
-    yjson_w_key(cc->w, "methods"); yjson_w_begin_array(cc->w);
+    yjson_writer_begin_object(cc->w);
+    yjson_writer_key(cc->w, "class");   yjson_writer_string(cc->w, dotpath);
+    yjson_writer_key(cc->w, "qname");   yjson_writer_string(cc->w, qname);
+    yjson_writer_key(cc->w, "methods"); yjson_writer_begin_array(cc->w);
     class_for_each_slot(cls, describe_method_cb, cc->w);
-    yjson_w_end_array(cc->w);
-    yjson_w_end_object(cc->w);
+    yjson_writer_end_array(cc->w);
+    yjson_writer_end_object(cc->w);
 }
 
 /* Emit one {service, source, classes:[...]} object, deduped by name. The
@@ -1708,10 +1636,10 @@ static void describe_emit_service(struct describe_services_ctx *dc, const char *
     if (dc->seen_n < sizeof(dc->seen) / sizeof(dc->seen[0]))
         snprintf(dc->seen[dc->seen_n++], sizeof(dc->seen[0]), "%s", name);
     int remote = dc->e && picomesh_engine_service_ctx(dc->e, name).peer != NULL;
-    yjson_w_begin_object(dc->w);
-    yjson_w_key(dc->w, "service"); yjson_w_string(dc->w, name);
-    yjson_w_key(dc->w, "source");  yjson_w_string(dc->w, remote ? "remote" : "local");
-    yjson_w_key(dc->w, "classes"); yjson_w_begin_array(dc->w);
+    yjson_writer_begin_object(dc->w);
+    yjson_writer_key(dc->w, "service"); yjson_writer_string(dc->w, name);
+    yjson_writer_key(dc->w, "source");  yjson_writer_string(dc->w, remote ? "remote" : "local");
+    yjson_writer_key(dc->w, "classes"); yjson_writer_begin_array(dc->w);
     char prefix[80];
     int pl = snprintf(prefix, sizeof(prefix), "%s_", name);
     struct describe_class_ctx cc = {
@@ -1719,8 +1647,8 @@ static void describe_emit_service(struct describe_services_ctx *dc, const char *
         .prefix_len = pl > 0 ? (size_t)pl : 0,
     };
     class_for_each(describe_class_cb, &cc);
-    yjson_w_end_array(dc->w);
-    yjson_w_end_object(dc->w);
+    yjson_writer_end_array(dc->w);
+    yjson_writer_end_object(dc->w);
 }
 
 /* `plugins:` entries are plain strings — each names a local plugin. */
@@ -1808,20 +1736,41 @@ static void route_describe(struct yloop_stream *s, const char *class_dotpath,
         for (char *p = class_qname; *p; ++p) if (*p == '.') *p = '_';
 
         struct class_ptr_result cr = class_by_name(class_qname);
-        if (PICOMESH_IS_ERR(cr) || !cr.value) {
+        if (PICOMESH_IS_OK(cr) && cr.value) {
+            /* Class path: list its method slots (names only). */
+            yjson_writer_begin_object(w);
+            yjson_writer_key(w, "path");    yjson_writer_string(w, class_dotpath);
+            yjson_writer_key(w, "class");   yjson_writer_string(w, class_qname);
+            yjson_writer_key(w, "methods"); yjson_writer_begin_array(w);
+            struct describe_emit_ctx dc = {.w = w};
+            class_for_each_slot(cr.value, describe_slot_cb, &dc);
+            yjson_writer_end_array(w);
+            yjson_writer_end_object(w);
+        } else {
             if (PICOMESH_IS_ERR(cr)) picomesh_error_destroy(cr.error);
-            yjson_writer_free(w);
-            send_json_error(s, 404, "_describe: unknown class", keep_alive);
-            return;
+            /* Not a class — maybe a fully-qualified method (service.class.method).
+             * Reflect its call signature: the USER parameters in declared order,
+             * baked into the binary by codegen (gh#15). This is what a generic
+             * console renders one field per — namespace/key/value, not one blob. */
+            const struct jinvoke_params *mp = jinvoke_params_for(class_qname);
+            if (!mp) {
+                yjson_writer_free(w);
+                send_json_error(s, 404, "_describe: unknown class or method", keep_alive);
+                return;
+            }
+            yjson_writer_begin_object(w);
+            yjson_writer_key(w, "path");   yjson_writer_string(w, class_dotpath);
+            yjson_writer_key(w, "method"); yjson_writer_string(w, class_qname);
+            yjson_writer_key(w, "params"); yjson_writer_begin_array(w);
+            for (size_t i = 0; i < mp->count; ++i) {
+                yjson_writer_begin_object(w);
+                yjson_writer_key(w, "name"); yjson_writer_string(w, mp->items[i].name);
+                yjson_writer_key(w, "type"); yjson_writer_string(w, mp->items[i].type);
+                yjson_writer_end_object(w);
+            }
+            yjson_writer_end_array(w);
+            yjson_writer_end_object(w);
         }
-        yjson_w_begin_object(w);
-        yjson_w_key(w, "path");    yjson_w_string(w, class_dotpath);
-        yjson_w_key(w, "class");   yjson_w_string(w, class_qname);
-        yjson_w_key(w, "methods"); yjson_w_begin_array(w);
-        struct describe_emit_ctx dc = {.w = w};
-        class_for_each_slot(cr.value, describe_slot_cb, &dc);
-        yjson_w_end_array(w);
-        yjson_w_end_object(w);
     } else {
         /* Root: list the services THIS node can route to, each tagged
          * with its source (yaapp Seed.describe shape). Local services are
@@ -1829,21 +1778,21 @@ static void route_describe(struct yloop_stream *s, const char *class_dotpath,
          * `remotes:` peers reached over yrpc. Both come from the same
          * config the engine activated from — emitted local-first, then
          * remote, deduped, with the source decided by the peer check. */
-        yjson_w_begin_object(w);
-        yjson_w_key(w, "services");
-        yjson_w_begin_array(w);
+        yjson_writer_begin_object(w);
+        yjson_writer_key(w, "services");
+        yjson_writer_begin_array(w);
         if (e) {
             struct describe_services_ctx dc = {.e = e, .w = w, .seen_n = 0};
             describe_emit_plugins(&dc, describe_node_list(e, "plugins", "plugins"));
             describe_emit_remotes(&dc, describe_node_list(e, "config.remotes", "remotes"));
         }
-        yjson_w_end_array(w);
-        yjson_w_key(w, "tree"); yjson_w_bool(w, tree ? true : false);
-        yjson_w_end_object(w);
+        yjson_writer_end_array(w);
+        yjson_writer_key(w, "tree"); yjson_writer_bool(w, tree ? true : false);
+        yjson_writer_end_object(w);
     }
 
     size_t len;
-    const char *data = yjson_w_data(w, &len);
+    const char *data = yjson_writer_data(w, &len);
     send_json(s, 200, data, len, keep_alive);
     yjson_writer_free(w);
 }
@@ -1914,13 +1863,22 @@ int yhttp_frontend_try(struct yloop_stream *s,
         yconfig_get(picomesh_engine_config(e), "yhttp.serve_app");
     int serve_app = PICOMESH_IS_OK(serve_app_r) && serve_app_r.value &&
                     yconfig_node_as_bool(serve_app_r.value, 0);
+    /* `yhttp.bridge_only`: an explicit opt-out of gateway mode. A pure
+     * transport bridge that wants to front EVERY backend (so the service
+     * console can inspect them all) must list `session` as a remote, which
+     * would otherwise look like the auth gateway — this flag keeps it a
+     * bridge: generic JSON API, no picoforge auth/HTML routes (gh#15). */
+    struct yconfig_node_ptr_result bridge_only_r =
+        yconfig_get(picomesh_engine_config(e), "yhttp.bridge_only");
+    int bridge_only = PICOMESH_IS_OK(bridge_only_r) && bridge_only_r.value &&
+                      yconfig_node_as_bool(bridge_only_r.value, 0);
     /* The picoforge gateway (auth boundary): `session` wired as a remote, or
      * the collocated all-in-one `yhttp.serve_app`. It owns the auth/HTML
      * POSTs below. A non-gateway yhttp node with remotes is a generic
      * transport bridge that serves ONLY the JSON API block below (gh#15). A
      * node with neither (the mesh control parent, a standalone backend on
      * yhttp) is none of our business — fall through to the yhttp serve layer. */
-    int is_gateway = has_session_remote || serve_app;
+    int is_gateway = (has_session_remote || serve_app) && !bridge_only;
     int is_bridge = !is_gateway && yhttp_node_has_remotes(e);
     if (!is_gateway && !is_bridge) return 0;
 
@@ -2012,7 +1970,7 @@ int yhttp_frontend_try(struct yloop_stream *s,
      * API routes above (/_rpc, /_describe, /_whoami, /_perf) and the
      * login/register/logout POSTs either resolve sid→uid themselves or
      * don't need it. Resolving up front would charge every /_rpc a second,
-     * redundant session.store.lookup (the dominant per-call cost). */
+     * redundant session.session.lookup (the dominant per-call cost). */
     uint32_t uid = resolve_uid(headers_raw, headers_raw_len);
     char dispatch_uname[64] = {0};
     resolve_uname(headers_raw, headers_raw_len, dispatch_uname, sizeof(dispatch_uname));

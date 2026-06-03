@@ -11,6 +11,8 @@ typedef struct picomesh_string_result (*sharded_storage_db_get_fn)(struct ctx *,
 typedef struct picomesh_int_result (*sharded_storage_db_exists_fn)(struct ctx *, struct object *, struct yheaders *, const char *, const char *);
 typedef struct picomesh_int_result (*sharded_storage_db_del_fn)(struct ctx *, struct object *, struct yheaders *, const char *, const char *);
 typedef struct picomesh_size_result (*sharded_storage_db_count_fn)(struct ctx *, struct object *, struct yheaders *, const char *);
+typedef struct picomesh_json_result (*sharded_storage_db_list_fn)(struct ctx *, struct object *, struct yheaders *, const char *, const char *, int64_t, int64_t);
+typedef struct picomesh_json_result (*sharded_storage_db_list_all_fn)(struct ctx *, struct object *, struct yheaders *, const char *, const char *);
 typedef struct picomesh_int64_result (*sharded_storage_db_incr_fn)(struct ctx *, struct object *, struct yheaders *, const char *, const char *, int64_t);
 typedef struct picomesh_int_result (*sharded_storage_db_put_if_absent_fn)(struct ctx *, struct object *, struct yheaders *, const char *, const char *, const char *);
 typedef struct picomesh_int_result (*sharded_storage_db_compare_and_set_fn)(struct ctx *, struct object *, struct yheaders *, const char *, const char *, const char *, const char *);

@@ -47,7 +47,7 @@ Bring the mesh up, then point the tool at it:
 
 | name | what it times (per iteration) | exercises |
 |---|---|---|
-| `rpc_count` | `POST /_rpc git_repo.store.count_total` | read; gateway → 1 backend |
+| `rpc_count` | `POST /_rpc git_repo.git_repo.count_total` | read; gateway → 1 backend |
 | `login` | `POST /login` | auth composite (4 backends) |
 | `repo_create` | `POST /repos/new` (authenticated) | write; storage + git_repo |
 | `register` | `POST /register` (new user each time) | write; accounts + authn |
@@ -67,7 +67,7 @@ resolves sid→uid on every call (the real per-call cost). Two extra options:
 
 | option | default | meaning |
 |---|---|---|
-| `--seed-users N` | 0 | stage 1: pre-create N account records (population scale) via `accounts.store.register` — O(1), bypasses the gateway user-name index so it scales to tens of thousands |
+| `--seed-users N` | 0 | stage 1: pre-create N account records (population scale) via `accounts.accounts.register` — O(1), bypasses the gateway user-name index so it scales to tens of thousands |
 | `--repos-per-worker K` | 8 | cap on repos a worker creates (keeps total within the git_repo table) |
 
 The turnkey way to run it is the Makefile target, which brings up an
@@ -150,7 +150,7 @@ Two findings the mixed load surfaces, both rooted in the inline/blocking design:
 
 1. **Owner-checked writes (`put_file`) collapse under concurrency.** Clean at
    1–2 workers, ~60 % errors at 4, ~90 % at 16–32 — all `forbidden (not repo
-   owner)`. The cause is the gateway resolving sid→uid (`session.store.lookup`,
+   owner)`. The cause is the gateway resolving sid→uid (`session.session.lookup`,
    blocking) on every `/_rpc`: under contention it returns the wrong/zero uid,
    so the only owner-gated op (`put_file`) is rejected. Reads/`make`
    don't owner-check, so they don't expose it. This is the §5 blocking-rpc

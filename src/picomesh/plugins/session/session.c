@@ -35,7 +35,7 @@
 #include <stdlib.h>
 #include <sys/random.h>
 
-struct PICOMESH_CLASS_ANNOTATE("class@session:store") session_store_data {
+struct PICOMESH_CLASS_ANNOTATE("class@session:session") session_session_data {
     /* Empty — the plugin holds no per-object state. Codegen still wants
      * a struct annotated with the class accessor; a dummy byte keeps it
      * a complete type so object_alloc has something to size. */
@@ -118,7 +118,7 @@ static struct picomesh_int64_result kv_incr(struct storage_handle *h, struct yhe
  * `get → +1 → set` over two storage RPCs (each a coroutine yield) raced under
  * concurrent logins: two users were handed the SAME id, the later `uid:<id>`
  * write clobbered the earlier, and the token then resolved to the WRONG user —
- * which made owner-checked `git_repo.store.put_file` fail under load. A random
+ * which made owner-checked `git_repo.git_repo.put_file` fail under load. A random
  * token shares no counter, so there is nothing to race on.
  *
  * FAIL CLOSED: a session token is a bearer secret. If the kernel cannot
@@ -147,8 +147,8 @@ static int alloc_token(char *out, size_t cap)
     return 1;
 }
 
-PICOMESH_CLASS_ANNOTATE("override@session:store:store_start")
-struct picomesh_string_result session_store_start_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@session:session:session_start")
+struct picomesh_string_result session_session_start_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                     uint32_t user_id, uint32_t provider_id)
 {
     (void)ctx; (void)obj;
@@ -181,8 +181,8 @@ struct picomesh_string_result session_store_start_impl(struct ctx *ctx, struct o
     return PICOMESH_OK(picomesh_string, out);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@session:store:store_lookup")
-struct picomesh_uint32_result session_store_lookup_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@session:session:session_lookup")
+struct picomesh_uint32_result session_session_lookup_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                      const char *token)
 {
     (void)ctx; (void)obj;
@@ -199,8 +199,8 @@ struct picomesh_uint32_result session_store_lookup_impl(struct ctx *ctx, struct 
     return PICOMESH_OK(picomesh_uint32, (uint32_t)uidr.value);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@session:store:store_destroy")
-struct picomesh_int_result session_store_destroy_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@session:session:session_destroy")
+struct picomesh_int_result session_session_destroy_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                    const char *token)
 {
     (void)ctx; (void)obj;
@@ -229,8 +229,8 @@ struct picomesh_int_result session_store_destroy_impl(struct ctx *ctx, struct ob
     return PICOMESH_OK(picomesh_int, 1);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@session:store:store_count_active")
-struct picomesh_size_result session_store_count_active_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
+PICOMESH_CLASS_ANNOTATE("override@session:session:session_count_active")
+struct picomesh_size_result session_session_count_active_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
     (void)ctx; (void)obj;
     struct session_storage_handle_result sr = open_storage();
@@ -240,6 +240,32 @@ struct picomesh_size_result session_store_count_active_impl(struct ctx *ctx, str
     close_storage(&h);
     if (PICOMESH_IS_ERR(cr)) return PICOMESH_ERR(picomesh_size, "session_count: read failed", cr);
     return PICOMESH_OK(picomesh_size, (size_t)(cr.value < 0 ? 0 : cr.value));
+}
+
+/* List ALL session entries as a JSON array (gh#15) — every object, not a
+ * count of active. Delegates to the namespace scan. */
+PICOMESH_CLASS_ANNOTATE("override@session:session:session_list")
+struct picomesh_json_result session_session_list_impl(struct ctx *ctx, struct object *obj,
+                                                    struct yheaders *hdrs,
+                                                    int64_t offset, int64_t limit)
+{
+    (void)ctx; (void)obj;
+    struct session_storage_handle_result sr = open_storage();
+    if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_json, "session_list: storage open failed", sr);
+    struct storage_handle h = sr.value;
+    return sharded_storage_db_list(&h.c, h.obj, hdrs, SESSION_CTX, "uid:", offset, limit);
+}
+
+/* Unbounded variant — every session. Use with care on large deployments. */
+PICOMESH_CLASS_ANNOTATE("override@session:session:session_list_all")
+struct picomesh_json_result session_session_list_all_impl(struct ctx *ctx, struct object *obj,
+                                                          struct yheaders *hdrs)
+{
+    (void)ctx; (void)obj;
+    struct session_storage_handle_result sr = open_storage();
+    if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_json, "session_list_all: storage open failed", sr);
+    struct storage_handle h = sr.value;
+    return sharded_storage_db_list_all(&h.c, h.obj, hdrs, SESSION_CTX, "uid:");
 }
 
 #include "session.gen.c"

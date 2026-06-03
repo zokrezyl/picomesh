@@ -6,11 +6,13 @@
 
 #include <picomesh/plugin/git_pipeline/git_pipeline.h>
 
-typedef struct picomesh_uint32_result (*git_pipeline_store_enqueue_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
-typedef struct picomesh_uint32_result (*git_pipeline_store_lease_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
-typedef struct picomesh_int_result (*git_pipeline_store_complete_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t, int32_t);
-typedef struct picomesh_size_result (*git_pipeline_store_count_pending_fn)(struct ctx *, struct object *, struct yheaders *);
-typedef struct picomesh_size_result (*git_pipeline_store_count_running_fn)(struct ctx *, struct object *, struct yheaders *);
-typedef struct picomesh_size_result (*git_pipeline_store_count_done_fn)(struct ctx *, struct object *, struct yheaders *);
+typedef struct picomesh_uint32_result (*git_pipeline_git_pipeline_enqueue_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
+typedef struct picomesh_uint32_result (*git_pipeline_git_pipeline_lease_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
+typedef struct picomesh_int_result (*git_pipeline_git_pipeline_complete_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t, int32_t);
+typedef struct picomesh_size_result (*git_pipeline_git_pipeline_count_pending_fn)(struct ctx *, struct object *, struct yheaders *);
+typedef struct picomesh_size_result (*git_pipeline_git_pipeline_count_running_fn)(struct ctx *, struct object *, struct yheaders *);
+typedef struct picomesh_size_result (*git_pipeline_git_pipeline_count_done_fn)(struct ctx *, struct object *, struct yheaders *);
+typedef struct picomesh_json_result (*git_pipeline_git_pipeline_list_fn)(struct ctx *, struct object *, struct yheaders *, int64_t, int64_t);
+typedef struct picomesh_json_result (*git_pipeline_git_pipeline_list_all_fn)(struct ctx *, struct object *, struct yheaders *);
 
 #endif

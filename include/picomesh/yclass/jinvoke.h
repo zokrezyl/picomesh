@@ -44,6 +44,27 @@ typedef jinvoke_fn (*jinvoke_lookup_fn)(const char *qname);
 void jinvoke_add_lookup(jinvoke_lookup_fn fn);
 jinvoke_fn jinvoke_for(const char *qname);
 
+/* ---- runtime call-signature reflection -------------------------------
+ *
+ * Codegen bakes each method's USER parameters (the args after the
+ * framework ctx/obj/hdrs) into the binary, so `/_describe` can expose the
+ * call signature at RUNTIME — no build-time model.yaml in the deployment
+ * image. The args stay positional on the wire; this just names/types them
+ * in declared order so a generic console can render one field per param. */
+struct jinvoke_param {
+    const char *name; /* parameter name, e.g. "key" */
+    const char *type; /* C type spelling, e.g. "const char *" */
+};
+struct jinvoke_params {
+    const struct jinvoke_param *items;
+    size_t count;
+};
+typedef const struct jinvoke_params *(*jinvoke_params_lookup_fn)(const char *qname);
+void jinvoke_params_add_lookup(jinvoke_params_lookup_fn fn);
+/* NULL when the method qname is unknown; a row with count==0 means the
+ * method takes no user parameters (codegen always emits a row). */
+const struct jinvoke_params *jinvoke_params_for(const char *qname);
+
 #ifdef __cplusplus
 }
 #endif

@@ -1,7 +1,7 @@
 methods:
-  - slot: store_allocate
+  - slot: portalloc_allocate
     domain: portalloc
-    owning_class: store
+    owning_class: portalloc
     return_type: struct picomesh_uint32_result
     args:
       - name: ctx
@@ -12,9 +12,9 @@ methods:
         type: "struct yheaders *"
       - name: service_id
         type: uint32_t
-  - slot: store_release
+  - slot: portalloc_release
     domain: portalloc
-    owning_class: store
+    owning_class: portalloc
     return_type: struct picomesh_int_result
     args:
       - name: ctx
@@ -25,9 +25,9 @@ methods:
         type: "struct yheaders *"
       - name: port
         type: uint32_t
-  - slot: store_count_used
+  - slot: portalloc_count_used
     domain: portalloc
-    owning_class: store
+    owning_class: portalloc
     return_type: struct picomesh_size_result
     args:
       - name: ctx
@@ -36,22 +36,54 @@ methods:
         type: "struct object *"
       - name: hdrs
         type: "struct yheaders *"
-classes:
-  - name: store
+  - slot: portalloc_list
     domain: portalloc
-    accessor: portalloc_store_class_get
+    owning_class: portalloc
+    return_type: struct picomesh_json_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: offset
+        type: int64_t
+      - name: limit
+        type: int64_t
+  - slot: portalloc_list_all
+    domain: portalloc
+    owning_class: portalloc
+    return_type: struct picomesh_json_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+classes:
+  - name: portalloc
+    domain: portalloc
+    accessor: portalloc_portalloc_class_get
     type: regular
     source_file: /home/misi/work/my/picomesh/src/picomesh/plugins/portalloc/portalloc.c
     parent: null
     mixins: []
-    data: struct portalloc_store_data
+    data: struct portalloc_portalloc_data
     ops:
-      - slot: store_allocate
+      - slot: portalloc_allocate
         slot_domain: portalloc
-        impl: portalloc_store_allocate_impl
-      - slot: store_release
+        impl: portalloc_portalloc_allocate_impl
+      - slot: portalloc_release
         slot_domain: portalloc
-        impl: portalloc_store_release_impl
-      - slot: store_count_used
+        impl: portalloc_portalloc_release_impl
+      - slot: portalloc_count_used
         slot_domain: portalloc
-        impl: portalloc_store_count_used_impl
+        impl: portalloc_portalloc_count_used_impl
+      - slot: portalloc_list
+        slot_domain: portalloc
+        impl: portalloc_portalloc_list_impl
+      - slot: portalloc_list_all
+        slot_domain: portalloc
+        impl: portalloc_portalloc_list_all_impl

@@ -318,12 +318,12 @@ static void ytel_ship(const struct ytelemetry_span *sp, int ok, const char *err,
     static method_slot ingest_slot = METHOD_SLOT_UNDEFINED;
     if (ingest_slot == METHOD_SLOT_UNDEFINED) {
         struct method_slot_result sr =
-            method_slot_by_name("trace_collector", "store_ingest");
+            method_slot_by_name("trace_collector", "trace_collector_ingest");
         if (PICOMESH_IS_ERR(sr)) { picomesh_error_destroy(sr.error); return; }
         ingest_slot = sr.value;
     }
 
-    struct object_ptr_result obr = object_create_in_ctx(&c, "trace_collector_store");
+    struct object_ptr_result obr = object_create_in_ctx(&c, "trace_collector_trace_collector");
     if (PICOMESH_IS_ERR(obr)) { picomesh_error_destroy(obr.error); return; }
     struct object *obj = obr.value;
 

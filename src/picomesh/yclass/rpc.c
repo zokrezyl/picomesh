@@ -5,6 +5,8 @@
  * (see src/picomesh/yco/) — this file stays portable. */
 
 #include <picomesh/yclass/rpc.h>
+#include <picomesh/msgpack/msgpack.h>
+#include <picomesh/yclass/yheaders.h>
 #include <picomesh/ycore/result.h>
 #include <picomesh/ycore/ytrace.h>
 
@@ -418,8 +420,9 @@ struct cached_proxy {
 };
 
 enum peer_channel_mode {
-    RPC_MODE_TCP = 0,   /* legacy yrpc binary on the bare fd */
-    RPC_MODE_HTTP = 1,  /* HTTP envelope, auth via headers */
+    RPC_MODE_TCP = 0,     /* legacy yrpc binary on the bare fd */
+    RPC_MODE_HTTP = 1,    /* HTTP envelope, auth via headers */
+    RPC_MODE_MSGPACK = 2, /* Picomesh msgpack envelope, big-endian length frame */
 };
 
 struct peer_channel {
@@ -455,6 +458,189 @@ struct peer_channel *peer_channel_create_http(int fd, const char *host)
     s->mode = RPC_MODE_HTTP;
     s->http_host = strdup(host ? host : "127.0.0.1");
     return s;
+}
+
+/* ---- MessagePack outbound transport ------------------------------- */
+
+#define MSGPACK_CLIENT_RESP_MAX (1u << 20) /* 1 MiB response cap */
+
+static uint32_t msgpack_rd_be32(const uint8_t *p)
+{
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+}
+
+static void msgpack_wr_be32(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)(v >> 24);
+    p[1] = (uint8_t)(v >> 16);
+    p[2] = (uint8_t)(v >> 8);
+    p[3] = (uint8_t)v;
+}
+
+struct peer_channel *peer_channel_create_msgpack(int fd)
+{
+    struct peer_channel *s = calloc(1, sizeof(*s));
+    if (s) { s->fd = fd; s->mode = RPC_MODE_MSGPACK; }
+    return s;
+}
+
+int peer_channel_is_msgpack(const struct peer_channel *s)
+{
+    return s && s->mode == RPC_MODE_MSGPACK;
+}
+
+int peer_channel_msgpack_call(struct peer_channel *s, const char *path,
+                              struct yheaders *hdrs, const void *args, size_t args_len,
+                              void *out, size_t out_cap, size_t *out_len,
+                              char *err, size_t err_cap)
+{
+    if (out_len) *out_len = 0;
+    if (!s || s->fd < 0) {
+        snprintf(err, err_cap, "msgpack call: no channel");
+        return 0;
+    }
+    if (!path) path = "";
+
+    /* Request envelope: a 6-key map with the caller's pre-encoded args array
+     * spliced in verbatim (msgpack is concatenative). */
+    uint32_t uid = hdrs ? yheaders_get_u32(hdrs, "uid", 0) : 0;
+    uint32_t sid = hdrs ? yheaders_get_u32(hdrs, "sid", 0) : 0;
+    const char *trace = hdrs ? yheaders_get(hdrs, "trace_id") : NULL;
+
+    size_t env_cap = args_len + strlen(path) + (trace ? strlen(trace) : 0) + 128;
+    uint8_t *env = malloc(env_cap);
+    if (!env) {
+        snprintf(err, err_cap, "msgpack call: out of memory");
+        return 0;
+    }
+    cmp_ctx_t w;
+    struct picomesh_msgpack_buffer wb;
+    picomesh_msgpack_writer_init(&w, &wb, env, env_cap);
+    cmp_write_map(&w, 6);
+    cmp_write_str(&w, "v", 1);
+    cmp_write_integer(&w, 1);
+    cmp_write_str(&w, "op", 2);
+    cmp_write_str(&w, "invoke", 6);
+    cmp_write_str(&w, "path", 4);
+    cmp_write_str(&w, path, (uint32_t)strlen(path));
+    cmp_write_str(&w, "args", 4);
+    if (wb.offset + args_len > wb.cap) {
+        free(env);
+        snprintf(err, err_cap, "msgpack call: args too large");
+        return 0;
+    }
+    memcpy(wb.data + wb.offset, args, args_len);
+    wb.offset += args_len;
+    cmp_write_str(&w, "kwargs", 6);
+    cmp_write_map(&w, 0);
+    cmp_write_str(&w, "headers", 7);
+    cmp_write_map(&w, trace ? 3 : 2);
+    cmp_write_str(&w, "uid", 3);
+    cmp_write_uinteger(&w, uid);
+    cmp_write_str(&w, "sid", 3);
+    cmp_write_uinteger(&w, sid);
+    if (trace) {
+        cmp_write_str(&w, "trace_id", 8);
+        cmp_write_str(&w, trace, (uint32_t)strlen(trace));
+    }
+    size_t env_len = wb.offset;
+
+    uint8_t lenbuf[4];
+    msgpack_wr_be32(lenbuf, (uint32_t)env_len);
+    if (write_full(s->fd, lenbuf, 4) < 0 || write_full(s->fd, env, env_len) < 0) {
+        free(env);
+        snprintf(err, err_cap, "msgpack call: write failed");
+        return 0;
+    }
+    free(env);
+
+    uint8_t rlenbuf[4];
+    if (read_full(s->fd, rlenbuf, 4) < 0) {
+        snprintf(err, err_cap, "msgpack call: no response");
+        return 0;
+    }
+    uint32_t resp_len = msgpack_rd_be32(rlenbuf);
+    if (resp_len == 0 || resp_len > MSGPACK_CLIENT_RESP_MAX) {
+        snprintf(err, err_cap, "msgpack call: bad response length");
+        return 0;
+    }
+    uint8_t *resp = malloc(resp_len);
+    if (!resp) {
+        snprintf(err, err_cap, "msgpack call: out of memory");
+        return 0;
+    }
+    if (read_full(s->fd, resp, resp_len) < 0) {
+        free(resp);
+        snprintf(err, err_cap, "msgpack call: short response");
+        return 0;
+    }
+
+    cmp_ctx_t r;
+    struct picomesh_msgpack_buffer rb;
+    picomesh_msgpack_reader_init(&r, &rb, resp, resp_len);
+    uint32_t top = 0;
+    if (!cmp_read_map(&r, &top)) {
+        free(resp);
+        snprintf(err, err_cap, "msgpack call: response not a map");
+        return 0;
+    }
+    int ok = 0, have_result = 0;
+    size_t result_off = 0, result_len = 0;
+    char emsg[256] = "remote error";
+    for (uint32_t i = 0; i < top; ++i) {
+        char key[32];
+        uint32_t klen = (uint32_t)sizeof(key);
+        if (!cmp_read_str(&r, key, &klen))
+            break;
+        if (strcmp(key, "ok") == 0) {
+            bool b = false;
+            if (cmp_read_bool(&r, &b))
+                ok = b ? 1 : 0;
+        } else if (strcmp(key, "result") == 0) {
+            result_off = rb.offset;
+            if (!cmp_skip_object_no_limit(&r))
+                break;
+            result_len = rb.offset - result_off;
+            have_result = 1;
+        } else if (strcmp(key, "error") == 0) {
+            uint32_t ec = 0;
+            if (cmp_read_map(&r, &ec)) {
+                for (uint32_t j = 0; j < ec; ++j) {
+                    char ek[32];
+                    uint32_t ekl = (uint32_t)sizeof(ek);
+                    if (!cmp_read_str(&r, ek, &ekl))
+                        break;
+                    if (strcmp(ek, "message") == 0) {
+                        uint32_t ml = (uint32_t)sizeof(emsg);
+                        if (!cmp_read_str(&r, emsg, &ml))
+                            break;
+                    } else if (!cmp_skip_object_no_limit(&r)) {
+                        break;
+                    }
+                }
+            }
+        } else if (!cmp_skip_object_no_limit(&r)) {
+            break;
+        }
+    }
+
+    if (!ok) {
+        snprintf(err, err_cap, "%s", emsg[0] ? emsg : "remote error");
+        free(resp);
+        return 0;
+    }
+    if (have_result) {
+        if (result_len > out_cap) {
+            free(resp);
+            snprintf(err, err_cap, "msgpack call: result too large");
+            return 0;
+        }
+        memcpy(out, resp + result_off, result_len);
+        if (out_len)
+            *out_len = result_len;
+    }
+    free(resp);
+    return 1;
 }
 
 void peer_channel_set_auth(struct peer_channel *s, uint32_t uid, uint32_t sid)

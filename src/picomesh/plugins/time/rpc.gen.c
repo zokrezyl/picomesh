@@ -1,6 +1,7 @@
 /* GENERATED — do not edit. */
 #include <picomesh/yclass/rpc.h>
 #include <picomesh/yclass/jinvoke.h>
+#include <picomesh/yclass/minvoke.h>
 #include <picomesh/yclass/yheaders.h>
 #include <picomesh/yjson/yjson.h>
 #include <picomesh/ycore/result.h>
@@ -9,6 +10,7 @@
 #include <picomesh/ycore/ytelemetry.h>
 #include <picomesh/yclass/class.h>
 #include "time.internal.h"
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -137,7 +139,7 @@ static int time_clock_now_ms_jinvoke(struct ctx *ctx, struct object *obj, struct
         picomesh_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(result, (int64_t)call_result.value);
+    yjson_writer_int(result, (int64_t)call_result.value);
     return 0;
 }
 
@@ -155,7 +157,58 @@ static int time_clock_sleep_ms_jinvoke(struct ctx *ctx, struct object *obj, stru
         picomesh_error_destroy(call_result.error);
         return -1;
     }
-    yjson_w_int(result, (int64_t)call_result.value);
+    yjson_writer_int(result, (int64_t)call_result.value);
+    return 0;
+}
+
+static int time_clock_now_ms_minvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          cmp_ctx_t *_mr, uint32_t _argc, cmp_ctx_t *_mw,
+                          char *_err, size_t _err_cap)
+{
+    (void)_mr;
+    if (_argc != 0u) {
+        snprintf(_err, _err_cap, "time_clock_now_ms: expected 0 arg(s), got %u", _argc);
+        return -1;
+    }
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_int64_result call_result = time_clock_now_ms(call_ctx, obj, hdrs);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(_err, _err_cap, "%s: %s", "time_clock_now_ms",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    cmp_write_integer(_mw, (int64_t)call_result.value);
+    return 0;
+}
+
+static int time_clock_sleep_ms_minvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          cmp_ctx_t *_mr, uint32_t _argc, cmp_ctx_t *_mw,
+                          char *_err, size_t _err_cap)
+{
+    (void)_mr;
+    if (_argc != 1u) {
+        snprintf(_err, _err_cap, "time_clock_sleep_ms: expected 1 arg(s), got %u", _argc);
+        return -1;
+    }
+    uint32_t _v0;
+    {
+        uint64_t _u;
+        if (!cmp_read_uinteger(_mr, &_u)) { snprintf(_err, _err_cap, "ms: expected unsigned int (%s)", cmp_strerror(_mr)); return -1; }
+        if (_u > UINT32_MAX) { snprintf(_err, _err_cap, "ms: value %llu out of range for uint32_t", (unsigned long long)_u); return -1; }
+        _v0 = (uint32_t)_u;
+    }
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_int64_result call_result = time_clock_sleep_ms(call_ctx, obj, hdrs, _v0);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(_err, _err_cap, "%s: %s", "time_clock_sleep_ms",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    cmp_write_integer(_mw, (int64_t)call_result.value);
     return 0;
 }
 
@@ -186,6 +239,45 @@ static jinvoke_fn time_jinvoke_lookup(const char *qname)
          i < sizeof(time_jinvoke_rows) / sizeof(time_jinvoke_rows[0]); ++i)
         if (strcmp(time_jinvoke_rows[i].name, qname) == 0)
             return time_jinvoke_rows[i].fn;
+    return NULL;
+}
+
+/* ---- time: minvoke table ------------------------------------ */
+
+struct time_minvoke_row { const char *name; minvoke_fn fn; };
+
+static const struct time_minvoke_row time_minvoke_rows[] = {
+    {"time_clock_now_ms", time_clock_now_ms_minvoke},
+    {"time_clock_sleep_ms", time_clock_sleep_ms_minvoke}
+};
+
+static minvoke_fn time_minvoke_lookup(const char *qname)
+{
+    for (size_t i = 0;
+         i < sizeof(time_minvoke_rows) / sizeof(time_minvoke_rows[0]); ++i)
+        if (strcmp(time_minvoke_rows[i].name, qname) == 0)
+            return time_minvoke_rows[i].fn;
+    return NULL;
+}
+
+/* ---- time: per-method parameter signatures (runtime reflection) -- */
+
+static const struct jinvoke_param time_clock_sleep_ms_params[] = {
+    {"ms", "uint32_t"}
+};
+struct time_params_row { const char *name; struct jinvoke_params params; };
+
+static const struct time_params_row time_params_rows[] = {
+    {"time_clock_now_ms", {NULL, 0}},
+    {"time_clock_sleep_ms", {time_clock_sleep_ms_params, 1}}
+};
+
+static const struct jinvoke_params *time_params_lookup(const char *qname)
+{
+    for (size_t i = 0;
+         i < sizeof(time_params_rows) / sizeof(time_params_rows[0]); ++i)
+        if (strcmp(time_params_rows[i].name, qname) == 0)
+            return &time_params_rows[i].params;
     return NULL;
 }
 /* ---- time: class name → accessor (lazy) ---------------------- */
@@ -229,6 +321,8 @@ void picomesh_plugin_time_register(void)
     }
     rpc_add_skel_lookup(time_skel_lookup);
     jinvoke_add_lookup(time_jinvoke_lookup);
+    minvoke_add_lookup(time_minvoke_lookup);
+    jinvoke_params_add_lookup(time_params_lookup);
     { struct class_ptr_result reg = time_clock_class_get();
       if (PICOMESH_IS_ERR(reg)) picomesh_error_destroy(reg.error); }
 }

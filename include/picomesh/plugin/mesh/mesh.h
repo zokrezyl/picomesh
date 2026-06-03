@@ -15,21 +15,21 @@ struct object_ptr_result;
 struct class_ptr_result;
 
 /* ---- class accessors ---- */
-struct class_ptr_result mesh_store_class_get(void);
+struct class_ptr_result mesh_mesh_class_get(void);
 
 /* ---- constructors ---- */
-struct object_ptr_result mesh_store_create(struct ctx *ctx);
+struct object_ptr_result mesh_mesh_create(struct ctx *ctx);
 
 /* ---- methods ---- */
-struct picomesh_int_result mesh_store_register_service(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t service_id, uint32_t port);
-struct picomesh_uint32_result mesh_store_resolve(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t service_id);
-struct picomesh_int_result mesh_store_forget(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t service_id);
-struct picomesh_size_result mesh_store_count_services(struct ctx * ctx, struct object * obj, struct yheaders * hdrs);
-struct picomesh_int_result mesh_store_spawn_picomesh(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t port);
-struct picomesh_int_result mesh_store_kill_pid(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, int32_t pid);
-struct picomesh_size_result mesh_store_count_children(struct ctx * ctx, struct object * obj, struct yheaders * hdrs);
-struct picomesh_int_result mesh_store_reconcile_from_config(struct ctx * ctx, struct object * obj, struct yheaders * hdrs);
-struct picomesh_int_result mesh_store_reconcile(struct ctx * ctx, struct object * obj, struct yheaders * hdrs);
+struct picomesh_int_result mesh_mesh_register_service(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t service_id, uint32_t port);
+struct picomesh_uint32_result mesh_mesh_resolve(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t service_id);
+struct picomesh_int_result mesh_mesh_forget(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t service_id);
+struct picomesh_size_result mesh_mesh_count_services(struct ctx * ctx, struct object * obj, struct yheaders * hdrs);
+struct picomesh_int_result mesh_mesh_spawn_picomesh(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t port);
+struct picomesh_int_result mesh_mesh_kill_pid(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, int32_t pid);
+struct picomesh_size_result mesh_mesh_count_children(struct ctx * ctx, struct object * obj, struct yheaders * hdrs);
+struct picomesh_int_result mesh_mesh_reconcile_from_config(struct ctx * ctx, struct object * obj, struct yheaders * hdrs);
+struct picomesh_int_result mesh_mesh_reconcile(struct ctx * ctx, struct object * obj, struct yheaders * hdrs);
 
 /* ---- activation ---- */
 void picomesh_plugin_mesh_register(void);

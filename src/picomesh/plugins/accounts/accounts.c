@@ -4,7 +4,8 @@
  * uids client-side by the frontend, mirroring yaapp's accounts plugin
  * but without the string-key round-trip):
  *
- *   accounts_register(uid)        1 if newly created, 0 if already there
+ *   accounts_register(uid, name)  1 if newly created, 0 if already there
+ *                                 (the username is stored as name:<uid>)
  *   accounts_exists(uid)          1 if present, 0 otherwise
  *   accounts_set_balance(uid, n)  set balance (errors if uid unknown)
  *   accounts_balance(uid)         current balance (errors if uid unknown)
@@ -28,13 +29,14 @@
 #include <picomesh/yengine/engine.h>
 #include <picomesh/plugin/sharded_storage/sharded_storage.h>
 #include <picomesh/yclass/rpc.h>
+#include <picomesh/yjson/yjson.h>
 
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-struct PICOMESH_CLASS_ANNOTATE("class@accounts:store") accounts_store_data {
+struct PICOMESH_CLASS_ANNOTATE("class@accounts:accounts") accounts_accounts_data {
     char _unused;
 };
 
@@ -110,11 +112,12 @@ static struct picomesh_int_result kv_exists(struct acc_storage_handle *h, struct
     return r;
 }
 
-PICOMESH_CLASS_ANNOTATE("override@accounts:store:store_register")
-struct picomesh_int_result accounts_store_register_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
-                                                    uint32_t uid)
+PICOMESH_CLASS_ANNOTATE("override@accounts:accounts:accounts_register")
+struct picomesh_int_result accounts_accounts_register_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                                                    uint32_t uid, const char *username)
 {
     (void)ctx; (void)obj;
+    if (!username) username = "";
     struct acc_storage_handle_result sr = open_storage();
     if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_int, "accounts_register: open_storage failed", sr);
     struct acc_storage_handle h = sr.value;
@@ -135,15 +138,26 @@ struct picomesh_int_result accounts_store_register_impl(struct ctx *ctx, struct 
         ydebug("accounts_register: uid=%u already exists", uid);
         return PICOMESH_OK(picomesh_int, 0);
     }
+
+    /* The username is an account detail this plugin OWNS: store it under
+     * name:<uid> — one O(1) write per account, no shared roster index to
+     * RMW (that was O(N²) + an ever-growing value, and it forced the gateway
+     * to reach around into our storage). `list` enumerates by scanning the
+     * name:<uid> keys instead. */
+    snprintf(k, sizeof(k), "name:%u", uid);
+    struct picomesh_int_result nw =
+        sharded_storage_db_set(&h.c, h.obj, hdrs, ACCOUNTS_CTX, k, username);
+    if (PICOMESH_IS_ERR(nw)) { close_storage(&h); return PICOMESH_ERR(picomesh_int, "accounts_register: name write failed", nw); }
+
     struct picomesh_int64_result cinc = kv_incr(&h, hdrs, "count", 1);
     if (PICOMESH_IS_ERR(cinc)) { close_storage(&h); return PICOMESH_ERR(picomesh_int, "accounts_register: bump count failed", cinc); }
     close_storage(&h);
-    yinfo("accounts_register: uid=%u", uid);
+    yinfo("accounts_register: uid=%u name=%s", uid, username);
     return PICOMESH_OK(picomesh_int, 1);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@accounts:store:store_exists")
-struct picomesh_int_result accounts_store_exists_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@accounts:accounts:accounts_exists")
+struct picomesh_int_result accounts_accounts_exists_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                   uint32_t uid)
 {
     (void)ctx; (void)obj;
@@ -158,8 +172,8 @@ struct picomesh_int_result accounts_store_exists_impl(struct ctx *ctx, struct ob
     return PICOMESH_OK(picomesh_int, ex.value ? 1 : 0);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@accounts:store:store_set_balance")
-struct picomesh_int_result accounts_store_set_balance_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@accounts:accounts:accounts_set_balance")
+struct picomesh_int_result accounts_accounts_set_balance_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                         uint32_t uid, int64_t n)
 {
     (void)ctx; (void)obj;
@@ -182,8 +196,8 @@ struct picomesh_int_result accounts_store_set_balance_impl(struct ctx *ctx, stru
     return PICOMESH_OK(picomesh_int, 1);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@accounts:store:store_balance")
-struct picomesh_int64_result accounts_store_balance_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@accounts:accounts:accounts_balance")
+struct picomesh_int64_result accounts_accounts_balance_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                       uint32_t uid)
 {
     (void)ctx; (void)obj;
@@ -205,8 +219,8 @@ struct picomesh_int64_result accounts_store_balance_impl(struct ctx *ctx, struct
     return PICOMESH_OK(picomesh_int64, balr.value);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@accounts:store:store_count")
-struct picomesh_size_result accounts_store_count_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
+PICOMESH_CLASS_ANNOTATE("override@accounts:accounts:accounts_count")
+struct picomesh_size_result accounts_accounts_count_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
     (void)ctx; (void)obj;
     struct acc_storage_handle_result sr = open_storage();
@@ -218,26 +232,81 @@ struct picomesh_size_result accounts_store_count_impl(struct ctx *ctx, struct ob
     return PICOMESH_OK(picomesh_size, (size_t)(cr.value < 0 ? 0 : cr.value));
 }
 
-/* List the registered users as newline-separated "<uid>\t<username>" rows.
- * The frontend maps usernames → uids before calling the uid-only methods,
- * so it records the reverse mapping in the `index` key at registration
- * time (key `name:<uid>` too); this returns that index verbatim. Empty
- * string when no users have registered yet. */
-PICOMESH_CLASS_ANNOTATE("override@accounts:store:store_list")
-struct picomesh_string_result accounts_store_list_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
+/* List the registered users as a JSON array `[{"uid":<n>,"name":"<s>"}, …]`.
+ * State is the `index` key, stored at registration as newline-separated
+ * "<uid>\t<username>" rows (the reverse map the frontend needs); this parses
+ * that index into a real JSON list so an RPC consumer gets structured data,
+ * not a delimited blob. Empty array when no users have registered yet. */
+/* Parse the TSV `index` into a JSON array of {uid,name}, skipping `offset`
+ * rows and stopping after `limit` (< 0 == all). Shared by list + list_all. */
+static struct picomesh_json_result acc_list_window(struct yheaders *hdrs, int64_t offset, int64_t limit)
+{
+    struct acc_storage_handle_result sr = open_storage();
+    if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_json, "accounts_list: open_storage failed", sr);
+    struct acc_storage_handle h = sr.value;
+    /* Enumerate the per-account name:<uid> keys via the storage scan
+     * (paginated). No shared roster index — this scales with the account
+     * table instead of an ever-growing denormalized value. */
+    struct picomesh_json_result raw =
+        (limit < 0) ? sharded_storage_db_list_all(&h.c, h.obj, hdrs, ACCOUNTS_CTX, "name:")
+                    : sharded_storage_db_list(&h.c, h.obj, hdrs, ACCOUNTS_CTX, "name:", offset, limit);
+    close_storage(&h);
+    if (PICOMESH_IS_ERR(raw)) return PICOMESH_ERR(picomesh_json, "accounts_list: scan failed", raw);
+
+    /* raw.value is [{"key":"name:<uid>","value":"<username>"}, …] — reshape
+     * to clean [{"uid":<n>,"name":"<username>"}, …] records. */
+    struct yjson_doc *doc = yjson_parse(raw.value ? raw.value : "[]", raw.value ? strlen(raw.value) : 2);
+    struct yjson_writer *w = yjson_writer_new();
+    if (!doc || !w) {
+        if (doc) yjson_doc_free(doc);
+        if (w) yjson_writer_free(w);
+        free(raw.value);
+        return PICOMESH_ERR(picomesh_json, "accounts_list: reshape alloc failed");
+    }
+    yjson_writer_begin_array(w);
+    const struct yjson_value *arr = yjson_doc_root(doc);
+    size_t n = arr ? yjson_array_size(arr) : 0;
+    for (size_t i = 0; i < n; ++i) {
+        const struct yjson_value *e = yjson_array_at(arr, i);
+        const char *key = yjson_as_string(yjson_object_get(e, "key"), "");
+        const char *val = yjson_as_string(yjson_object_get(e, "value"), "");
+        const char *uid_s = strncmp(key, "name:", 5) == 0 ? key + 5 : key;
+        yjson_writer_begin_object(w);
+        yjson_writer_key(w, "uid");  yjson_writer_int(w, (int64_t)strtoull(uid_s, NULL, 10));
+        yjson_writer_key(w, "name"); yjson_writer_string(w, val);
+        yjson_writer_end_object(w);
+    }
+    yjson_writer_end_array(w);
+    yjson_doc_free(doc);
+    free(raw.value);
+
+    size_t len = 0;
+    const char *data = yjson_writer_data(w, &len);
+    char *out = strdup(data ? data : "[]");
+    yjson_writer_free(w);
+    if (!out) return PICOMESH_ERR(picomesh_json, "accounts_list: strdup failed");
+    return PICOMESH_OK(picomesh_json, out);
+}
+
+/* List the registered users as a JSON array `[{"uid":…,"name":…}]`,
+ * paginated by offset/limit (gh#15). */
+PICOMESH_CLASS_ANNOTATE("override@accounts:accounts:accounts_list")
+struct picomesh_json_result accounts_accounts_list_impl(struct ctx *ctx, struct object *obj,
+                                                        struct yheaders *hdrs,
+                                                        int64_t offset, int64_t limit)
 {
     (void)ctx; (void)obj;
-    struct acc_storage_handle_result sr = open_storage();
-    if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_string, "accounts_list: open_storage failed", sr);
-    struct acc_storage_handle h = sr.value;
-    struct picomesh_string_result g =
-        sharded_storage_db_get(&h.c, h.obj, hdrs, ACCOUNTS_CTX, "index");
-    close_storage(&h);
-    /* A real backend read failure must NOT masquerade as "no users" —
-     * propagate it. Absent index (db_get → "") is a legitimate empty list. */
-    if (PICOMESH_IS_ERR(g)) return PICOMESH_ERR(picomesh_string, "accounts_list: read failed", g);
-    if (!g.value) return PICOMESH_OK(picomesh_string, strdup(""));
-    return PICOMESH_OK(picomesh_string, g.value); /* transfer ownership */
+    if (limit <= 0) limit = 100;
+    return acc_list_window(hdrs, offset, limit);
+}
+
+/* Unbounded variant — every registered user. */
+PICOMESH_CLASS_ANNOTATE("override@accounts:accounts:accounts_list_all")
+struct picomesh_json_result accounts_accounts_list_all_impl(struct ctx *ctx, struct object *obj,
+                                                            struct yheaders *hdrs)
+{
+    (void)ctx; (void)obj;
+    return acc_list_window(hdrs, 0, -1);
 }
 
 #include "accounts.gen.c"

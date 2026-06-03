@@ -26,6 +26,7 @@
 #include <picomesh/yengine/engine.h>
 #include <picomesh/yconfig/yconfig.h>
 #include <picomesh/yloop/yloop.h>
+#include <picomesh/yjson/yjson.h>
 
 #include <mdbx.h>
 
@@ -231,6 +232,7 @@ enum shard_op {
     OP_INCR,          /* read int64 + delta + write, one txn → new value */
     OP_PUT_IF_ABSENT, /* insert only if key absent, one txn → inserted? */
     OP_CAS,           /* swap only if current bytes == expected, one txn */
+    OP_LIST,          /* cursor-scan a namespace across all shards → JSON */
 };
 
 struct shard_work {
@@ -240,6 +242,8 @@ struct shard_work {
     const char *value;    /* in:  set / put_if_absent / cas-replacement */
     const char *expected; /* in:  cas — exact current bytes to match */
     int64_t in_delta;     /* in:  incr */
+    int64_t in_offset;    /* in:  list — skip this many matches first */
+    int64_t in_limit;     /* in:  list — stop after this many (< 0 == unbounded) */
     char *out_str;        /* out: get — heap, NUL-terminated, owned by caller */
     int out_i;            /* out: exists/del/put_if_absent/cas */
     int64_t out_i64;      /* out: incr — value after the add */
@@ -274,6 +278,69 @@ static void shard_work_fn(void *arg)
         }
         w->out_sz = total;
         w->rc = SHARD_OK;
+        return;
+    }
+
+    if (w->op == OP_LIST) {
+        /* A namespace's keys are spread across every shard, so list = scan
+         * each shard's ns DBI with a cursor and concatenate. Build a JSON
+         * array of {"key":…,"value":…} directly (the values are opaque
+         * bytes; we expose them as strings — that's how they were stored). */
+        /* Optional key-prefix filter (w->key): callers pass their object
+         * prefix (e.g. "repo:") to list only objects, skipping the
+         * namespace's bookkeeping keys (count, next_id, indexes). Empty
+         * prefix lists every entry. */
+        const char *prefix = w->key ? w->key : "";
+        size_t plen = strlen(prefix);
+        int64_t skip = w->in_offset > 0 ? w->in_offset : 0; /* matches still to skip */
+        int64_t limit = w->in_limit;                        /* < 0 == unbounded */
+        int64_t emitted = 0;
+        struct yjson_writer *jw = yjson_writer_new();
+        if (!jw) { w->rc = SHARD_INTERNAL; return; }
+        yjson_writer_begin_array(jw);
+        for (int i = 0; i < s->n && (limit < 0 || emitted < limit); ++i) {
+            MDBX_txn *txn = NULL;
+            if (mdbx_txn_begin(s->shards[i].env, NULL, MDBX_TXN_RDONLY, &txn) != MDBX_SUCCESS)
+                continue;
+            MDBX_dbi dbi = 0;
+            MDBX_cursor *cur = NULL;
+            if (mdbx_dbi_open(txn, w->ns, 0, &dbi) == MDBX_SUCCESS &&
+                mdbx_cursor_open(txn, dbi, &cur) == MDBX_SUCCESS) {
+                MDBX_val k, v;
+                int cr = mdbx_cursor_get(cur, &k, &v, MDBX_FIRST);
+                while (cr == MDBX_SUCCESS && (limit < 0 || emitted < limit)) {
+                    if (plen && (k.iov_len < plen || memcmp(k.iov_base, prefix, plen) != 0)) {
+                        cr = mdbx_cursor_get(cur, &k, &v, MDBX_NEXT);
+                        continue;
+                    }
+                    if (skip > 0) { /* a match, but inside the offset window */
+                        --skip;
+                        cr = mdbx_cursor_get(cur, &k, &v, MDBX_NEXT);
+                        continue;
+                    }
+                    char kbuf[256];
+                    size_t klen = k.iov_len < sizeof(kbuf) - 1 ? k.iov_len : sizeof(kbuf) - 1;
+                    memcpy(kbuf, k.iov_base, klen); kbuf[klen] = 0;
+                    char *vbuf = malloc(v.iov_len + 1);
+                    if (vbuf) { memcpy(vbuf, v.iov_base, v.iov_len); vbuf[v.iov_len] = 0; }
+                    yjson_writer_begin_object(jw);
+                    yjson_writer_key(jw, "key");   yjson_writer_string(jw, kbuf);
+                    yjson_writer_key(jw, "value"); yjson_writer_string(jw, vbuf ? vbuf : "");
+                    yjson_writer_end_object(jw);
+                    free(vbuf);
+                    ++emitted;
+                    cr = mdbx_cursor_get(cur, &k, &v, MDBX_NEXT);
+                }
+            }
+            if (cur) mdbx_cursor_close(cur);
+            mdbx_txn_abort(txn);
+        }
+        yjson_writer_end_array(jw);
+        size_t jlen = 0;
+        const char *jdata = yjson_writer_data(jw, &jlen);
+        w->out_str = strdup(jdata ? jdata : "[]");
+        yjson_writer_free(jw);
+        w->rc = w->out_str ? SHARD_OK : SHARD_INTERNAL;
         return;
     }
 
@@ -564,6 +631,46 @@ struct picomesh_size_result sharded_storage_db_count_impl(struct ctx *ctx, struc
     shard_run(&w);
     if (w.rc != SHARD_OK) return PICOMESH_ERR(picomesh_size, shard_rc_msg(w.rc));
     return PICOMESH_OK(picomesh_size, w.out_sz);
+}
+
+/* The generic "show objects" surface the service console renders as a table.
+ * Each backend exposes its own `list`/`list_all` that delegate here with
+ * their namespace + object prefix.
+ *
+ * Default page size when a caller passes limit <= 0 — keeps `list` bounded
+ * so it can never dump a whole (potentially huge) namespace in one call. */
+#define SHARDED_LIST_DEFAULT_LIMIT 100
+
+/* Paginated: return at most `limit` entries (defaulted/capped) starting at
+ * `offset`. The unbounded scan lives in db_list_all. */
+PICOMESH_CLASS_ANNOTATE("override@sharded_storage:db:db_list")
+struct picomesh_json_result sharded_storage_db_list_impl(struct ctx *ctx, struct object *obj,
+                                                         struct yheaders *hdrs,
+                                                         const char *context, const char *prefix,
+                                                         int64_t offset, int64_t limit)
+{
+    (void)ctx; (void)obj; (void)hdrs;
+    if (limit <= 0) limit = SHARDED_LIST_DEFAULT_LIMIT;
+    struct shard_work w = {.op = OP_LIST, .ns = context, .key = prefix ? prefix : "",
+                           .in_offset = offset, .in_limit = limit};
+    shard_run(&w);
+    if (w.rc != SHARD_OK) return PICOMESH_ERR(picomesh_json, shard_rc_msg(w.rc));
+    return PICOMESH_OK(picomesh_json, w.out_str ? w.out_str : strdup("[]"));
+}
+
+/* Unbounded: every matching entry in the namespace. Use with care — on a
+ * large namespace this returns the whole set in one response. */
+PICOMESH_CLASS_ANNOTATE("override@sharded_storage:db:db_list_all")
+struct picomesh_json_result sharded_storage_db_list_all_impl(struct ctx *ctx, struct object *obj,
+                                                             struct yheaders *hdrs,
+                                                             const char *context, const char *prefix)
+{
+    (void)ctx; (void)obj; (void)hdrs;
+    struct shard_work w = {.op = OP_LIST, .ns = context, .key = prefix ? prefix : "",
+                           .in_offset = 0, .in_limit = -1};
+    shard_run(&w);
+    if (w.rc != SHARD_OK) return PICOMESH_ERR(picomesh_json, shard_rc_msg(w.rc));
+    return PICOMESH_OK(picomesh_json, w.out_str ? w.out_str : strdup("[]"));
 }
 
 /* Atomic read-add-write of a decimal-int64 counter; returns the value

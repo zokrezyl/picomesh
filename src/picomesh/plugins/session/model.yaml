@@ -1,7 +1,7 @@
 methods:
-  - slot: store_start
+  - slot: session_start
     domain: session
-    owning_class: store
+    owning_class: session
     return_type: struct picomesh_string_result
     args:
       - name: ctx
@@ -14,9 +14,9 @@ methods:
         type: uint32_t
       - name: provider_id
         type: uint32_t
-  - slot: store_lookup
+  - slot: session_lookup
     domain: session
-    owning_class: store
+    owning_class: session
     return_type: struct picomesh_uint32_result
     args:
       - name: ctx
@@ -27,9 +27,9 @@ methods:
         type: "struct yheaders *"
       - name: token
         type: "const char *"
-  - slot: store_destroy
+  - slot: session_destroy
     domain: session
-    owning_class: store
+    owning_class: session
     return_type: struct picomesh_int_result
     args:
       - name: ctx
@@ -40,9 +40,9 @@ methods:
         type: "struct yheaders *"
       - name: token
         type: "const char *"
-  - slot: store_count_active
+  - slot: session_count_active
     domain: session
-    owning_class: store
+    owning_class: session
     return_type: struct picomesh_size_result
     args:
       - name: ctx
@@ -51,25 +51,57 @@ methods:
         type: "struct object *"
       - name: hdrs
         type: "struct yheaders *"
-classes:
-  - name: store
+  - slot: session_list
     domain: session
-    accessor: session_store_class_get
+    owning_class: session
+    return_type: struct picomesh_json_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: offset
+        type: int64_t
+      - name: limit
+        type: int64_t
+  - slot: session_list_all
+    domain: session
+    owning_class: session
+    return_type: struct picomesh_json_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+classes:
+  - name: session
+    domain: session
+    accessor: session_session_class_get
     type: regular
     source_file: /home/misi/work/my/picomesh/src/picomesh/plugins/session/session.c
     parent: null
     mixins: []
-    data: struct session_store_data
+    data: struct session_session_data
     ops:
-      - slot: store_start
+      - slot: session_start
         slot_domain: session
-        impl: session_store_start_impl
-      - slot: store_lookup
+        impl: session_session_start_impl
+      - slot: session_lookup
         slot_domain: session
-        impl: session_store_lookup_impl
-      - slot: store_destroy
+        impl: session_session_lookup_impl
+      - slot: session_destroy
         slot_domain: session
-        impl: session_store_destroy_impl
-      - slot: store_count_active
+        impl: session_session_destroy_impl
+      - slot: session_count_active
         slot_domain: session
-        impl: session_store_count_active_impl
+        impl: session_session_count_active_impl
+      - slot: session_list
+        slot_domain: session
+        impl: session_session_list_impl
+      - slot: session_list_all
+        slot_domain: session
+        impl: session_session_list_all_impl

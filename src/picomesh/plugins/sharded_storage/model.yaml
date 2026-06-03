@@ -74,6 +74,40 @@ methods:
         type: "struct yheaders *"
       - name: context
         type: "const char *"
+  - slot: db_list
+    domain: sharded_storage
+    owning_class: db
+    return_type: struct picomesh_json_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: context
+        type: "const char *"
+      - name: prefix
+        type: "const char *"
+      - name: offset
+        type: int64_t
+      - name: limit
+        type: int64_t
+  - slot: db_list_all
+    domain: sharded_storage
+    owning_class: db
+    return_type: struct picomesh_json_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: context
+        type: "const char *"
+      - name: prefix
+        type: "const char *"
   - slot: db_incr
     domain: sharded_storage
     owning_class: db
@@ -152,6 +186,12 @@ classes:
       - slot: db_count
         slot_domain: sharded_storage
         impl: sharded_storage_db_count_impl
+      - slot: db_list
+        slot_domain: sharded_storage
+        impl: sharded_storage_db_list_impl
+      - slot: db_list_all
+        slot_domain: sharded_storage
+        impl: sharded_storage_db_list_all_impl
       - slot: db_incr
         slot_domain: sharded_storage
         impl: sharded_storage_db_incr_impl

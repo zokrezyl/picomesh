@@ -101,15 +101,15 @@ static void send_json_error(struct yloop_stream *s, int status,
                             int code, const char *message, int keep_alive)
 {
     struct yjson_writer *w = yjson_writer_new();
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "error");
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "code");    yjson_w_int(w, code);
-    yjson_w_key(w, "message"); yjson_w_string(w, message);
-    yjson_w_end_object(w);
-    yjson_w_end_object(w);
+    yjson_writer_begin_object(w);
+    yjson_writer_key(w, "error");
+    yjson_writer_begin_object(w);
+    yjson_writer_key(w, "code");    yjson_writer_int(w, code);
+    yjson_writer_key(w, "message"); yjson_writer_string(w, message);
+    yjson_writer_end_object(w);
+    yjson_writer_end_object(w);
     size_t len;
-    const char *data = yjson_w_data(w, &len);
+    const char *data = yjson_writer_data(w, &len);
     send_response(s, status, "application/json", data, len, keep_alive);
     yjson_writer_free(w);
 }
@@ -160,10 +160,10 @@ static void route_create(struct yloop_stream *s, const char *body, size_t blen,
     yjson_doc_free(doc);
 
     struct yjson_writer *w = yjson_writer_new();
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "handle"); yjson_w_int(w, (int64_t)handle);
-    yjson_w_end_object(w);
-    size_t len; const char *data = yjson_w_data(w, &len);
+    yjson_writer_begin_object(w);
+    yjson_writer_key(w, "handle"); yjson_writer_int(w, (int64_t)handle);
+    yjson_writer_end_object(w);
+    size_t len; const char *data = yjson_writer_data(w, &len);
     send_response(s, 200, "application/json", data, len, keep_alive);
     yjson_writer_free(w);
 }
@@ -193,8 +193,8 @@ static void route_invoke(struct yloop_stream *s, const char *body, size_t blen,
     }
 
     struct yjson_writer *w = yjson_writer_new();
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "result");
+    yjson_writer_begin_object(w);
+    yjson_writer_key(w, "result");
     char err[256] = {0};
     /* Legacy /invoke is the bootstrap control plane (mesh parent):
      * the object is local to this process — NULL ctx, NULL headers. */
@@ -205,8 +205,8 @@ static void route_invoke(struct yloop_stream *s, const char *body, size_t blen,
         send_json_error(s, 500, -32000, err[0] ? err : "invoke: impl failed", keep_alive);
         return;
     }
-    yjson_w_end_object(w);
-    size_t len; const char *data = yjson_w_data(w, &len);
+    yjson_writer_end_object(w);
+    size_t len; const char *data = yjson_writer_data(w, &len);
     send_response(s, 200, "application/json", data, len, keep_alive);
     yjson_writer_free(w);
     yjson_doc_free(doc);
@@ -312,7 +312,7 @@ static void describe_emit(const char *name, method_slot slot, void *ud)
 {
     (void)slot;
     struct describe_ctx *dc = ud;
-    yjson_w_string(dc->w, name);
+    yjson_writer_string(dc->w, name);
 }
 
 /* Extract the value of ?class=… from a URL like /describe?class=foo. */
@@ -357,14 +357,14 @@ static void route_describe(struct yloop_stream *s, const char *path,
         return;
     }
     struct yjson_writer *w = yjson_writer_new();
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "class");   yjson_w_string(w, cls);
-    yjson_w_key(w, "methods"); yjson_w_begin_array(w);
+    yjson_writer_begin_object(w);
+    yjson_writer_key(w, "class");   yjson_writer_string(w, cls);
+    yjson_writer_key(w, "methods"); yjson_writer_begin_array(w);
     struct describe_ctx dc = {.w = w};
     class_for_each_slot(cr.value, describe_emit, &dc);
-    yjson_w_end_array(w);
-    yjson_w_end_object(w);
-    size_t len; const char *data = yjson_w_data(w, &len);
+    yjson_writer_end_array(w);
+    yjson_writer_end_object(w);
+    size_t len; const char *data = yjson_writer_data(w, &len);
     send_response(s, 200, "application/json", data, len, keep_alive);
     yjson_writer_free(w);
 }

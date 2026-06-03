@@ -1,7 +1,7 @@
 methods:
-  - slot: store_ingest
+  - slot: trace_collector_ingest
     domain: trace_collector
-    owning_class: store
+    owning_class: trace_collector
     return_type: struct picomesh_void_result
     args:
       - name: ctx
@@ -12,9 +12,9 @@ methods:
         type: "struct yheaders *"
       - name: span_json
         type: "const char *"
-  - slot: store_get_trace
+  - slot: trace_collector_get_trace
     domain: trace_collector
-    owning_class: store
+    owning_class: trace_collector
     return_type: struct picomesh_string_result
     args:
       - name: ctx
@@ -25,9 +25,9 @@ methods:
         type: "struct yheaders *"
       - name: trace_id
         type: "const char *"
-  - slot: store_services
+  - slot: trace_collector_services
     domain: trace_collector
-    owning_class: store
+    owning_class: trace_collector
     return_type: struct picomesh_string_result
     args:
       - name: ctx
@@ -36,9 +36,9 @@ methods:
         type: "struct object *"
       - name: hdrs
         type: "struct yheaders *"
-  - slot: store_operations
+  - slot: trace_collector_operations
     domain: trace_collector
-    owning_class: store
+    owning_class: trace_collector
     return_type: struct picomesh_string_result
     args:
       - name: ctx
@@ -49,9 +49,9 @@ methods:
         type: "struct yheaders *"
       - name: service
         type: "const char *"
-  - slot: store_latency
+  - slot: trace_collector_latency
     domain: trace_collector
-    owning_class: store
+    owning_class: trace_collector
     return_type: struct picomesh_string_result
     args:
       - name: ctx
@@ -66,9 +66,9 @@ methods:
         type: "const char *"
       - name: window_secs
         type: uint32_t
-  - slot: store_stats
+  - slot: trace_collector_stats
     domain: trace_collector
-    owning_class: store
+    owning_class: trace_collector
     return_type: struct picomesh_string_result
     args:
       - name: ctx
@@ -77,9 +77,9 @@ methods:
         type: "struct object *"
       - name: hdrs
         type: "struct yheaders *"
-  - slot: store_errors
+  - slot: trace_collector_errors
     domain: trace_collector
-    owning_class: store
+    owning_class: trace_collector
     return_type: struct picomesh_string_result
     args:
       - name: ctx
@@ -91,33 +91,33 @@ methods:
       - name: since_secs
         type: uint32_t
 classes:
-  - name: store
+  - name: trace_collector
     domain: trace_collector
-    accessor: trace_collector_store_class_get
+    accessor: trace_collector_trace_collector_class_get
     type: regular
     source_file: /home/misi/work/my/picomesh/src/picomesh/plugins/trace_collector/collector.c
     parent: null
     mixins: []
-    data: struct trace_collector_store_data
+    data: struct trace_collector_trace_collector_data
     ops:
-      - slot: store_ingest
+      - slot: trace_collector_ingest
         slot_domain: trace_collector
-        impl: trace_collector_store_ingest_impl
-      - slot: store_get_trace
+        impl: trace_collector_trace_collector_ingest_impl
+      - slot: trace_collector_get_trace
         slot_domain: trace_collector
-        impl: trace_collector_store_get_trace_impl
-      - slot: store_services
+        impl: trace_collector_trace_collector_get_trace_impl
+      - slot: trace_collector_services
         slot_domain: trace_collector
-        impl: trace_collector_store_services_impl
-      - slot: store_operations
+        impl: trace_collector_trace_collector_services_impl
+      - slot: trace_collector_operations
         slot_domain: trace_collector
-        impl: trace_collector_store_operations_impl
-      - slot: store_latency
+        impl: trace_collector_trace_collector_operations_impl
+      - slot: trace_collector_latency
         slot_domain: trace_collector
-        impl: trace_collector_store_latency_impl
-      - slot: store_stats
+        impl: trace_collector_trace_collector_latency_impl
+      - slot: trace_collector_stats
         slot_domain: trace_collector
-        impl: trace_collector_store_stats_impl
-      - slot: store_errors
+        impl: trace_collector_trace_collector_stats_impl
+      - slot: trace_collector_errors
         slot_domain: trace_collector
-        impl: trace_collector_store_errors_impl
+        impl: trace_collector_trace_collector_errors_impl

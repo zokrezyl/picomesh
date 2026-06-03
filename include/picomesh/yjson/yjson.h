@@ -83,22 +83,28 @@ struct yjson_writer;
 struct yjson_writer *yjson_writer_new(void);
 void yjson_writer_free(struct yjson_writer *w);
 
-void yjson_w_begin_object(struct yjson_writer *w);
-void yjson_w_end_object  (struct yjson_writer *w);
-void yjson_w_begin_array (struct yjson_writer *w);
-void yjson_w_end_array   (struct yjson_writer *w);
+void yjson_writer_begin_object(struct yjson_writer *w);
+void yjson_writer_end_object  (struct yjson_writer *w);
+void yjson_writer_begin_array (struct yjson_writer *w);
+void yjson_writer_end_array   (struct yjson_writer *w);
 
-void yjson_w_key   (struct yjson_writer *w, const char *key);
-void yjson_w_null  (struct yjson_writer *w);
-void yjson_w_bool  (struct yjson_writer *w, int v);
-void yjson_w_int   (struct yjson_writer *w, int64_t v);
-void yjson_w_float (struct yjson_writer *w, double v);
-void yjson_w_string(struct yjson_writer *w, const char *s);
+void yjson_writer_key   (struct yjson_writer *w, const char *key);
+void yjson_writer_null  (struct yjson_writer *w);
+void yjson_writer_bool  (struct yjson_writer *w, int v);
+void yjson_writer_int   (struct yjson_writer *w, int64_t v);
+void yjson_writer_float (struct yjson_writer *w, double v);
+void yjson_writer_string(struct yjson_writer *w, const char *s);
+
+/* Emit an already-serialized JSON fragment as a value, verbatim (no
+ * quoting, no escaping). The caller guarantees `json` is well-formed JSON;
+ * a NULL or empty fragment is written as `null`. Used to splice a value a
+ * method already produced as JSON text (e.g. a list) into the response. */
+void yjson_writer_raw   (struct yjson_writer *w, const char *json);
 
 /* Borrow the assembled buffer (no copy). NUL-terminated. Valid until
  * the writer is freed or another write happens. `*len_out` (if non-
  * NULL) receives the length excluding NUL. */
-const char *yjson_w_data(struct yjson_writer *w, size_t *len_out);
+const char *yjson_writer_data(struct yjson_writer *w, size_t *len_out);
 
 #ifdef __cplusplus
 }

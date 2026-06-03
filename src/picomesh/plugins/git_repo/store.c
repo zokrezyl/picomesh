@@ -65,7 +65,7 @@
 #define GIT_REPO_CTX "git_repo"
 
 /* The class object carries NO repo state — every op delegates to storage. */
-struct PICOMESH_CLASS_ANNOTATE("class@git_repo:store") git_repo_store_data {
+struct PICOMESH_CLASS_ANNOTATE("class@git_repo:git_repo") git_repo_git_repo_data {
     char _unused;
 };
 
@@ -725,8 +725,8 @@ static void git_put_file_work_fn(void *ud)
     git_repository_free(repo);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@git_repo:store:store_make")
-struct picomesh_uint32_result git_repo_store_make_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@git_repo:git_repo:git_repo_make")
+struct picomesh_uint32_result git_repo_git_repo_make_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                       uint32_t owner_id,
                                                       const char *owner_name,
                                                       const char *repo_name)
@@ -810,8 +810,8 @@ struct picomesh_uint32_result git_repo_store_make_impl(struct ctx *ctx, struct o
     return PICOMESH_OK(picomesh_uint32, repo_id);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@git_repo:store:store_delete")
-struct picomesh_int_result git_repo_store_delete_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@git_repo:git_repo:git_repo_delete")
+struct picomesh_int_result git_repo_git_repo_delete_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                    uint32_t repo_id)
 {
     (void)ctx; (void)obj;
@@ -848,8 +848,8 @@ struct picomesh_int_result git_repo_store_delete_impl(struct ctx *ctx, struct ob
     return PICOMESH_OK(picomesh_int, 1);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@git_repo:store:store_owner_of")
-struct picomesh_uint32_result git_repo_store_owner_of_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@git_repo:git_repo:git_repo_owner_of")
+struct picomesh_uint32_result git_repo_git_repo_owner_of_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                         uint32_t repo_id)
 {
     (void)ctx; (void)obj;
@@ -862,8 +862,8 @@ struct picomesh_uint32_result git_repo_store_owner_of_impl(struct ctx *ctx, stru
     return PICOMESH_OK(picomesh_uint32, lr.value ? rec.owner_id : 0);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@git_repo:store:store_count_for_owner")
-struct picomesh_size_result git_repo_store_count_for_owner_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@git_repo:git_repo:git_repo_count_for_owner")
+struct picomesh_size_result git_repo_git_repo_count_for_owner_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                              uint32_t owner_id)
 {
     (void)ctx; (void)obj;
@@ -879,8 +879,8 @@ struct picomesh_size_result git_repo_store_count_for_owner_impl(struct ctx *ctx,
     return PICOMESH_OK(picomesh_size, n);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@git_repo:store:store_count_total")
-struct picomesh_size_result git_repo_store_count_total_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
+PICOMESH_CLASS_ANNOTATE("override@git_repo:git_repo:git_repo_count_total")
+struct picomesh_size_result git_repo_git_repo_count_total_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
     (void)ctx; (void)obj;
     struct gr_storage_result sr = gr_open();
@@ -897,8 +897,8 @@ struct picomesh_size_result git_repo_store_count_total_impl(struct ctx *ctx, str
  * enumerate a user's repos by NAME, so created repos never showed up in
  * any listing. Heap string; the caller owns and frees it (picomesh_string
  * contract). */
-PICOMESH_CLASS_ANNOTATE("override@git_repo:store:store_list_for_owner")
-struct picomesh_string_result git_repo_store_list_for_owner_impl(struct ctx *ctx, struct object *obj,
+PICOMESH_CLASS_ANNOTATE("override@git_repo:git_repo:git_repo_list_for_owner")
+struct picomesh_string_result git_repo_git_repo_list_for_owner_impl(struct ctx *ctx, struct object *obj,
                                                               struct yheaders *hdrs, uint32_t owner_id)
 {
     (void)ctx; (void)obj;
@@ -923,8 +923,8 @@ struct picomesh_string_result git_repo_store_list_for_owner_impl(struct ctx *ctx
 /* List a directory in the repo tree. `ref` defaults to HEAD; `path` ""
  * is the root. Returns "<type>\t<name>\n" lines (type ∈ tree|blob); an
  * empty repo yields an empty string. */
-PICOMESH_CLASS_ANNOTATE("override@git_repo:store:store_read_tree")
-struct picomesh_string_result git_repo_store_read_tree_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@git_repo:git_repo:git_repo_read_tree")
+struct picomesh_string_result git_repo_git_repo_read_tree_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                             uint32_t repo_id, const char *ref, const char *path)
 {
     (void)ctx; (void)obj;
@@ -958,8 +958,8 @@ struct picomesh_string_result git_repo_store_read_tree_impl(struct ctx *ctx, str
 /* Read a file's contents from the repo tree. `ref` defaults to HEAD.
  * Text-oriented: the result is NUL-terminated, so an embedded NUL in a
  * binary blob would truncate downstream consumers. */
-PICOMESH_CLASS_ANNOTATE("override@git_repo:store:store_read_file")
-struct picomesh_string_result git_repo_store_read_file_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@git_repo:git_repo:git_repo_read_file")
+struct picomesh_string_result git_repo_git_repo_read_file_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                             uint32_t repo_id, const char *ref, const char *path)
 {
     (void)ctx; (void)obj;
@@ -993,8 +993,8 @@ struct picomesh_string_result git_repo_store_read_file_impl(struct ctx *ctx, str
  * tree as needed — git has no standalone mkdir) and commit it on the
  * branch HEAD points at. Works on an empty repo (first commit). Returns
  * the new commit's hex id. */
-PICOMESH_CLASS_ANNOTATE("override@git_repo:store:store_put_file")
-struct picomesh_string_result git_repo_store_put_file_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@git_repo:git_repo:git_repo_put_file")
+struct picomesh_string_result git_repo_git_repo_put_file_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                            uint32_t repo_id, const char *path, const char *content,
                                                            const char *message, const char *author_name,
                                                            const char *author_email)
@@ -1040,8 +1040,8 @@ struct picomesh_string_result git_repo_store_put_file_impl(struct ctx *ctx, stru
  * leaks via list_for_owner), and the gateway needs it to decide how to
  * render. The CONTENTS stay gated by read_tree/read_file. Returns 0 for
  * an unknown repo (treated as not-public). */
-PICOMESH_CLASS_ANNOTATE("override@git_repo:store:store_is_public")
-struct picomesh_int_result git_repo_store_is_public_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@git_repo:git_repo:git_repo_is_public")
+struct picomesh_int_result git_repo_git_repo_is_public_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                          uint32_t repo_id)
 {
     (void)ctx; (void)obj;
@@ -1056,8 +1056,8 @@ struct picomesh_int_result git_repo_store_is_public_impl(struct ctx *ctx, struct
 
 /* Set the repo's visibility (1 = public, 0 = private). Owner-only;
  * anonymous (uid 0) is refused. Returns 1 on success. */
-PICOMESH_CLASS_ANNOTATE("override@git_repo:store:store_set_public")
-struct picomesh_int_result git_repo_store_set_public_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@git_repo:git_repo:git_repo_set_public")
+struct picomesh_int_result git_repo_git_repo_set_public_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                           uint32_t repo_id, int is_public)
 {
     (void)ctx; (void)obj;
@@ -1076,6 +1076,33 @@ struct picomesh_int_result git_repo_store_set_public_impl(struct ctx *ctx, struc
     if (PICOMESH_IS_ERR(w)) return PICOMESH_ERR(picomesh_int, "git_repo_set_public: write failed", w);
     yinfo("git_repo: repo=%u visibility -> %s", repo_id, rec.is_public ? "public" : "private");
     return PICOMESH_OK(picomesh_int, 1);
+}
+
+/* List ALL repos' stored entries as a JSON array (gh#15): the generic
+ * "show every object" the console renders as a table — not per-owner, not a
+ * count. Delegates to the storage namespace scan. */
+PICOMESH_CLASS_ANNOTATE("override@git_repo:git_repo:git_repo_list")
+struct picomesh_json_result git_repo_git_repo_list_impl(struct ctx *ctx, struct object *obj,
+                                                     struct yheaders *hdrs,
+                                                     int64_t offset, int64_t limit)
+{
+    (void)ctx; (void)obj;
+    struct gr_storage_result sr = gr_open();
+    if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_json, "git_repo_list: storage open failed", sr);
+    struct gr_storage h = sr.value;
+    return sharded_storage_db_list(&h.c, h.obj, hdrs, GIT_REPO_CTX, "repo:", offset, limit);
+}
+
+/* Unbounded variant — every repo. Use with care on large deployments. */
+PICOMESH_CLASS_ANNOTATE("override@git_repo:git_repo:git_repo_list_all")
+struct picomesh_json_result git_repo_git_repo_list_all_impl(struct ctx *ctx, struct object *obj,
+                                                            struct yheaders *hdrs)
+{
+    (void)ctx; (void)obj;
+    struct gr_storage_result sr = gr_open();
+    if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_json, "git_repo_list_all: storage open failed", sr);
+    struct gr_storage h = sr.value;
+    return sharded_storage_db_list_all(&h.c, h.obj, hdrs, GIT_REPO_CTX, "repo:");
 }
 
 #include "store.gen.c"

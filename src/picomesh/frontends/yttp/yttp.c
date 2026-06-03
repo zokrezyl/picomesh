@@ -104,21 +104,21 @@ static void write_jsonrpc_error(struct yloop_stream *s, const struct yjson_value
                                 int code, const char *message)
 {
     struct yjson_writer *w = yjson_writer_new();
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "jsonrpc"); yjson_w_string(w, "2.0");
-    yjson_w_key(w, "id");
-    if (yjson_is_int(id))         yjson_w_int(w, yjson_as_int(id, 0));
-    else if (yjson_is_string(id)) yjson_w_string(w, yjson_as_string(id, ""));
-    else                          yjson_w_null(w);
-    yjson_w_key(w, "error");
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "code");    yjson_w_int(w, code);
-    yjson_w_key(w, "message"); yjson_w_string(w, message);
-    yjson_w_end_object(w);
-    yjson_w_end_object(w);
+    yjson_writer_begin_object(w);
+    yjson_writer_key(w, "jsonrpc"); yjson_writer_string(w, "2.0");
+    yjson_writer_key(w, "id");
+    if (yjson_is_int(id))         yjson_writer_int(w, yjson_as_int(id, 0));
+    else if (yjson_is_string(id)) yjson_writer_string(w, yjson_as_string(id, ""));
+    else                          yjson_writer_null(w);
+    yjson_writer_key(w, "error");
+    yjson_writer_begin_object(w);
+    yjson_writer_key(w, "code");    yjson_writer_int(w, code);
+    yjson_writer_key(w, "message"); yjson_writer_string(w, message);
+    yjson_writer_end_object(w);
+    yjson_writer_end_object(w);
 
     size_t len;
-    const char *data = yjson_w_data(w, &len);
+    const char *data = yjson_writer_data(w, &len);
     write_frame(s, data, len);
     yjson_writer_free(w);
 }
@@ -150,20 +150,20 @@ static void handle_create(struct yloop_stream *s, const struct yjson_value *id,
     uint64_t handle = rpc_register_object(orr.value);
 
     struct yjson_writer *w = yjson_writer_new();
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "jsonrpc"); yjson_w_string(w, "2.0");
-    yjson_w_key(w, "id");
-    if (yjson_is_int(id))         yjson_w_int(w, yjson_as_int(id, 0));
-    else if (yjson_is_string(id)) yjson_w_string(w, yjson_as_string(id, ""));
-    else                          yjson_w_null(w);
-    yjson_w_key(w, "result");
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "handle"); yjson_w_int(w, (int64_t)handle);
-    yjson_w_end_object(w);
-    yjson_w_end_object(w);
+    yjson_writer_begin_object(w);
+    yjson_writer_key(w, "jsonrpc"); yjson_writer_string(w, "2.0");
+    yjson_writer_key(w, "id");
+    if (yjson_is_int(id))         yjson_writer_int(w, yjson_as_int(id, 0));
+    else if (yjson_is_string(id)) yjson_writer_string(w, yjson_as_string(id, ""));
+    else                          yjson_writer_null(w);
+    yjson_writer_key(w, "result");
+    yjson_writer_begin_object(w);
+    yjson_writer_key(w, "handle"); yjson_writer_int(w, (int64_t)handle);
+    yjson_writer_end_object(w);
+    yjson_writer_end_object(w);
 
     size_t len;
-    const char *data = yjson_w_data(w, &len);
+    const char *data = yjson_writer_data(w, &len);
     write_frame(s, data, len);
     yjson_writer_free(w);
 }
@@ -196,13 +196,13 @@ static void handle_invoke(struct yloop_stream *s, const struct yjson_value *id,
     }
 
     struct yjson_writer *w = yjson_writer_new();
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "jsonrpc"); yjson_w_string(w, "2.0");
-    yjson_w_key(w, "id");
-    if (yjson_is_int(id))         yjson_w_int(w, yjson_as_int(id, 0));
-    else if (yjson_is_string(id)) yjson_w_string(w, yjson_as_string(id, ""));
-    else                          yjson_w_null(w);
-    yjson_w_key(w, "result");
+    yjson_writer_begin_object(w);
+    yjson_writer_key(w, "jsonrpc"); yjson_writer_string(w, "2.0");
+    yjson_writer_key(w, "id");
+    if (yjson_is_int(id))         yjson_writer_int(w, yjson_as_int(id, 0));
+    else if (yjson_is_string(id)) yjson_writer_string(w, yjson_as_string(id, ""));
+    else                          yjson_writer_null(w);
+    yjson_writer_key(w, "result");
 
     char err[256] = {0};
     /* Local dispatch: yttp owns the object in-process — NULL ctx (call
@@ -215,10 +215,10 @@ static void handle_invoke(struct yloop_stream *s, const struct yjson_value *id,
         write_jsonrpc_error(s, id, -32000, err[0] ? err : "invoke: impl failed");
         return;
     }
-    yjson_w_end_object(w);
+    yjson_writer_end_object(w);
 
     size_t len;
-    const char *data = yjson_w_data(w, &len);
+    const char *data = yjson_writer_data(w, &len);
     write_frame(s, data, len);
     yjson_writer_free(w);
 }
@@ -231,7 +231,7 @@ static void describe_emit(const char *name, method_slot slot, void *ud)
 {
     (void)slot;
     struct describe_ctx *dc = ud;
-    yjson_w_string(dc->w, name);
+    yjson_writer_string(dc->w, name);
 }
 
 static void handle_describe(struct yloop_stream *s, const struct yjson_value *id,
@@ -251,25 +251,25 @@ static void handle_describe(struct yloop_stream *s, const struct yjson_value *id
         return;
     }
     struct yjson_writer *w = yjson_writer_new();
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "jsonrpc"); yjson_w_string(w, "2.0");
-    yjson_w_key(w, "id");
-    if (yjson_is_int(id))         yjson_w_int(w, yjson_as_int(id, 0));
-    else if (yjson_is_string(id)) yjson_w_string(w, yjson_as_string(id, ""));
-    else                          yjson_w_null(w);
-    yjson_w_key(w, "result");
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "class");   yjson_w_string(w, class_name);
-    yjson_w_key(w, "methods");
-    yjson_w_begin_array(w);
+    yjson_writer_begin_object(w);
+    yjson_writer_key(w, "jsonrpc"); yjson_writer_string(w, "2.0");
+    yjson_writer_key(w, "id");
+    if (yjson_is_int(id))         yjson_writer_int(w, yjson_as_int(id, 0));
+    else if (yjson_is_string(id)) yjson_writer_string(w, yjson_as_string(id, ""));
+    else                          yjson_writer_null(w);
+    yjson_writer_key(w, "result");
+    yjson_writer_begin_object(w);
+    yjson_writer_key(w, "class");   yjson_writer_string(w, class_name);
+    yjson_writer_key(w, "methods");
+    yjson_writer_begin_array(w);
     struct describe_ctx dc = {.w = w};
     class_for_each_slot(cr.value, describe_emit, &dc);
-    yjson_w_end_array(w);
-    yjson_w_end_object(w);
-    yjson_w_end_object(w);
+    yjson_writer_end_array(w);
+    yjson_writer_end_object(w);
+    yjson_writer_end_object(w);
 
     size_t len;
-    const char *data = yjson_w_data(w, &len);
+    const char *data = yjson_writer_data(w, &len);
     write_frame(s, data, len);
     yjson_writer_free(w);
 }

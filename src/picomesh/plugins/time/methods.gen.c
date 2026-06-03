@@ -6,6 +6,7 @@
 #include <picomesh/ycore/ytelemetry.h>
 #include <picomesh/yclass/rpc.h>
 #include <picomesh/yclass/yheaders.h>
+#include <picomesh/msgpack/msgpack.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,6 +26,36 @@ struct picomesh_int64_result time_clock_now_ms(struct ctx * ctx, struct object *
 
     struct ctx *_s = ctx;
     if (_s && _s->peer) {
+        if (peer_channel_is_msgpack(_s->peer)) {
+            struct picomesh_int64_result _mret;
+            uint8_t *_margs = malloc(16384);
+            uint8_t *_mresp = malloc(256);
+            if (!_margs || !_mresp) {
+                free(_margs); free(_mresp);
+                return PICOMESH_ERR(picomesh_int64, "time_clock_now_ms: out of memory");
+            }
+            struct picomesh_msgpack_buffer _mab;
+            cmp_ctx_t _maw;
+            picomesh_msgpack_writer_init(&_maw, &_mab, _margs, 16384);
+            cmp_write_array(&_maw, 0u);
+            size_t _mrlen = 0;
+            char _merr[256] = {0};
+            if (!peer_channel_msgpack_call(_s->peer, "time.clock.now_ms", hdrs,
+                                           _margs, _mab.offset, _mresp, 256,
+                                           &_mrlen, _merr, sizeof(_merr))) {
+                _mret = PICOMESH_ERR(picomesh_int64, _merr[0] ? strdup(_merr) : "time_clock_now_ms: msgpack call failed");
+            } else {
+                struct picomesh_msgpack_buffer _mrb;
+                cmp_ctx_t _mrr;
+                picomesh_msgpack_reader_init(&_mrr, &_mrb, _mresp, _mrlen);
+            int64_t _mv = 0;
+            if (!cmp_read_integer(&_mrr, &_mv))
+                _mret = PICOMESH_ERR(picomesh_int64, "time_clock_now_ms: bad msgpack int result");
+            else _mret = PICOMESH_OK(picomesh_int64, (int64_t)_mv);
+            }
+            free(_margs); free(_mresp);
+            return _mret;
+        }
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int64, "time_clock_now_ms: remote id unresolved");
@@ -94,6 +125,37 @@ struct picomesh_int64_result time_clock_sleep_ms(struct ctx * ctx, struct object
 
     struct ctx *_s = ctx;
     if (_s && _s->peer) {
+        if (peer_channel_is_msgpack(_s->peer)) {
+            struct picomesh_int64_result _mret;
+            uint8_t *_margs = malloc(16384);
+            uint8_t *_mresp = malloc(256);
+            if (!_margs || !_mresp) {
+                free(_margs); free(_mresp);
+                return PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: out of memory");
+            }
+            struct picomesh_msgpack_buffer _mab;
+            cmp_ctx_t _maw;
+            picomesh_msgpack_writer_init(&_maw, &_mab, _margs, 16384);
+            cmp_write_array(&_maw, 1u);
+            cmp_write_uinteger(&_maw, (uint64_t)ms);
+            size_t _mrlen = 0;
+            char _merr[256] = {0};
+            if (!peer_channel_msgpack_call(_s->peer, "time.clock.sleep_ms", hdrs,
+                                           _margs, _mab.offset, _mresp, 256,
+                                           &_mrlen, _merr, sizeof(_merr))) {
+                _mret = PICOMESH_ERR(picomesh_int64, _merr[0] ? strdup(_merr) : "time_clock_sleep_ms: msgpack call failed");
+            } else {
+                struct picomesh_msgpack_buffer _mrb;
+                cmp_ctx_t _mrr;
+                picomesh_msgpack_reader_init(&_mrr, &_mrb, _mresp, _mrlen);
+            int64_t _mv = 0;
+            if (!cmp_read_integer(&_mrr, &_mv))
+                _mret = PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: bad msgpack int result");
+            else _mret = PICOMESH_OK(picomesh_int64, (int64_t)_mv);
+            }
+            free(_margs); free(_mresp);
+            return _mret;
+        }
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: remote id unresolved");

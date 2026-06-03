@@ -919,11 +919,11 @@ static void repo_tab_counts(struct yloop *loop, const struct serve_ud *sud,
     char args[48];
     snprintf(args, sizeof(args), "[%u]", rid);
     *issues_out = service_active(sud, "issues")
-        ? rpc_result_int(loop, sud, sid, "issues.store.count_open_in_repo", args, -1)
+        ? rpc_result_int(loop, sud, sid, "issues.issues.count_open_in_repo", args, -1)
         : -1;
     if (service_active(sud, "git_pipeline")) {
-        long p = rpc_result_int(loop, sud, sid, "git_pipeline.store.count_pending", "[]", 0);
-        long r = rpc_result_int(loop, sud, sid, "git_pipeline.store.count_running", "[]", 0);
+        long p = rpc_result_int(loop, sud, sid, "git_pipeline.git_pipeline.count_pending", "[]", 0);
+        long r = rpc_result_int(loop, sud, sid, "git_pipeline.git_pipeline.count_running", "[]", 0);
         *runs_out = p + r;
     } else {
         *runs_out = -1;
@@ -946,7 +946,7 @@ static void panel_open(struct buf *b, const char *title, const char *meta)
 static void panel_close(struct buf *b) { buf_puts(b, "</div></section>"); }
 
 /* GET /repos — the signed-in user's repositories, listed by name via
- * git_repo.store.list_for_owner, with a create form and the repo count.
+ * git_repo.git_repo.list_for_owner, with a create form and the repo count.
  * All data comes from the gateway over /_rpc; the webapp holds no state.
  * `sid` NULL/empty → not signed in → bounce to /login. */
 static void route_repos_get(struct yloop *loop, struct yloop_stream *s,
@@ -959,13 +959,13 @@ static void route_repos_get(struct yloop *loop, struct yloop_stream *s,
         return;
     }
 
-    long total = rpc_result_int(loop, sud, sid, "git_repo.store.count_total", "[]", -1);
+    long total = rpc_result_int(loop, sud, sid, "git_repo.git_repo.count_total", "[]", -1);
 
     /* List THIS user's repos by name (newline-separated). The owner key is
      * the session-resolved uid, not anything cookie-derived. */
     char args[48];
     snprintf(args, sizeof(args), "[%u]", owner_uid);
-    char *names = rpc_result_str(loop, sud, sid, "git_repo.store.list_for_owner", args, NULL);
+    char *names = rpc_result_str(loop, sud, sid, "git_repo.git_repo.list_for_owner", args, NULL);
 
     struct buf b; buf_init(&b);
     render_shell_open(&b, "Repositories", uname, "projects", is_admin);
@@ -1005,7 +1005,7 @@ static void route_repos_get(struct yloop *loop, struct yloop_stream *s,
  * These routes live in the SIDECAR (the picoforge webapp) — it serves
  * its own static assets (Monaco under /static/vendor/monaco), per gh#5
  * the gateway serves none. Data comes from the gateway over POST /_rpc:
- * git_repo.store.read_tree / read_file / put_file. The sidecar holds no
+ * git_repo.git_repo.read_tree / read_file / put_file. The sidecar holds no
  * plugins and no backend ports; it relays the opaque picomesh-sid so the
  * gateway authenticates and the git_repo backend authorizes (public
  * repos world-readable, writes owner-only).                             */
@@ -1127,6 +1127,38 @@ static char *rpc_result_str(struct yloop *loop, const struct serve_ud *sud,
     return out;
 }
 
+/* Perform an RPC and return the parsed response document so the caller can
+ * walk a structured `result` (e.g. a JSON array). `*result_out` points at
+ * the `result` value inside the returned doc (any JSON type, NULL if
+ * absent). The caller owns the doc and must yjson_doc_free it; values
+ * borrowed from it are valid until then. NULL on transport/parse error. */
+static struct yjson_doc *rpc_result_doc(struct yloop *loop, const struct serve_ud *sud,
+                                        const char *sid, const char *rpc_path,
+                                        const char *args_json,
+                                        const struct yjson_value **result_out)
+{
+    if (result_out) *result_out = NULL;
+    size_t need = strlen(rpc_path) + strlen(args_json) + 32;
+    char *body = malloc(need);
+    if (!body) return NULL;
+    int n = snprintf(body, need, "{\"path\":\"%s\",\"args\":%s}", rpc_path, args_json);
+    if (n <= 0 || (size_t)n >= need) { free(body); return NULL; }
+
+    struct http_response resp;
+    int rc = http_post_json(loop, &sud->gw, "/_rpc", NULL, sid, body, (size_t)n, &resp);
+    free(body);
+    if (rc != 0) { http_response_free(&resp); return NULL; }
+
+    struct yjson_doc *doc = NULL;
+    if (resp.body) {
+        doc = yjson_parse(resp.body, resp.body_len);
+        if (doc && result_out)
+            *result_out = yjson_object_get(yjson_doc_root(doc), "result");
+    }
+    http_response_free(&resp);
+    return doc;
+}
+
 /* Split "<account>/<repo>[/<verb>]" out of a path (query stripped). On
  * success fills acct/repo/verb (verb "" if none) and returns 1. */
 static int parse_repo_path(const char *path, size_t path_len,
@@ -1153,7 +1185,7 @@ static int parse_repo_path(const char *path, size_t path_len,
 }
 
 /* GET /<account>/<repo>[?dir=<subdir>] — file browser. Lists the tree via
- * git_repo.store.read_tree; dirs link deeper, files link to /edit. */
+ * git_repo.git_repo.read_tree; dirs link deeper, files link to /edit. */
 static void route_repo_browse(struct yloop *loop, struct yloop_stream *s,
                               const struct serve_ud *sud, const char *sid,
                               const char *uname, const char *acct, const char *repo,
@@ -1168,7 +1200,7 @@ static void route_repo_browse(struct yloop *loop, struct yloop_stream *s,
     char args[1200];
     snprintf(args, sizeof(args), "[%u,\"\",\"%s\"]", rid, dir_esc);
     int err = 0;
-    char *tree = rpc_result_str(loop, sud, sid, "git_repo.store.read_tree", args, &err);
+    char *tree = rpc_result_str(loop, sud, sid, "git_repo.git_repo.read_tree", args, &err);
 
     long ic = -1, rc = -1;
     repo_tab_counts(loop, sud, sid, rid, &ic, &rc);
@@ -1352,7 +1384,7 @@ static void route_repo_edit_get(struct yloop *loop, struct yloop_stream *s,
     char args[1200];
     snprintf(args, sizeof(args), "[%u,\"\",\"%s\"]", rid, path_esc);
     int err = 0;
-    char *content = rpc_result_str(loop, sud, sid, "git_repo.store.read_file", args, &err);
+    char *content = rpc_result_str(loop, sud, sid, "git_repo.git_repo.read_file", args, &err);
     render_editor_page(s, uname, acct, repo, path, content ? content : "",
                        /*is_new=*/(content == NULL), is_admin, keep_alive);
     free(content); free(path);
@@ -1389,7 +1421,7 @@ static void route_repo_edit_post(struct yloop *loop, struct yloop_stream *s,
     if (ok) {
         snprintf(args, (size_t)CAP + 4096, "[%u,\"%s\",\"%s\",\"%s\",\"\",\"\"]", rid, pe, ce, me);
         int err = 0;
-        char *oid = rpc_result_str(loop, sud, sid, "git_repo.store.put_file", args, &err);
+        char *oid = rpc_result_str(loop, sud, sid, "git_repo.git_repo.put_file", args, &err);
         free(oid);
         if (err || !oid) ok = 0;
     }
@@ -1459,7 +1491,7 @@ static uint32_t resolve_uid(struct yloop *loop, const struct serve_ud *sud,
     if (!sid || !*sid) return 0;
     char args[96];
     snprintf(args, sizeof(args), "[\"%s\"]", sid);
-    long uid = rpc_result_int(loop, sud, sid, "session.store.lookup", args, 0);
+    long uid = rpc_result_int(loop, sud, sid, "session.session.lookup", args, 0);
     return uid > 0 ? (uint32_t)uid : 0;
 }
 
@@ -1578,7 +1610,7 @@ static void page_close_and_send(struct yloop_stream *s, struct buf *b, int keep_
 }
 
 /* GET /<account> — account landing: the account's repositories listed by
- * name (git_repo.store.list_for_owner) + the count. */
+ * name (git_repo.git_repo.list_for_owner) + the count. */
 static void page_account_landing(struct yloop *loop, struct yloop_stream *s,
                                  const struct serve_ud *sud, const char *sid,
                                  const char *uname, const char *acct, int is_admin,
@@ -1587,8 +1619,8 @@ static void page_account_landing(struct yloop *loop, struct yloop_stream *s,
     uint32_t owner = hash_username(acct);
     char args[48];
     snprintf(args, sizeof(args), "[%u]", owner);
-    long repos = rpc_result_int(loop, sud, sid, "git_repo.store.count_for_owner", args, -1);
-    char *names = rpc_result_str(loop, sud, sid, "git_repo.store.list_for_owner", args, NULL);
+    long repos = rpc_result_int(loop, sud, sid, "git_repo.git_repo.count_for_owner", args, -1);
+    char *names = rpc_result_str(loop, sud, sid, "git_repo.git_repo.list_for_owner", args, NULL);
 
     struct buf b; buf_init(&b);
     char title[160];
@@ -1620,7 +1652,7 @@ static void page_account_landing(struct yloop *loop, struct yloop_stream *s,
 }
 
 /* GET /<account>/<repo>/issues[?status=open|closed] — open-issue count for
- * the repo, plus the new/close action forms. Data: issues.store.count_open_in_repo. */
+ * the repo, plus the new/close action forms. Data: issues.issues.count_open_in_repo. */
 static void page_repo_issues(struct yloop *loop, struct yloop_stream *s,
                              const struct serve_ud *sud, const char *sid,
                              const char *uname, const char *acct, const char *repo,
@@ -1630,12 +1662,12 @@ static void page_repo_issues(struct yloop *loop, struct yloop_stream *s,
     uint32_t rid = repo_hash(acct, repo);
     char args[48];
     snprintf(args, sizeof(args), "[%u]", rid);
-    long open_n = rpc_result_int(loop, sud, sid, "issues.store.count_open_in_repo", args, -1);
+    long open_n = rpc_result_int(loop, sud, sid, "issues.issues.count_open_in_repo", args, -1);
 
     long rc = -1;
     if (service_active(sud, "git_pipeline")) {
-        long p = rpc_result_int(loop, sud, sid, "git_pipeline.store.count_pending", "[]", 0);
-        long r = rpc_result_int(loop, sud, sid, "git_pipeline.store.count_running", "[]", 0);
+        long p = rpc_result_int(loop, sud, sid, "git_pipeline.git_pipeline.count_pending", "[]", 0);
+        long r = rpc_result_int(loop, sud, sid, "git_pipeline.git_pipeline.count_running", "[]", 0);
         rc = p + r;
     }
 
@@ -1682,22 +1714,22 @@ static void page_repo_issues(struct yloop *loop, struct yloop_stream *s,
 }
 
 /* GET /<account>/<repo>/runs — pipeline run counts + enqueue/lease forms.
- * Data: git_pipeline.store.count_pending/running/done (global counts today). */
+ * Data: git_pipeline.git_pipeline.count_pending/running/done (global counts today). */
 static void page_repo_runs(struct yloop *loop, struct yloop_stream *s,
                            const struct serve_ud *sud, const char *sid,
                            const char *uname, const char *acct, const char *repo,
                            const char *full_path, int is_admin, int keep_alive)
 {
     (void)full_path;
-    long q = rpc_result_int(loop, sud, sid, "git_pipeline.store.count_pending", "[]", 0);
-    long r = rpc_result_int(loop, sud, sid, "git_pipeline.store.count_running", "[]", 0);
-    long d = rpc_result_int(loop, sud, sid, "git_pipeline.store.count_done",    "[]", 0);
+    long q = rpc_result_int(loop, sud, sid, "git_pipeline.git_pipeline.count_pending", "[]", 0);
+    long r = rpc_result_int(loop, sud, sid, "git_pipeline.git_pipeline.count_running", "[]", 0);
+    long d = rpc_result_int(loop, sud, sid, "git_pipeline.git_pipeline.count_done",    "[]", 0);
 
     uint32_t rid = repo_hash(acct, repo);
     long ic = -1;
     if (service_active(sud, "issues")) {
         char ia[48]; snprintf(ia, sizeof(ia), "[%u]", rid);
-        ic = rpc_result_int(loop, sud, sid, "issues.store.count_open_in_repo", ia, -1);
+        ic = rpc_result_int(loop, sud, sid, "issues.issues.count_open_in_repo", ia, -1);
     }
 
     struct buf b; buf_init(&b);
@@ -1752,16 +1784,16 @@ static void page_admin_overview(struct yloop *loop, struct yloop_stream *s,
                                 const char *uname, int keep_alive)
 {
     long users = service_active(sud, "accounts")
-        ? rpc_result_int(loop, sud, sid, "accounts.store.count", "[]", -1) : -1;
+        ? rpc_result_int(loop, sud, sid, "accounts.accounts.count", "[]", -1) : -1;
     long repos = service_active(sud, "git_repo")
-        ? rpc_result_int(loop, sud, sid, "git_repo.store.count_total", "[]", -1) : -1;
+        ? rpc_result_int(loop, sud, sid, "git_repo.git_repo.count_total", "[]", -1) : -1;
     long toks  = service_active(sud, "personal_access_tokens")
-        ? rpc_result_int(loop, sud, sid, "personal_access_tokens.store.count_active", "[]", -1) : -1;
+        ? rpc_result_int(loop, sud, sid, "personal_access_tokens.personal_access_tokens.count_active", "[]", -1) : -1;
     long runs = -1;
     if (service_active(sud, "git_pipeline")) {
-        long p = rpc_result_int(loop, sud, sid, "git_pipeline.store.count_pending", "[]", 0);
-        long r = rpc_result_int(loop, sud, sid, "git_pipeline.store.count_running", "[]", 0);
-        long d = rpc_result_int(loop, sud, sid, "git_pipeline.store.count_done",    "[]", 0);
+        long p = rpc_result_int(loop, sud, sid, "git_pipeline.git_pipeline.count_pending", "[]", 0);
+        long r = rpc_result_int(loop, sud, sid, "git_pipeline.git_pipeline.count_running", "[]", 0);
+        long d = rpc_result_int(loop, sud, sid, "git_pipeline.git_pipeline.count_done",    "[]", 0);
         runs = p + r + d;
     }
 
@@ -1791,14 +1823,16 @@ static void page_admin_overview(struct yloop *loop, struct yloop_stream *s,
     render_shell_close(s, &b, keep_alive);
 }
 
-/* GET /admin/users — accounts administration. Data: accounts.store.count. */
+/* GET /admin/users — accounts administration. Data: accounts.accounts.count. */
 static void page_admin_users(struct yloop *loop, struct yloop_stream *s,
                              const struct serve_ud *sud, const char *sid,
                              const char *uname, int keep_alive)
 {
-    long users = rpc_result_int(loop, sud, sid, "accounts.store.count", "[]", -1);
-    /* The real user roster: newline-separated "<uid>\t<username>" rows. */
-    char *list = rpc_result_str(loop, sud, sid, "accounts.store.list", "[]", NULL);
+    long users = rpc_result_int(loop, sud, sid, "accounts.accounts.count", "[]", -1);
+    /* The real user roster: a JSON array of {"uid":<n>,"name":"<s>"}. */
+    const struct yjson_value *roster = NULL;
+    struct yjson_doc *roster_doc =
+        rpc_result_doc(loop, sud, sid, "accounts.accounts.list", "[]", &roster);
 
     struct buf b; buf_init(&b);
     page_open(&b, "Users", uname, "admin-users", /*is_admin=*/1);
@@ -1814,20 +1848,19 @@ static void page_admin_users(struct yloop *loop, struct yloop_stream *s,
         int any = 0;
         buf_puts(&b, "<table class=\"file-table\"><thead><tr><th>uid</th>"
                      "<th>username</th></tr></thead><tbody>");
-        if (list && *list) {
-            char *save = NULL;
-            for (char *line = strtok_r(list, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
-                if (!*line) continue;
-                char *tab = strchr(line, '\t');
-                const char *name = tab ? tab + 1 : "";
-                if (tab) *tab = 0;
-                any = 1;
-                buf_puts(&b, "<tr><td class=\"muted\">");
-                buf_esc(&b, line);
-                buf_puts(&b, "</td><td>");
-                buf_esc(&b, name);
-                buf_puts(&b, "</td></tr>");
-            }
+        size_t roster_n = roster ? yjson_array_size(roster) : 0;
+        for (size_t i = 0; i < roster_n; ++i) {
+            const struct yjson_value *e = yjson_array_at(roster, i);
+            const char *name = yjson_as_string(yjson_object_get(e, "name"), "");
+            char uid_buf[24];
+            snprintf(uid_buf, sizeof(uid_buf), "%lld",
+                     (long long)yjson_as_int(yjson_object_get(e, "uid"), 0));
+            any = 1;
+            buf_puts(&b, "<tr><td class=\"muted\">");
+            buf_esc(&b, uid_buf);
+            buf_puts(&b, "</td><td>");
+            buf_esc(&b, name);
+            buf_puts(&b, "</td></tr>");
         }
         if (!any)
             buf_puts(&b, "<tr><td colspan=\"2\" class=\"muted\">No users registered yet.</td></tr>");
@@ -1838,17 +1871,17 @@ static void page_admin_users(struct yloop *loop, struct yloop_stream *s,
                  "user creation with credentials and role assignment is not implemented "
                  "yet.</p>");
     panel_close(&b);
-    free(list);
+    yjson_doc_free(roster_doc);
     page_close_and_send(s, &b, keep_alive);
 }
 
 /* GET /admin/repos — repositories administration. Data:
- * git_repo.store.count_total (no global list API yet). */
+ * git_repo.git_repo.count_total (no global list API yet). */
 static void page_admin_repos(struct yloop *loop, struct yloop_stream *s,
                              const struct serve_ud *sud, const char *sid,
                              const char *uname, int keep_alive)
 {
-    long total = rpc_result_int(loop, sud, sid, "git_repo.store.count_total", "[]", -1);
+    long total = rpc_result_int(loop, sud, sid, "git_repo.git_repo.count_total", "[]", -1);
 
     struct buf b; buf_init(&b);
     page_open(&b, "Repositories", uname, "admin-repos", /*is_admin=*/1);
@@ -1858,7 +1891,7 @@ static void page_admin_repos(struct yloop *loop, struct yloop_stream *s,
     buf_puts(&b, "</section>");
     panel_open(&b, "Repositories", NULL);
     buf_puts(&b, "<p class=\"muted\">A mesh-wide repository listing arrives with the "
-                 "<code>git_repo.store.list_all</code> API; today only the total is "
+                 "<code>git_repo.git_repo.list_all</code> API; today only the total is "
                  "exposed. Browse a specific account's repositories from its namespace "
                  "page (e.g. <code>/&lt;account&gt;</code>).</p>");
     panel_close(&b);
@@ -1866,14 +1899,14 @@ static void page_admin_repos(struct yloop *loop, struct yloop_stream *s,
 }
 
 /* GET /admin/tokens — personal access token administration. Data:
- * personal_access_tokens.store.count_active. */
+ * personal_access_tokens.personal_access_tokens.count_active. */
 static void page_admin_tokens(struct yloop *loop, struct yloop_stream *s,
                               const struct serve_ud *sud, const char *sid,
                               const char *uname, int keep_alive)
 {
     int active = service_active(sud, "personal_access_tokens");
     long toks = active
-        ? rpc_result_int(loop, sud, sid, "personal_access_tokens.store.count_active", "[]", -1)
+        ? rpc_result_int(loop, sud, sid, "personal_access_tokens.personal_access_tokens.count_active", "[]", -1)
         : -1;
 
     struct buf b; buf_init(&b);
@@ -1933,7 +1966,7 @@ static void page_repo_settings(struct yloop *loop, struct yloop_stream *s,
 }
 
 /* GET /search?q=<term> — filter the signed-in user's repositories by name
- * substring (case-insensitive). Reuses git_repo.store.list_for_owner over
+ * substring (case-insensitive). Reuses git_repo.git_repo.list_for_owner over
  * the gateway and matches in-process; no backend search method is assumed.
  * Not signed in → bounce to /login. */
 static void page_search(struct yloop *loop, struct yloop_stream *s,
@@ -1956,7 +1989,7 @@ static void page_search(struct yloop *loop, struct yloop_stream *s,
 
     char args[48];
     snprintf(args, sizeof(args), "[%u]", hash_username(uname));
-    char *names = rpc_result_str(loop, sud, sid, "git_repo.store.list_for_owner", args, NULL);
+    char *names = rpc_result_str(loop, sud, sid, "git_repo.git_repo.list_for_owner", args, NULL);
 
     struct buf b; buf_init(&b);
     page_open(&b, "Search", uname, "projects", is_admin);
@@ -2047,9 +2080,9 @@ static void page_dashboard_runs(struct yloop *loop, struct yloop_stream *s,
                                 const struct serve_ud *sud, const char *sid,
                                 const char *uname, int is_admin, int keep_alive)
 {
-    long q = rpc_result_int(loop, sud, sid, "git_pipeline.store.count_pending", "[]", 0);
-    long r = rpc_result_int(loop, sud, sid, "git_pipeline.store.count_running", "[]", 0);
-    long d = rpc_result_int(loop, sud, sid, "git_pipeline.store.count_done",    "[]", 0);
+    long q = rpc_result_int(loop, sud, sid, "git_pipeline.git_pipeline.count_pending", "[]", 0);
+    long r = rpc_result_int(loop, sud, sid, "git_pipeline.git_pipeline.count_running", "[]", 0);
+    long d = rpc_result_int(loop, sud, sid, "git_pipeline.git_pipeline.count_done",    "[]", 0);
     struct buf b; buf_init(&b);
     render_shell_open(&b, "Pipelines", uname, "runs", is_admin);
     render_page_header(&b, "Pipelines", "Pipeline activity across the mesh.", NULL);
@@ -2073,7 +2106,7 @@ static void page_dashboard_issues(struct yloop *loop, struct yloop_stream *s,
 {
     char args[48];
     snprintf(args, sizeof(args), "[%u]", hash_username(uname));
-    char *names = rpc_result_str(loop, sud, sid, "git_repo.store.list_for_owner", args, NULL);
+    char *names = rpc_result_str(loop, sud, sid, "git_repo.git_repo.list_for_owner", args, NULL);
 
     struct buf b; buf_init(&b);
     render_shell_open(&b, "Issues", uname, "issues", is_admin);
@@ -2091,7 +2124,7 @@ static void page_dashboard_issues(struct yloop *loop, struct yloop_stream *s,
             long open_n = -1;
             if (service_active(sud, "issues")) {
                 char ia[48]; snprintf(ia, sizeof(ia), "[%u]", rid);
-                open_n = rpc_result_int(loop, sud, sid, "issues.store.count_open_in_repo", ia, -1);
+                open_n = rpc_result_int(loop, sud, sid, "issues.issues.count_open_in_repo", ia, -1);
             }
             buf_puts(&b, "<tr><td><a class=\"file-name\" href=\"/");
             buf_esc(&b, uname); buf_puts(&b, "/"); buf_esc(&b, line); buf_puts(&b, "/issues\">");
@@ -2125,7 +2158,7 @@ static void post_issue_new(struct yloop *loop, struct yloop_stream *s,
     uint32_t rid = repo_hash(acct, repo);
     char args[64];
     snprintf(args, sizeof(args), "[%u,%u]", rid, uid);
-    rpc_result_int(loop, sud, sid, "issues.store.open", args, -1);
+    rpc_result_int(loop, sud, sid, "issues.issues.open", args, -1);
     char where[300];
     snprintf(where, sizeof(where), "/%s/%s/issues", acct, repo);
     send_redirect(s, where, NULL, keep_alive);
@@ -2141,7 +2174,7 @@ static void post_issue_close(struct yloop *loop, struct yloop_stream *s,
     if (iid_s && *iid_s) {
         char args[48];
         snprintf(args, sizeof(args), "[%lu]", strtoul(iid_s, NULL, 10));
-        rpc_result_int(loop, sud, sid, "issues.store.close", args, -1);
+        rpc_result_int(loop, sud, sid, "issues.issues.close", args, -1);
     }
     free(iid_s);
     char where[300];
@@ -2156,7 +2189,7 @@ static void post_run_new(struct yloop *loop, struct yloop_stream *s,
     if (!resolve_uid(loop, sud, sid)) { send_redirect(s, "/login", NULL, keep_alive); return; }
     char args[48];
     snprintf(args, sizeof(args), "[%u]", repo_hash(acct, repo));
-    rpc_result_int(loop, sud, sid, "git_pipeline.store.enqueue", args, -1);
+    rpc_result_int(loop, sud, sid, "git_pipeline.git_pipeline.enqueue", args, -1);
     char where[300];
     snprintf(where, sizeof(where), "/%s/%s/runs", acct, repo);
     send_redirect(s, where, NULL, keep_alive);
@@ -2174,7 +2207,7 @@ static void post_run_lease(struct yloop *loop, struct yloop_stream *s,
     free(runner_s);
     char args[48];
     snprintf(args, sizeof(args), "[%lu]", runner);
-    rpc_result_int(loop, sud, sid, "git_pipeline.store.lease", args, -1);
+    rpc_result_int(loop, sud, sid, "git_pipeline.git_pipeline.lease", args, -1);
     char where[300];
     snprintf(where, sizeof(where), "/%s/%s/runs", acct, repo);
     send_redirect(s, where, NULL, keep_alive);
@@ -2199,7 +2232,7 @@ static void relay_post(struct yloop *loop, struct yloop_stream *s,
 }
 
 /* POST /repos/new — create a repository for the signed-in user. We call
- * git_repo.store.make over the gateway /_rpc directly (owner uid =
+ * git_repo.git_repo.make over the gateway /_rpc directly (owner uid =
  * hash_username(uname), matching how the backend keys repos), rather than
  * relaying the gateway's HTML action — that action needs the uname cookie,
  * which a header-only relay doesn't carry. Then bounce to /repos. */
@@ -2223,7 +2256,7 @@ static void webapp_repos_new(struct yloop *loop, struct yloop_stream *s,
             char args[256];
             snprintf(args, sizeof(args), "[%u,\"%s\",\"%s\"]",
                      cl.uid, uname_esc, name_esc);
-            rpc_result_int(loop, sud, sid, "git_repo.store.make", args, -1);
+            rpc_result_int(loop, sud, sid, "git_repo.git_repo.make", args, -1);
         }
     }
     free(name);

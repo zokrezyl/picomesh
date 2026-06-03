@@ -4,7 +4,7 @@
 # Layout:
 #
 #   parent picomesh --frontend yhttp --port 8800        ← control channel (REST)
-#     ↳ mesh_store_reconcile_from_config spawns one child per service
+#     ↳ mesh_mesh_reconcile_from_config spawns one child per service
 #       in mesh.services.* on the service's own port. Each backend
 #       child uses --frontend yrpc (binary, for inter-service RPC).
 #       The 'gateway' service (port 8090) overrides this with
@@ -84,13 +84,13 @@ expect_contains() {
     fi
 }
 
-echo "[2/6] create mesh_store on parent"
-out=$(http_post "$CTRL" /create '{"class":"mesh_store"}')
+echo "[2/6] create mesh_mesh on parent"
+out=$(http_post "$CTRL" /create '{"class":"mesh_mesh"}')
 H=$(echo "$out" | sed -E 's/.*"handle":([0-9]+).*/\1/')
-expect_contains 'mesh_store create' "$out" '"handle":[0-9]+'
+expect_contains 'mesh_mesh create' "$out" '"handle":[0-9]+'
 
 echo "[3/6] mesh.reconcile_from_config — spawn every service as a child"
-out=$(http_post "$CTRL" /invoke "{\"method\":\"mesh_store_reconcile_from_config\",\"handle\":$H,\"args\":[]}")
+out=$(http_post "$CTRL" /invoke "{\"method\":\"mesh_mesh_reconcile_from_config\",\"handle\":$H,\"args\":[]}")
 expect_contains 'reconcile spawn count > 0' "$out" '"result":[1-9][0-9]*'
 SPAWNED=$(echo "$out" | sed -E 's/.*"result":([0-9]+).*/\1/')
 echo "  spawned: $SPAWNED children"
@@ -174,14 +174,36 @@ expect_contains 'POST /repos/new → 303 /alice/website' "$hdrs" '303 See Other.
 # the webapp sources the page the gateway no longer renders.
 out=$(curl -sS --max-time 10 -XPOST http://127.0.0.1:$WEB/_rpc \
            -H 'Content-Type: application/json' \
-           -d '{"path":"git_repo.store.count_total","args":[]}')
+           -d '{"path":"git_repo.git_repo.count_total","args":[]}')
 expect_contains 'gateway /_rpc git_repo.count_total (repo data via API)' "$out" '"result":[1-9][0-9]*'
 
 # Parent control still alive.
-out=$(http_post "$CTRL" /invoke "{\"method\":\"mesh_store_count_children\",\"handle\":$H,\"args\":[]}")
+out=$(http_post "$CTRL" /invoke "{\"method\":\"mesh_mesh_count_children\",\"handle\":$H,\"args\":[]}")
 expect_contains "parent.count_children == $SPAWNED" "$out" "\"result\":$SPAWNED"
 
 echo
+# The webapp uses SO_REUSEPORT (shared yloop listener), so if a stale
+# picoforge-webapp from a prior run already holds :$SIDE, a fresh one would
+# silently CO-BIND it — the kernel load-balances requests across both and half
+# hit the stale binary (e.g. pre-rename RPC paths → "service unreachable").
+# We can't reach around to kill that leaked process here, so instead we refuse
+# to share the port: if :$SIDE is already held, bring the webapp up on a free
+# port and tell the operator exactly which pid to stop to reclaim :$SIDE.
+if ss -ltn 2>/dev/null | grep -q ":${SIDE} "; then
+    stale=$(ss -ltnp 2>/dev/null | grep ":${SIDE} " | grep -oE 'pid=[0-9]+' \
+              | cut -d= -f2 | sort -un | paste -sd' ' -)
+    altside=""
+    for cand in $(seq $((SIDE+1)) $((SIDE+20))); do
+        ss -ltn 2>/dev/null | grep -q ":${cand} " || { altside=$cand; break; }
+    done
+    [ -z "$altside" ] && altside=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
+    echo "  ⚠ :${SIDE} is held by a stale process (pid ${stale:-unknown}) — a leaked"
+    echo "    picoforge-webapp from an earlier run. Bringing the webapp up on :${altside}"
+    echo "    instead so the mesh comes up clean. To reclaim :${SIDE}: 'kill ${stale:-<pid>}'"
+    echo "    (it is a plain webapp — SIGTERM stops it) and re-run."
+    SIDE=$altside
+fi
+
 echo "[5b] standalone picoforge-webapp → gateway /_rpc on :${SIDE}"
 # The separated browser webapp: links no plugins, knows no backend
 # ports — every call leaves it as POST /_rpc against the gateway. This
@@ -193,6 +215,15 @@ echo "[5b] standalone picoforge-webapp → gateway /_rpc on :${SIDE}"
     > tmp/sidecar.log 2>&1 &
 SIDECAR=$!
 sleep 0.7
+
+# Sanity: our sidecar must now be the SOLE listener on :$SIDE (we picked a free
+# port above, so this should always hold — it guards against a TOCTOU race).
+holders=$(ss -ltnp 2>/dev/null | grep ":${SIDE} " | grep -oE 'pid=[0-9]+' \
+            | cut -d= -f2 | sort -un | paste -sd' ' -)
+if [ "$holders" != "$SIDECAR" ]; then
+    note_fail "picoforge-webapp is not the sole listener on :${SIDE} (holders: [${holders:-none}], ours: ${SIDECAR})."
+    tail -3 tmp/sidecar.log >&2
+fi
 
 # GET sidecar /login renders its own sign-in form (not the gateway's).
 out=$(curl -sS --max-time 10 "http://127.0.0.1:${SIDE}/login")
@@ -220,7 +251,7 @@ expect_contains 'sidecar POST /login → 303 /repos' "$hdrs" '303 See Other.*[Ll
 expect_contains 'sidecar relays gateway sid cookie' "$hdrs" 'Set-Cookie: picomesh-sid='
 
 # GET sidecar /repos renders a data page sourced from the gateway via
-# /_rpc (git_repo.store.count_total) — the sidecar holds no plugins.
+# /_rpc (git_repo.git_repo.count_total) — the sidecar holds no plugins.
 out=$(curl -sS --max-time 10 -b tmp/side-cookies.txt "http://127.0.0.1:${SIDE}/repos")
 expect_contains 'sidecar GET /repos renders'           "$out" '<h1>Repositories</h1>'
 expect_contains 'sidecar /repos sourced via gateway /_rpc' "$out" 'via the gateway'
@@ -299,17 +330,17 @@ code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$
 # Direct gateway-API checks: yaapp-style surface present, legacy gone.
 out=$(curl -sS --max-time 10 -XPOST "http://127.0.0.1:${WEB}/_rpc" \
            -H 'Content-Type: application/json' \
-           -d '{"path":"git_repo.store.count_total","args":[]}')
+           -d '{"path":"git_repo.git_repo.count_total","args":[]}')
 expect_contains 'gateway POST /_rpc {path,args}' "$out" '"result":'
 
 # Authenticated /_rpc round-trip with a real positional arg + result:
 # resolve alice's session (the sid the sidecar just stored) back to her
-# uid via session.store.lookup. Proves args marshalling, the remote
+# uid via session.session.lookup. Proves args marshalling, the remote
 # forward, and a meaningful non-zero return — not just a 0 count.
 ASID=$(awk '/picomesh-sid/ {print $NF}' tmp/side-cookies.txt 2>/dev/null | tail -1)
 out=$(curl -sS --max-time 10 -XPOST "http://127.0.0.1:${WEB}/_rpc" \
            -H 'Content-Type: application/json' \
-           -d "{\"path\":\"session.store.lookup\",\"args\":[\"${ASID:-0}\"]}")
+           -d "{\"path\":\"session.session.lookup\",\"args\":[\"${ASID:-0}\"]}")
 expect_contains 'gateway /_rpc authed round-trip (session.lookup→uid)' "$out" '"result":[1-9][0-9]*'
 
 # Malformed path → stable 400; unknown method → 404.
@@ -318,15 +349,15 @@ code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -XPOST "http://127.
 [ "$code" = "400" ] && note_pass "gateway /_rpc malformed path → 400" \
                      || note_fail "gateway /_rpc malformed path returned $code (want 400)"
 code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -XPOST "http://127.0.0.1:${WEB}/_rpc" \
-            -H 'Content-Type: application/json' -d '{"path":"git_repo.store.no_such_method","args":[]}')
+            -H 'Content-Type: application/json' -d '{"path":"git_repo.git_repo.no_such_method","args":[]}')
 [ "$code" = "404" ] && note_pass "gateway /_rpc unknown method → 404" \
                      || note_fail "gateway /_rpc unknown method returned $code (want 404)"
 
 # _describe contract: root lists services, class form lists methods.
 out=$(curl -sS --max-time 10 "http://127.0.0.1:${WEB}/_describe")
 expect_contains 'gateway GET /_describe lists services' "$out" '"services":\['
-out=$(curl -sS --max-time 10 "http://127.0.0.1:${WEB}/git_repo.store/_describe")
-expect_contains 'gateway /<class>/_describe lists methods' "$out" 'git_repo_store_count_total'
+out=$(curl -sS --max-time 10 "http://127.0.0.1:${WEB}/git_repo.git_repo/_describe")
+expect_contains 'gateway /<class>/_describe lists methods' "$out" 'git_repo_git_repo_count_total'
 
 # gh#15: generic service-console tooling. Two SEPARATE, app-agnostic nodes
 # (no picoforge routes): a yrpc->yhttp transport bridge on :8230 (NOT the
@@ -340,9 +371,9 @@ CONSOLE=8231
 
 out=$(curl -sS --max-time 10 "http://127.0.0.1:${BRIDGE}/_describe")
 expect_contains 'bridge GET /_describe lists active services' "$out" '"services":\['
-expect_contains 'bridge /_describe enriches services with classes/methods' "$out" 'git_repo_store_count_total'
+expect_contains 'bridge /_describe enriches services with classes/methods' "$out" 'git_repo_git_repo_count_total'
 out=$(curl -sS --max-time 10 -XPOST "http://127.0.0.1:${BRIDGE}/_rpc" \
-           -H 'Content-Type: application/json' -d '{"path":"git_repo.store.count_total","args":[]}')
+           -H 'Content-Type: application/json' -d '{"path":"git_repo.git_repo.count_total","args":[]}')
 expect_contains 'bridge POST /_rpc forwards to the yrpc backend' "$out" '"result":'
 # The bridge is pure transport: NO console, NO HTML/auth surface.
 code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${BRIDGE}/_alpine")
@@ -357,19 +388,23 @@ expect_contains 'console GET /_alpine serves the generic page' "$out" 'picomesh 
 out=$(curl -sS --max-time 10 -XPOST "http://127.0.0.1:${CONSOLE}/_describe" -d '{}')
 expect_contains 'console proxies /_describe to the upstream bridge' "$out" '"services":\['
 out=$(curl -sS --max-time 10 -XPOST "http://127.0.0.1:${CONSOLE}/_rpc" \
-           -H 'Content-Type: application/json' -d '{"path":"git_repo.store.count_total","args":[]}')
+           -H 'Content-Type: application/json' -d '{"path":"git_repo.git_repo.count_total","args":[]}')
 expect_contains 'console proxies POST /_rpc to the upstream bridge' "$out" '"result":'
 
 # Legacy public surface retired on the gateway (8090)…
 code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
-            -XPOST "http://127.0.0.1:${WEB}/create" -d '{"class":"git_repo_store"}')
+            -XPOST "http://127.0.0.1:${WEB}/create" -d '{"class":"git_repo_git_repo"}')
 [ "$code" = "410" ] && note_pass "gateway retired POST /create (410)" \
                      || note_fail "gateway POST /create returned $code (want 410)"
 # …but the mesh control parent (8800) MUST still serve it for bootstrap.
-out=$(http_post "$CTRL" /create '{"class":"mesh_store"}')
+out=$(http_post "$CTRL" /create '{"class":"mesh_mesh"}')
 expect_contains 'control parent :8800 still serves /create' "$out" '"handle":[0-9]+'
 
-kill -KILL $SIDECAR 2>/dev/null || true
+# Keep the webapp sidecar ALIVE — it is the live page tier the banner points
+# the operator at (http://…:${SIDE}/login). The cleanup trap SIGTERMs it on
+# exit. (It used to be SIGKILLed here, which left the "live mesh" with no
+# browser UI and forced the operator to hand-start picoforge-webapp — the very
+# thing that leaks orphan webapps onto :8080.)
 
 echo
 echo "[5c] distributed tracing — the trace collector reconstructs a request tree"
@@ -388,17 +423,17 @@ PARENT_SPAN=1122334455667788
 traced=$(curl -sS --max-time 10 -D - -o /dev/null -XPOST "http://127.0.0.1:${WEB}/_rpc" \
     -H "traceparent: 00-${TRACE_ID}-${PARENT_SPAN}-01" \
     -H 'Content-Type: application/json' \
-    -d '{"path":"git_repo.store.count_total","args":[]}')
+    -d '{"path":"git_repo.git_repo.count_total","args":[]}')
 expect_contains 'gateway echoes a traceparent for our trace' "$traced" "traceparent: 00-${TRACE_ID}-"
 
 # Spans ship fire-and-forget — give the collector a moment to ingest.
 sleep 1.5
 
-# Query the trace back through the gateway: trace_collector.store.get_trace
+# Query the trace back through the gateway: trace_collector.trace_collector.get_trace
 # returns the whole trace as a JSON string in the /_rpc "result" field.
 trace_rpc=$(curl -sS --max-time 10 -XPOST "http://127.0.0.1:${WEB}/_rpc" \
     -H 'Content-Type: application/json' \
-    -d "{\"path\":\"trace_collector.store.get_trace\",\"args\":[\"${TRACE_ID}\"]}")
+    -d "{\"path\":\"trace_collector.trace_collector.get_trace\",\"args\":[\"${TRACE_ID}\"]}")
 # Reconstruct the tree: >= 2 spans across >1 service, with a child whose
 # parent_span_id resolves to another span (a real parent/child tree).
 tree_ok=$(printf '%s' "$trace_rpc" | python3 -c '
@@ -418,12 +453,12 @@ expect_contains 'collector reconstructs a linked cross-service span tree' "$tree
 # Service + latency aggregates are queryable through the gateway too.
 svc=$(curl -sS --max-time 10 -XPOST "http://127.0.0.1:${WEB}/_rpc" \
     -H 'Content-Type: application/json' \
-    -d '{"path":"trace_collector.store.services","args":[]}')
+    -d '{"path":"trace_collector.trace_collector.services","args":[]}')
 expect_contains 'collector services() lists the gateway'  "$svc" 'gateway'
 expect_contains 'collector services() lists git_repo'     "$svc" 'git_repo'
 lat=$(curl -sS --max-time 10 -XPOST "http://127.0.0.1:${WEB}/_rpc" \
     -H 'Content-Type: application/json' \
-    -d '{"path":"trace_collector.store.latency","args":["gateway","",0]}')
+    -d '{"path":"trace_collector.trace_collector.latency","args":["gateway","",0]}')
 expect_contains 'collector latency() returns an aggregate' "$lat" 'p50_ns'
 
 # The local op aggregate moved to /_perf; /_trace is demoted to a pointer.
@@ -465,15 +500,17 @@ if [ "$FAIL" -gt 0 ]; then
 fi
 echo ""
 echo "OK — mesh is live. parent log: tmp/mesh-parent.log"
-echo "    Browser:"
-echo "      open http://127.0.0.1:${WEB}/login   (server-side HTML)"
+echo "    Browser (picoforge-webapp — the page tier):"
+echo "      open http://127.0.0.1:${SIDE}/login   (server-side HTML)"
+echo "    Gateway (API only — /_rpc, /_describe; HTML 404s here):"
+echo "      curl http://127.0.0.1:${WEB}/_describe"
 echo "    Control plane:"
 echo "      curl http://127.0.0.1:${CTRL}/        (mesh REST)"
 echo "    Service console (gh#15 — generic, app-agnostic):"
 echo "      open http://127.0.0.1:8231/_alpine    (console -> yhttp bridge :8230 -> yrpc backends)"
 echo "    Tracing:"
 echo "      curl http://127.0.0.1:${WEB}/_perf    (local op-latency aggregate)"
-echo "      curl -XPOST http://127.0.0.1:${WEB}/_rpc -d '{\"path\":\"trace_collector.store.services\",\"args\":[]}'"
+echo "      curl -XPOST http://127.0.0.1:${WEB}/_rpc -d '{\"path\":\"trace_collector.trace_collector.services\",\"args\":[]}'"
 echo "                                            (trace collector via gateway — see docs/tracing.md)"
 echo "    Press Ctrl-C to tear everything down."
 

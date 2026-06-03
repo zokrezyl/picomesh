@@ -1,7 +1,7 @@
 methods:
-  - slot: store_register_service
+  - slot: mesh_register_service
     domain: mesh
-    owning_class: store
+    owning_class: mesh
     return_type: struct picomesh_int_result
     args:
       - name: ctx
@@ -14,9 +14,9 @@ methods:
         type: uint32_t
       - name: port
         type: uint32_t
-  - slot: store_resolve
+  - slot: mesh_resolve
     domain: mesh
-    owning_class: store
+    owning_class: mesh
     return_type: struct picomesh_uint32_result
     args:
       - name: ctx
@@ -27,9 +27,9 @@ methods:
         type: "struct yheaders *"
       - name: service_id
         type: uint32_t
-  - slot: store_forget
+  - slot: mesh_forget
     domain: mesh
-    owning_class: store
+    owning_class: mesh
     return_type: struct picomesh_int_result
     args:
       - name: ctx
@@ -40,9 +40,9 @@ methods:
         type: "struct yheaders *"
       - name: service_id
         type: uint32_t
-  - slot: store_count_services
+  - slot: mesh_count_services
     domain: mesh
-    owning_class: store
+    owning_class: mesh
     return_type: struct picomesh_size_result
     args:
       - name: ctx
@@ -51,9 +51,9 @@ methods:
         type: "struct object *"
       - name: hdrs
         type: "struct yheaders *"
-  - slot: store_spawn_picomesh
+  - slot: mesh_spawn_picomesh
     domain: mesh
-    owning_class: store
+    owning_class: mesh
     return_type: struct picomesh_int_result
     args:
       - name: ctx
@@ -64,9 +64,9 @@ methods:
         type: "struct yheaders *"
       - name: port
         type: uint32_t
-  - slot: store_kill_pid
+  - slot: mesh_kill_pid
     domain: mesh
-    owning_class: store
+    owning_class: mesh
     return_type: struct picomesh_int_result
     args:
       - name: ctx
@@ -77,9 +77,9 @@ methods:
         type: "struct yheaders *"
       - name: pid
         type: int32_t
-  - slot: store_count_children
+  - slot: mesh_count_children
     domain: mesh
-    owning_class: store
+    owning_class: mesh
     return_type: struct picomesh_size_result
     args:
       - name: ctx
@@ -88,9 +88,9 @@ methods:
         type: "struct object *"
       - name: hdrs
         type: "struct yheaders *"
-  - slot: store_reconcile_from_config
+  - slot: mesh_reconcile_from_config
     domain: mesh
-    owning_class: store
+    owning_class: mesh
     return_type: struct picomesh_int_result
     args:
       - name: ctx
@@ -99,9 +99,9 @@ methods:
         type: "struct object *"
       - name: hdrs
         type: "struct yheaders *"
-  - slot: store_reconcile
+  - slot: mesh_reconcile
     domain: mesh
-    owning_class: store
+    owning_class: mesh
     return_type: struct picomesh_int_result
     args:
       - name: ctx
@@ -111,39 +111,39 @@ methods:
       - name: hdrs
         type: "struct yheaders *"
 classes:
-  - name: store
+  - name: mesh
     domain: mesh
-    accessor: mesh_store_class_get
+    accessor: mesh_mesh_class_get
     type: regular
     source_file: /home/misi/work/my/picomesh/src/picomesh/plugins/mesh/store.c
     parent: null
     mixins: []
-    data: struct mesh_store_data
+    data: struct mesh_mesh_data
     ops:
-      - slot: store_register_service
+      - slot: mesh_register_service
         slot_domain: mesh
-        impl: mesh_store_register_service_impl
-      - slot: store_resolve
+        impl: mesh_mesh_register_service_impl
+      - slot: mesh_resolve
         slot_domain: mesh
-        impl: mesh_store_resolve_impl
-      - slot: store_forget
+        impl: mesh_mesh_resolve_impl
+      - slot: mesh_forget
         slot_domain: mesh
-        impl: mesh_store_forget_impl
-      - slot: store_count_services
+        impl: mesh_mesh_forget_impl
+      - slot: mesh_count_services
         slot_domain: mesh
-        impl: mesh_store_count_services_impl
-      - slot: store_spawn_picomesh
+        impl: mesh_mesh_count_services_impl
+      - slot: mesh_spawn_picomesh
         slot_domain: mesh
-        impl: mesh_store_spawn_picomesh_impl
-      - slot: store_kill_pid
+        impl: mesh_mesh_spawn_picomesh_impl
+      - slot: mesh_kill_pid
         slot_domain: mesh
-        impl: mesh_store_kill_pid_impl
-      - slot: store_count_children
+        impl: mesh_mesh_kill_pid_impl
+      - slot: mesh_count_children
         slot_domain: mesh
-        impl: mesh_store_count_children_impl
-      - slot: store_reconcile_from_config
+        impl: mesh_mesh_count_children_impl
+      - slot: mesh_reconcile_from_config
         slot_domain: mesh
-        impl: mesh_store_reconcile_from_config_impl
-      - slot: store_reconcile
+        impl: mesh_mesh_reconcile_from_config_impl
+      - slot: mesh_reconcile
         slot_domain: mesh
-        impl: mesh_store_reconcile_impl
+        impl: mesh_mesh_reconcile_impl

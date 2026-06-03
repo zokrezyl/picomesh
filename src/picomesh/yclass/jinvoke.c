@@ -39,3 +39,37 @@ jinvoke_fn jinvoke_for(const char *qname)
     }
     return NULL;
 }
+
+/* ---- param-signature reflection: a parallel lookup chain ------------- */
+
+struct params_node {
+    jinvoke_params_lookup_fn fn;
+    struct params_node *next;
+};
+
+static struct params_node **params_chain_head(void)
+{
+    static struct params_node *head = NULL;
+    return &head;
+}
+
+void jinvoke_params_add_lookup(jinvoke_params_lookup_fn fn)
+{
+    if (!fn) return;
+    struct params_node *node = calloc(1, sizeof(*node));
+    if (!node) return;
+    struct params_node **head = params_chain_head();
+    node->fn = fn;
+    node->next = *head;
+    *head = node;
+}
+
+const struct jinvoke_params *jinvoke_params_for(const char *qname)
+{
+    if (!qname) return NULL;
+    for (struct params_node *n = *params_chain_head(); n; n = n->next) {
+        const struct jinvoke_params *p = n->fn(qname);
+        if (p) return p;
+    }
+    return NULL;
+}

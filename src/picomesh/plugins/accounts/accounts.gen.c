@@ -2,42 +2,45 @@
 #include "accounts.internal.h"
 
 __attribute__((unused))
-static accounts_store_register_fn _accounts_store_accounts_store_register_check = accounts_store_register_impl;
+static accounts_accounts_register_fn _accounts_accounts_accounts_accounts_register_check = accounts_accounts_register_impl;
 __attribute__((unused))
-static accounts_store_exists_fn _accounts_store_accounts_store_exists_check = accounts_store_exists_impl;
+static accounts_accounts_exists_fn _accounts_accounts_accounts_accounts_exists_check = accounts_accounts_exists_impl;
 __attribute__((unused))
-static accounts_store_set_balance_fn _accounts_store_accounts_store_set_balance_check = accounts_store_set_balance_impl;
+static accounts_accounts_set_balance_fn _accounts_accounts_accounts_accounts_set_balance_check = accounts_accounts_set_balance_impl;
 __attribute__((unused))
-static accounts_store_balance_fn _accounts_store_accounts_store_balance_check = accounts_store_balance_impl;
+static accounts_accounts_balance_fn _accounts_accounts_accounts_accounts_balance_check = accounts_accounts_balance_impl;
 __attribute__((unused))
-static accounts_store_count_fn _accounts_store_accounts_store_count_check = accounts_store_count_impl;
+static accounts_accounts_count_fn _accounts_accounts_accounts_accounts_count_check = accounts_accounts_count_impl;
 __attribute__((unused))
-static accounts_store_list_fn _accounts_store_accounts_store_list_check = accounts_store_list_impl;
+static accounts_accounts_list_fn _accounts_accounts_accounts_accounts_list_check = accounts_accounts_list_impl;
+__attribute__((unused))
+static accounts_accounts_list_all_fn _accounts_accounts_accounts_accounts_list_all_check = accounts_accounts_list_all_impl;
 
-struct class_ptr_result accounts_store_class_get(void)
+struct class_ptr_result accounts_accounts_class_get(void)
 {
     static const struct class *cls = NULL;
     if (cls) return PICOMESH_OK(class_ptr, cls);
-    ydebug("registering class=accounts_store");
+    ydebug("registering class=accounts_accounts");
 
     static const struct class_descriptor desc = {
-        .name = "accounts_store",
+        .name = "accounts_accounts",
         .type = CLASS_TYPE_REGULAR,
-        .data_size = sizeof(struct accounts_store_data),
+        .data_size = sizeof(struct accounts_accounts_data),
     };
     static const struct op ops[] = {
-        {"accounts", "store_register", (method_id_t)accounts_store_register, (impl_t)accounts_store_register_impl},
-        {"accounts", "store_exists", (method_id_t)accounts_store_exists, (impl_t)accounts_store_exists_impl},
-        {"accounts", "store_set_balance", (method_id_t)accounts_store_set_balance, (impl_t)accounts_store_set_balance_impl},
-        {"accounts", "store_balance", (method_id_t)accounts_store_balance, (impl_t)accounts_store_balance_impl},
-        {"accounts", "store_count", (method_id_t)accounts_store_count, (impl_t)accounts_store_count_impl},
-        {"accounts", "store_list", (method_id_t)accounts_store_list, (impl_t)accounts_store_list_impl},
+        {"accounts", "accounts_register", (method_id_t)accounts_accounts_register, (impl_t)accounts_accounts_register_impl},
+        {"accounts", "accounts_exists", (method_id_t)accounts_accounts_exists, (impl_t)accounts_accounts_exists_impl},
+        {"accounts", "accounts_set_balance", (method_id_t)accounts_accounts_set_balance, (impl_t)accounts_accounts_set_balance_impl},
+        {"accounts", "accounts_balance", (method_id_t)accounts_accounts_balance, (impl_t)accounts_accounts_balance_impl},
+        {"accounts", "accounts_count", (method_id_t)accounts_accounts_count, (impl_t)accounts_accounts_count_impl},
+        {"accounts", "accounts_list", (method_id_t)accounts_accounts_list, (impl_t)accounts_accounts_list_impl},
+        {"accounts", "accounts_list_all", (method_id_t)accounts_accounts_list_all, (impl_t)accounts_accounts_list_all_impl},
     };
     struct class_ptr_result _r =
         class_register(&desc, ops, sizeof(ops) / sizeof(ops[0]),
                        NULL, NULL, 0);
     if (PICOMESH_IS_ERR(_r))
-        return PICOMESH_ERR(class_ptr, "accounts_store_class_get: class_register failed", _r);
+        return PICOMESH_ERR(class_ptr, "accounts_accounts_class_get: class_register failed", _r);
     cls = _r.value;
     return _r;
 }

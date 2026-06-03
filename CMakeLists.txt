@@ -57,15 +57,20 @@ add_library(picomesh_runtime STATIC
     src/picomesh/yclass/class.c
     src/picomesh/yclass/rpc.c
     src/picomesh/yclass/jinvoke.c
+    src/picomesh/yclass/minvoke.c
     src/picomesh/yclass/yheaders.c
+    src/picomesh/msgpack/msgpack.c
+    vendor/cmp/cmp.c
     src/picomesh/yco/coro.c
     src/picomesh/yloop/yloop.c
     src/picomesh/yengine/engine.c
+    src/picomesh/yengine/resolve.c
     src/picomesh/frontends/yrpc/yrpc.c
     src/picomesh/frontends/yttp/yttp.c
     src/picomesh/frontends/yhttp/yhttp.c
     src/picomesh/frontends/yhttp/frontend.c
     src/picomesh/frontends/alpine/alpine.c
+    src/picomesh/frontends/msgpack/msgpack.c
     src/picomesh/frontends/cli/cli.c
     src/picohttpparser/picohttpparser.c
     src/picomesh/yconfig/yconfig.c
@@ -78,6 +83,10 @@ target_include_directories(picomesh_runtime PUBLIC
     include/uthash
     include/picohttpparser
 )
+# Vendored MessagePack codec (cmp, MIT). SYSTEM so its header doesn't trip the
+# tree's -Wall -Wextra; the .c is third-party, compiled with warnings off.
+target_include_directories(picomesh_runtime SYSTEM PUBLIC vendor/cmp)
+set_source_files_properties(vendor/cmp/cmp.c PROPERTIES COMPILE_OPTIONS "-w")
 
 # All plugin public headers now land in include/picomesh/plugin/<name>/
 # (codegen output target). They're reachable through the repo-wide
@@ -182,6 +191,7 @@ endfunction()
 set(PICOMESH_PLUGINS
     storage
     sharded_storage
+    relational_storage
     calculator
     time
     accounts
@@ -212,6 +222,10 @@ foreach(_consumer session accounts password_authn token_issuer
                   github_authn)
     add_dependencies(picomesh_plugin_${_consumer}_codegen
                      picomesh_plugin_storage_codegen)
+    # These consume sharded_storage's generated header too (db_get/db_set/…
+    # and now db_list), so their AST-dump must run after its codegen.
+    add_dependencies(picomesh_plugin_${_consumer}_codegen
+                     picomesh_plugin_sharded_storage_codegen)
 endforeach()
 
 # The runtime's frontend (yhttp/frontend.c) and ymain's smoke `client`

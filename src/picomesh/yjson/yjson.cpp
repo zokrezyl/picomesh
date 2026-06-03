@@ -318,7 +318,7 @@ extern "C" void yjson_writer_free(struct yjson_writer *w)
     delete w;
 }
 
-extern "C" void yjson_w_begin_object(struct yjson_writer *w)
+extern "C" void yjson_writer_begin_object(struct yjson_writer *w)
 {
     if (!w) return;
     w_open(w);
@@ -326,7 +326,7 @@ extern "C" void yjson_w_begin_object(struct yjson_writer *w)
     w->stack.push_back({'o', 0, 0});
 }
 
-extern "C" void yjson_w_end_object(struct yjson_writer *w)
+extern "C" void yjson_writer_end_object(struct yjson_writer *w)
 {
     if (!w || w->stack.empty()) return;
     w->out.push_back('}');
@@ -334,7 +334,7 @@ extern "C" void yjson_w_end_object(struct yjson_writer *w)
     w_close_value(w);
 }
 
-extern "C" void yjson_w_begin_array(struct yjson_writer *w)
+extern "C" void yjson_writer_begin_array(struct yjson_writer *w)
 {
     if (!w) return;
     w_open(w);
@@ -342,7 +342,7 @@ extern "C" void yjson_w_begin_array(struct yjson_writer *w)
     w->stack.push_back({'a', 0, 1});
 }
 
-extern "C" void yjson_w_end_array(struct yjson_writer *w)
+extern "C" void yjson_writer_end_array(struct yjson_writer *w)
 {
     if (!w || w->stack.empty()) return;
     w->out.push_back(']');
@@ -350,7 +350,7 @@ extern "C" void yjson_w_end_array(struct yjson_writer *w)
     w_close_value(w);
 }
 
-extern "C" void yjson_w_key(struct yjson_writer *w, const char *key)
+extern "C" void yjson_writer_key(struct yjson_writer *w, const char *key)
 {
     if (!w || w->stack.empty()) return;
     auto &top = w->stack.back();
@@ -361,19 +361,19 @@ extern "C" void yjson_w_key(struct yjson_writer *w, const char *key)
     top.expects_value = 1;
 }
 
-extern "C" void yjson_w_null(struct yjson_writer *w)
+extern "C" void yjson_writer_null(struct yjson_writer *w)
 {
     if (!w) return; w_open(w); w->out.append("null"); w_close_value(w);
 }
 
-extern "C" void yjson_w_bool(struct yjson_writer *w, int v)
+extern "C" void yjson_writer_bool(struct yjson_writer *w, int v)
 {
     if (!w) return; w_open(w);
     w->out.append(v ? "true" : "false");
     w_close_value(w);
 }
 
-extern "C" void yjson_w_int(struct yjson_writer *w, int64_t v)
+extern "C" void yjson_writer_int(struct yjson_writer *w, int64_t v)
 {
     if (!w) return; w_open(w);
     char buf[32]; snprintf(buf, sizeof(buf), "%lld", (long long)v);
@@ -381,7 +381,7 @@ extern "C" void yjson_w_int(struct yjson_writer *w, int64_t v)
     w_close_value(w);
 }
 
-extern "C" void yjson_w_float(struct yjson_writer *w, double v)
+extern "C" void yjson_writer_float(struct yjson_writer *w, double v)
 {
     if (!w) return; w_open(w);
     char buf[64]; snprintf(buf, sizeof(buf), "%g", v);
@@ -389,14 +389,21 @@ extern "C" void yjson_w_float(struct yjson_writer *w, double v)
     w_close_value(w);
 }
 
-extern "C" void yjson_w_string(struct yjson_writer *w, const char *s)
+extern "C" void yjson_writer_string(struct yjson_writer *w, const char *s)
 {
     if (!w) return; w_open(w);
     escape_string(w->out, s ? s : "");
     w_close_value(w);
 }
 
-extern "C" const char *yjson_w_data(struct yjson_writer *w, size_t *len_out)
+extern "C" void yjson_writer_raw(struct yjson_writer *w, const char *json)
+{
+    if (!w) return; w_open(w);
+    w->out.append(json && *json ? json : "null");
+    w_close_value(w);
+}
+
+extern "C" const char *yjson_writer_data(struct yjson_writer *w, size_t *len_out)
 {
     if (!w) { if (len_out) *len_out = 0; return ""; }
     if (len_out) *len_out = w->out.size();

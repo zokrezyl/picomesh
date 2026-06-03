@@ -52,11 +52,11 @@ PARENT=$!
 
 for i in $(seq 1 40); do ss -ltn 2>/dev/null | grep -qE ":$CTRL\b" && break; sleep 0.25; done
 H=$(curl -sS --max-time 10 -XPOST -H 'Content-Type: application/json' \
-     "http://127.0.0.1:$CTRL/create" -d '{"class":"mesh_store"}' \
+     "http://127.0.0.1:$CTRL/create" -d '{"class":"mesh_mesh"}' \
      | sed -E 's/.*"handle":([0-9]+).*/\1/')
 curl -sS --max-time 10 -XPOST -H 'Content-Type: application/json' \
      "http://127.0.0.1:$CTRL/invoke" \
-     -d "{\"method\":\"mesh_store_reconcile_from_config\",\"handle\":$H,\"args\":[]}" >/dev/null
+     -d "{\"method\":\"mesh_mesh_reconcile_from_config\",\"handle\":$H,\"args\":[]}" >/dev/null
 
 for i in $(seq 1 60); do ss -ltn 2>/dev/null | grep -qE ":$GW\b" && break; sleep 0.25; done
 ss -ltn 2>/dev/null | grep -qE ":$GW\b" || { echo "gateway did not bind on :$GW (see tmp/perf-mesh.log)"; exit 1; }

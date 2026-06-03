@@ -16,7 +16,7 @@
  *   (or --connections spread evenly across --threads)
  *
  * Scenarios (selected with --scenario), each timed per iteration:
- *   rpc_count    POST /_rpc git_repo.store.count_total  (read; gateway→1 backend)
+ *   rpc_count    POST /_rpc git_repo.git_repo.count_total  (read; gateway→1 backend)
  *   login        POST /login                             (auth composite; 4 backends)
  *   repo_create  POST /repos/new                         (write; sharded_storage + git_repo)
  *   register     POST /register (new user each time)     (write; accounts + authn)
@@ -373,7 +373,7 @@ static int scenario_step(struct vconn *vc, long counter)
 {
     switch (vc->cfg->scenario) {
     case SCENARIO_RPC_COUNT: {
-        static const char body[] = "{\"path\":\"git_repo.store.count_total\",\"args\":[]}";
+        static const char body[] = "{\"path\":\"git_repo.git_repo.count_total\",\"args\":[]}";
         return http_try(vc, "POST", "/_rpc", "application/json", vc->sid,
                         body, sizeof(body) - 1, NULL, 0) == 200;
     }
@@ -438,19 +438,19 @@ static int scenario_step(struct vconn *vc, long counter)
         }
         switch (op) {
         case OP_READ_COUNT: {
-            static const char b[] = "{\"path\":\"git_repo.store.count_total\",\"args\":[]}";
+            static const char b[] = "{\"path\":\"git_repo.git_repo.count_total\",\"args\":[]}";
             st = http_try(vc, "POST", "/_rpc", "application/json", vc->sid, b, sizeof(b) - 1, NULL, 0);
             break;
         }
         case OP_READ_LIST: {
             int bn = snprintf(body, sizeof(body),
-                "{\"path\":\"git_repo.store.list_for_owner\",\"args\":[%u]}", vc->uid);
+                "{\"path\":\"git_repo.git_repo.list_for_owner\",\"args\":[%u]}", vc->uid);
             st = http_try(vc, "POST", "/_rpc", "application/json", vc->sid, body, (size_t)bn, NULL, 0);
             break;
         }
         case OP_MAKE_REPO: {
             int bn = snprintf(body, sizeof(body),
-                "{\"path\":\"git_repo.store.make\",\"args\":[%u,\"%s\",\"r%d\"]}",
+                "{\"path\":\"git_repo.git_repo.make\",\"args\":[%u,\"%s\",\"r%d\"]}",
                 vc->uid, vc->uname, vc->n_repos);
             st = http_try(vc, "POST", "/_rpc", "application/json", vc->sid, body, (size_t)bn, NULL, 0);
             if (st == 200) vc->n_repos++;
@@ -461,7 +461,7 @@ static int scenario_step(struct vconn *vc, long counter)
             char repo[16]; snprintf(repo, sizeof(repo), "r%u", idx);
             uint32_t rid = hash_repo(vc->uname, repo);
             int bn = snprintf(body, sizeof(body),
-                "{\"path\":\"git_repo.store.put_file\",\"args\":"
+                "{\"path\":\"git_repo.git_repo.put_file\",\"args\":"
                 "[%u,\"f%ld.txt\",\"hello %ld\",\"commit %ld\",\"\",\"\"]}",
                 rid, counter, counter, counter);
             st = http_try(vc, "POST", "/_rpc", "application/json", vc->sid, body, (size_t)bn, NULL, 0);
@@ -472,7 +472,7 @@ static int scenario_step(struct vconn *vc, long counter)
             char repo[16]; snprintf(repo, sizeof(repo), "r%u", idx);
             uint32_t rid = hash_repo(vc->uname, repo);
             int bn = snprintf(body, sizeof(body),
-                "{\"path\":\"issues.store.open\",\"args\":[%u,%u]}", rid, vc->uid);
+                "{\"path\":\"issues.issues.open\",\"args\":[%u,%u]}", rid, vc->uid);
             st = http_try(vc, "POST", "/_rpc", "application/json", vc->sid, body, (size_t)bn, NULL, 0);
             break;
         }
@@ -481,7 +481,7 @@ static int scenario_step(struct vconn *vc, long counter)
             char repo[16]; snprintf(repo, sizeof(repo), "r%u", idx);
             uint32_t rid = hash_repo(vc->uname, repo);
             int bn = snprintf(body, sizeof(body),
-                "{\"path\":\"git_pipeline.store.enqueue\",\"args\":[%u]}", rid);
+                "{\"path\":\"git_pipeline.git_pipeline.enqueue\",\"args\":[%u]}", rid);
             st = http_try(vc, "POST", "/_rpc", "application/json", vc->sid, body, (size_t)bn, NULL, 0);
             break;
         }
@@ -530,7 +530,7 @@ static void load_coro(void *arg)
         if (!vc->rng) vc->rng = 0x123456789abcdefull;
         char body[160];
         int bn = snprintf(body, sizeof(body),
-            "{\"path\":\"git_repo.store.make\",\"args\":[%u,\"%s\",\"r0\"]}",
+            "{\"path\":\"git_repo.git_repo.make\",\"args\":[%u,\"%s\",\"r0\"]}",
             vc->uid, vc->uname);
         if (http_try(vc, "POST", "/_rpc", "application/json", vc->sid,
                      body, (size_t)bn, NULL, 0) == 200)
@@ -571,7 +571,7 @@ static void seed_coro(void *arg)
         uint32_t uid = (uint32_t)(i + 1);
         char body[96];
         int bn = snprintf(body, sizeof(body),
-            "{\"path\":\"accounts.store.register\",\"args\":[%u]}", uid);
+            "{\"path\":\"accounts.accounts.register\",\"args\":[%u,\"u%u\"]}", uid, uid);
         int st = http_try(vc, "POST", "/_rpc", "application/json", NULL,
                           body, (size_t)bn, NULL, 0);
         if (st == 200) vc->seed_ok++; else vc->seed_err++;

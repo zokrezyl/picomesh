@@ -11,20 +11,20 @@
 #   ./tools/picoforge/mesh-up.sh
 #
 # The script connects to the parent's control yttp, calls
-# `mesh_store_reconcile_from_config`, then probes a few children.
+# `mesh_mesh_reconcile_from_config`, then probes a few children.
 
 name: mesh
 
 # Plugins the PARENT (control) process itself activates. Registration is
 # activation: only listed plugins enter this process's registry and become
 # reachable through its frontend. The parent only needs `mesh` — it serves
-# mesh_store on the control port (/create + reconcile_from_config) to spawn
+# mesh_mesh on the control port (/create + reconcile_from_config) to spawn
 # the children. Each child is spawned with `--name <service>` and activates
 # its own `mesh.services.<service>.plugins` list. (The driver reads this
 # top-level `plugins:` because the parent runs with no `--name`.)
 plugins:
   - mesh
-  # The parent also activates `storage` for its OWN bookkeeping: mesh_store
+  # The parent also activates `storage` for its OWN bookkeeping: mesh_mesh
   # records the pids of the children it spawns (and its own pid) here so it
   # can reap them on shutdown, and so the stack can be stopped by signalling
   # the recorded parent pid — never by pkill. Private parent state, separate
@@ -46,9 +46,9 @@ mesh:
   services:
 
     # The trace collector (issue #11): an ordinary yrpc backend plugin that
-    # RECEIVES spans on its exposed `store_ingest` method and answers the
-    # query methods (store_get_trace / store_services / store_operations /
-    # store_latency / store_errors). Every other service lists it as a remote
+    # RECEIVES spans on its exposed `trace_collector_ingest` method and answers
+    # the query methods (trace_collector_get_trace / _services / _operations /
+    # _latency / _errors). Every other service lists it as a remote
     # and ships finished spans to it over its OWN per-worker connection,
     # fire-and-forget (see ytelemetry). State is an in-memory bounded store —
     # no durable storage in v1. Reached for queries like any backend, through
@@ -102,6 +102,71 @@ mesh:
           path: /tmp/picoforge/sharded
         # sharded_storage calls no backend, but its skels emit server spans,
         # so it still needs a connection to ship them to the collector.
+        remotes:
+          - service: trace_collector
+            port: 8220
+
+    # relational_storage (gh#18): SQLite per namespace-shard for relational
+    # PRODUCT state (users, repos, members, issues, pipeline runs) — real SQL
+    # constraints/indexes/joins/transactions, sharded by namespace_id % N.
+    # The core product services use this; sharded_storage stays for KV-shaped
+    # runtime state (sessions, tokens, caches). See docs/relational-storage.md.
+    relational_storage:
+      port: 8213
+      workers: 4
+      plugins: [relational_storage]
+      config:
+        relational_storage:
+          shards: 8
+          path: /tmp/picoforge/relational
+          # The picoforge PRODUCT data model lives HERE, not in the engine.
+          # relational_storage is generic: it applies this DDL verbatim to
+          # each shard on open. Sharded by namespace (the caller's shard key).
+          schema: |
+            CREATE TABLE IF NOT EXISTS users(
+              uid INTEGER PRIMARY KEY,
+              username TEXT UNIQUE NOT NULL,
+              display_name TEXT,
+              created_at INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS namespaces(
+              id INTEGER PRIMARY KEY,
+              kind TEXT NOT NULL DEFAULT 'user',
+              name TEXT NOT NULL,
+              owner_uid INTEGER NOT NULL,
+              created_at INTEGER NOT NULL DEFAULT 0,
+              UNIQUE(kind, name));
+            CREATE TABLE IF NOT EXISTS repos(
+              id INTEGER PRIMARY KEY,
+              namespace_id INTEGER NOT NULL,
+              name TEXT NOT NULL,
+              owner_uid INTEGER NOT NULL,
+              visibility TEXT NOT NULL DEFAULT 'private',
+              created_at INTEGER NOT NULL DEFAULT 0,
+              UNIQUE(namespace_id, name));
+            CREATE TABLE IF NOT EXISTS repo_members(
+              repo_id INTEGER NOT NULL,
+              uid INTEGER NOT NULL,
+              role TEXT NOT NULL DEFAULT 'member',
+              PRIMARY KEY(repo_id, uid));
+            CREATE TABLE IF NOT EXISTS issues(
+              id INTEGER PRIMARY KEY,
+              repo_id INTEGER NOT NULL,
+              number INTEGER NOT NULL,
+              title TEXT,
+              status TEXT NOT NULL DEFAULT 'open',
+              author_uid INTEGER NOT NULL,
+              created_at INTEGER NOT NULL DEFAULT 0,
+              UNIQUE(repo_id, number));
+            CREATE TABLE IF NOT EXISTS pipeline_runs(
+              id INTEGER PRIMARY KEY,
+              repo_id INTEGER NOT NULL,
+              status TEXT NOT NULL DEFAULT 'pending',
+              created_by_uid INTEGER NOT NULL,
+              created_at INTEGER NOT NULL DEFAULT 0);
+            CREATE INDEX IF NOT EXISTS ix_repos_owner ON repos(owner_uid);
+            CREATE INDEX IF NOT EXISTS ix_issues_repo ON issues(repo_id);
+            CREATE INDEX IF NOT EXISTS ix_runs_repo   ON pipeline_runs(repo_id);
+            CREATE INDEX IF NOT EXISTS ix_members_uid ON repo_members(uid);
         remotes:
           - service: trace_collector
             port: 8220
@@ -339,13 +404,27 @@ mesh:
       frontend: yhttp
       plugins: []
       config:
+        # bridge_only: front EVERY backend (incl. session) for inspection,
+        # without becoming the auth gateway. The console lists all services.
+        yhttp:
+          bridge_only: true
         remotes:
           - service: sharded_storage
             port: 8212
+          - service: relational_storage
+            port: 8213
           - service: trace_collector
             port: 8220
+          - service: session
+            port: 8203
           - service: accounts
             port: 8204
+          - service: password_authn
+            port: 8205
+          - service: github_authn
+            port: 8206
+          - service: token_issuer
+            port: 8207
           - service: issues
             port: 8208
           - service: git_repo
@@ -354,6 +433,8 @@ mesh:
             port: 8210
           - service: personal_access_tokens
             port: 8211
+          - service: portalloc
+            port: 8201
 
     # Generic /_alpine service console: its OWN frontend (`frontend:
     # alpine`), a separate Picomesh application/tool. It serves the static

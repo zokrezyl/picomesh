@@ -11,7 +11,7 @@
  *   - anything else                  → JSON string
  *
  * That keeps shell quoting straightforward — `picomesh invoke
- * storage_kv_set 1 42` sends `[1, 42]`. */
+ * calculator_calc_add 6 7` sends `[6, 7]`. */
 
 #include <picomesh/frontends/cli/cli.h>
 #include <picomesh/yengine/engine.h>
@@ -32,15 +32,15 @@
 static char *build_args_json(int argc, char *const *argv, size_t *out_len)
 {
     struct yjson_writer *w = yjson_writer_new();
-    yjson_w_begin_array(w);
+    yjson_writer_begin_array(w);
     for (int i = 0; i < argc; ++i) {
         const char *a = argv[i];
         if (strcmp(a, "true") == 0) {
-            yjson_w_bool(w, 1);
+            yjson_writer_bool(w, 1);
         } else if (strcmp(a, "false") == 0) {
-            yjson_w_bool(w, 0);
+            yjson_writer_bool(w, 0);
         } else if (strcmp(a, "null") == 0) {
-            yjson_w_null(w);
+            yjson_writer_null(w);
         } else {
             /* Numeric literal? Walk: optional sign, then digits, with
              * optional one '.' for float. */
@@ -53,16 +53,16 @@ static char *build_args_json(int argc, char *const *argv, size_t *out_len)
                 else { ok = 0; break; }
             }
             if (ok && has_digit) {
-                if (has_dot) yjson_w_float(w, strtod(a, NULL));
-                else         yjson_w_int(w, (int64_t)strtoll(a, NULL, 10));
+                if (has_dot) yjson_writer_float(w, strtod(a, NULL));
+                else         yjson_writer_int(w, (int64_t)strtoll(a, NULL, 10));
             } else {
-                yjson_w_string(w, a);
+                yjson_writer_string(w, a);
             }
         }
     }
-    yjson_w_end_array(w);
+    yjson_writer_end_array(w);
     size_t len;
-    const char *data = yjson_w_data(w, &len);
+    const char *data = yjson_writer_data(w, &len);
     char *copy = malloc(len + 1);
     if (!copy) { yjson_writer_free(w); return NULL; }
     memcpy(copy, data, len + 1);
@@ -177,7 +177,7 @@ int picomesh_cli_dispatch(struct picomesh_engine *e)
         fprintf(stderr, "cli: %s\n", err[0] ? err : "invoke failed");
     } else {
         size_t out_len;
-        const char *out = yjson_w_data(w, &out_len);
+        const char *out = yjson_writer_data(w, &out_len);
         printf("%.*s\n", (int)out_len, out);
     }
     yjson_writer_free(w);

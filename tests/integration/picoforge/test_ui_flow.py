@@ -21,8 +21,15 @@ import urllib.request
 
 from playwright.sync_api import expect
 
-USER = "uitester"
-PASSWORD = "hunter2"
+from helpers import (
+    USER,
+    PASSWORD,
+    sign_in_or_register,
+    register as _register,
+    login as _login,
+    signed_in as _signed_in,
+)
+
 REPO = "demo-site"
 FILE_PATH = "README.md"
 FILE_V1 = "# Demo site\n\nhello from the integration test\n"
@@ -30,40 +37,6 @@ EDIT_MARKER = "edited by the integration test"
 
 
 # ---- helpers --------------------------------------------------------------
-
-def _signed_in(page) -> bool:
-    """True when the app shell shows the signed-in controls. The sign-out
-    form lives in the topbar only for an authenticated user."""
-    return page.locator("header.topbar form[action='/logout']").count() > 0
-
-
-def _register(page, base_url, user, password):
-    page.goto(f"{base_url}/register")
-    page.fill("input[name=username]", user)
-    page.fill("input[name=password]", password)
-    page.click("form[action='/register'] button[type=submit]")
-    page.wait_for_load_state("networkidle")
-
-
-def _login(page, base_url, user, password):
-    page.goto(f"{base_url}/login")
-    page.fill("input[name=username]", user)
-    page.fill("input[name=password]", password)
-    page.click("form[action='/login'] button[type=submit]")
-    page.wait_for_load_state("networkidle")
-
-
-def sign_in_or_register(page, base_url, user=USER, password=PASSWORD):
-    """Register `user`; if the account already exists, sign in instead.
-    Leaves the browser on the /repos page, signed in."""
-    _register(page, base_url, user, password)
-    if not _signed_in(page):
-        # Duplicate account (re-run against a persistent stack) -> sign in.
-        _login(page, base_url, user, password)
-    expect(page).to_have_url(re.compile(r"/repos$"))
-    expect(page.locator("h1")).to_have_text("Repositories")
-    assert _signed_in(page), "topbar should show signed-in controls after auth"
-
 
 def _request(url, *, method="GET", data=None, cookies=None):
     """Issue a request WITHOUT following redirects. Returns (status, location)."""

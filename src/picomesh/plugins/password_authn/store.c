@@ -26,7 +26,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-struct PICOMESH_CLASS_ANNOTATE("class@password_authn:store") password_authn_store_data {
+struct PICOMESH_CLASS_ANNOTATE("class@password_authn:password_authn") password_authn_password_authn_data {
     char _unused;
 };
 
@@ -101,8 +101,8 @@ static struct picomesh_int64_result kv_incr(struct pw_storage_handle *h, struct 
     return r;
 }
 
-PICOMESH_CLASS_ANNOTATE("override@password_authn:store:store_register")
-struct picomesh_int_result password_authn_store_register_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+PICOMESH_CLASS_ANNOTATE("override@password_authn:password_authn:password_authn_register")
+struct picomesh_int_result password_authn_password_authn_register_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                            uint32_t user_id, int64_t hash)
 {
     (void)ctx; (void)obj;
@@ -131,8 +131,8 @@ struct picomesh_int_result password_authn_store_register_impl(struct ctx *ctx, s
     return PICOMESH_OK(picomesh_int, 1);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@password_authn:store:store_authenticate")
-struct picomesh_int_result password_authn_store_authenticate_impl(struct ctx *ctx,
+PICOMESH_CLASS_ANNOTATE("override@password_authn:password_authn:password_authn_authenticate")
+struct picomesh_int_result password_authn_password_authn_authenticate_impl(struct ctx *ctx,
                                                                struct object *obj,
                                                                struct yheaders *hdrs,
                                                                uint32_t user_id, int64_t hash)
@@ -152,8 +152,8 @@ struct picomesh_int_result password_authn_store_authenticate_impl(struct ctx *ct
     return PICOMESH_OK(picomesh_int, storedr.value == hash ? 1 : 0);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@password_authn:store:store_change_password")
-struct picomesh_int_result password_authn_store_change_password_impl(struct ctx *ctx,
+PICOMESH_CLASS_ANNOTATE("override@password_authn:password_authn:password_authn_change_password")
+struct picomesh_int_result password_authn_password_authn_change_password_impl(struct ctx *ctx,
                                                                   struct object *obj,
                                                                   struct yheaders *hdrs,
                                                                   uint32_t user_id, int64_t hash)
@@ -173,8 +173,8 @@ struct picomesh_int_result password_authn_store_change_password_impl(struct ctx 
     return PICOMESH_OK(picomesh_int, 1);
 }
 
-PICOMESH_CLASS_ANNOTATE("override@password_authn:store:store_count_registered")
-struct picomesh_size_result password_authn_store_count_registered_impl(struct ctx *ctx,
+PICOMESH_CLASS_ANNOTATE("override@password_authn:password_authn:password_authn_count_registered")
+struct picomesh_size_result password_authn_password_authn_count_registered_impl(struct ctx *ctx,
                                                                     struct object *obj,
                                                                     struct yheaders *hdrs)
 {
@@ -186,6 +186,33 @@ struct picomesh_size_result password_authn_store_count_registered_impl(struct ct
     close_storage(&h);
     if (PICOMESH_IS_ERR(cr)) return PICOMESH_ERR(picomesh_size, "password_authn_count: read failed", cr);
     return PICOMESH_OK(picomesh_size, (size_t)(cr.value < 0 ? 0 : cr.value));
+}
+
+/* List ALL password_authn entries as a JSON array (gh#15) — every object,
+ * not a count. NOTE: the values are credential material (hashes); this is an
+ * internal/admin-console surface only. Delegates to the namespace scan. */
+PICOMESH_CLASS_ANNOTATE("override@password_authn:password_authn:password_authn_list")
+struct picomesh_json_result password_authn_password_authn_list_impl(struct ctx *ctx, struct object *obj,
+                                                           struct yheaders *hdrs,
+                                                           int64_t offset, int64_t limit)
+{
+    (void)ctx; (void)obj;
+    struct pw_storage_handle_result sr = open_storage();
+    if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_json, "password_authn_list: storage open failed", sr);
+    struct pw_storage_handle h = sr.value;
+    return sharded_storage_db_list(&h.c, h.obj, hdrs, PW_CTX, "hash:", offset, limit);
+}
+
+/* Unbounded variant — every credential entry. Internal/admin only; care. */
+PICOMESH_CLASS_ANNOTATE("override@password_authn:password_authn:password_authn_list_all")
+struct picomesh_json_result password_authn_password_authn_list_all_impl(struct ctx *ctx, struct object *obj,
+                                                                        struct yheaders *hdrs)
+{
+    (void)ctx; (void)obj;
+    struct pw_storage_handle_result sr = open_storage();
+    if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_json, "password_authn_list_all: storage open failed", sr);
+    struct pw_storage_handle h = sr.value;
+    return sharded_storage_db_list_all(&h.c, h.obj, hdrs, PW_CTX, "hash:");
 }
 
 #include "store.gen.c"

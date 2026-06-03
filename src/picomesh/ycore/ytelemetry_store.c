@@ -160,14 +160,14 @@ void ytelemetry_store_write_stats(struct yjson_writer *w)
 {
     struct ytelemetry_store *s = ytelemetry_store_state();
     pthread_mutex_lock(&s->mu);
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "ingested"); yjson_w_int(w, (int64_t)s->ingested);
-    yjson_w_key(w, "malformed"); yjson_w_int(w, (int64_t)s->malformed);
-    yjson_w_key(w, "evicted"); yjson_w_int(w, (int64_t)s->evicted);
-    yjson_w_key(w, "stored"); yjson_w_int(w, (int64_t)s->count);
-    yjson_w_key(w, "capacity"); yjson_w_int(w, (int64_t)s->cap);
-    yjson_w_key(w, "max_age_seconds"); yjson_w_int(w, (int64_t)(s->max_age_ns / 1000000000ull));
-    yjson_w_end_object(w);
+    yjson_writer_begin_object(w);
+    yjson_writer_key(w, "ingested"); yjson_writer_int(w, (int64_t)s->ingested);
+    yjson_writer_key(w, "malformed"); yjson_writer_int(w, (int64_t)s->malformed);
+    yjson_writer_key(w, "evicted"); yjson_writer_int(w, (int64_t)s->evicted);
+    yjson_writer_key(w, "stored"); yjson_writer_int(w, (int64_t)s->count);
+    yjson_writer_key(w, "capacity"); yjson_writer_int(w, (int64_t)s->cap);
+    yjson_writer_key(w, "max_age_seconds"); yjson_writer_int(w, (int64_t)(s->max_age_ns / 1000000000ull));
+    yjson_writer_end_object(w);
     pthread_mutex_unlock(&s->mu);
 }
 
@@ -189,23 +189,23 @@ static uint64_t pctl_u64(const uint64_t *sorted, size_t n, double p)
 
 static void emit_span(struct yjson_writer *w, const struct ytelemetry_stored_span *sp)
 {
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "span_id"); yjson_w_string(w, sp->span_id);
-    yjson_w_key(w, "parent_span_id"); yjson_w_string(w, sp->parent_id);
-    yjson_w_key(w, "trace_id"); yjson_w_string(w, sp->trace_id);
-    yjson_w_key(w, "name"); yjson_w_string(w, sp->name);
-    yjson_w_key(w, "kind"); yjson_w_string(w, sp->kind);
-    yjson_w_key(w, "service_name"); yjson_w_string(w, sp->service);
-    yjson_w_key(w, "node_id"); yjson_w_string(w, sp->node);
-    yjson_w_key(w, "start_time_ns"); yjson_w_int(w, (int64_t)sp->start_unix_ns);
-    yjson_w_key(w, "duration_ns"); yjson_w_int(w, (int64_t)sp->duration_ns);
-    yjson_w_key(w, "status"); yjson_w_string(w, sp->status);
-    if (sp->err[0]) { yjson_w_key(w, "error_message"); yjson_w_string(w, sp->err); }
-    yjson_w_key(w, "attributes");
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "picomesh.uid"); yjson_w_int(w, (int64_t)sp->uid);
-    yjson_w_end_object(w);
-    yjson_w_end_object(w);
+    yjson_writer_begin_object(w);
+    yjson_writer_key(w, "span_id"); yjson_writer_string(w, sp->span_id);
+    yjson_writer_key(w, "parent_span_id"); yjson_writer_string(w, sp->parent_id);
+    yjson_writer_key(w, "trace_id"); yjson_writer_string(w, sp->trace_id);
+    yjson_writer_key(w, "name"); yjson_writer_string(w, sp->name);
+    yjson_writer_key(w, "kind"); yjson_writer_string(w, sp->kind);
+    yjson_writer_key(w, "service_name"); yjson_writer_string(w, sp->service);
+    yjson_writer_key(w, "node_id"); yjson_writer_string(w, sp->node);
+    yjson_writer_key(w, "start_time_ns"); yjson_writer_int(w, (int64_t)sp->start_unix_ns);
+    yjson_writer_key(w, "duration_ns"); yjson_writer_int(w, (int64_t)sp->duration_ns);
+    yjson_writer_key(w, "status"); yjson_writer_string(w, sp->status);
+    if (sp->err[0]) { yjson_writer_key(w, "error_message"); yjson_writer_string(w, sp->err); }
+    yjson_writer_key(w, "attributes");
+    yjson_writer_begin_object(w);
+    yjson_writer_key(w, "picomesh.uid"); yjson_writer_int(w, (int64_t)sp->uid);
+    yjson_writer_end_object(w);
+    yjson_writer_end_object(w);
 }
 
 void ytelemetry_store_write_trace(struct yjson_writer *w, const char *trace_id)
@@ -243,16 +243,16 @@ void ytelemetry_store_write_trace(struct yjson_writer *w, const char *trace_id)
         if (!parent_in) root_span = match[i]->span_id;
     }
 
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "trace_id"); yjson_w_string(w, trace_id ? trace_id : "");
-    yjson_w_key(w, "root_span_id"); yjson_w_string(w, root_span);
-    yjson_w_key(w, "span_count"); yjson_w_int(w, (int64_t)n);
-    yjson_w_key(w, "duration_ns"); yjson_w_int(w, (int64_t)(n ? max_end - min_start : 0));
-    yjson_w_key(w, "spans");
-    yjson_w_begin_array(w);
+    yjson_writer_begin_object(w);
+    yjson_writer_key(w, "trace_id"); yjson_writer_string(w, trace_id ? trace_id : "");
+    yjson_writer_key(w, "root_span_id"); yjson_writer_string(w, root_span);
+    yjson_writer_key(w, "span_count"); yjson_writer_int(w, (int64_t)n);
+    yjson_writer_key(w, "duration_ns"); yjson_writer_int(w, (int64_t)(n ? max_end - min_start : 0));
+    yjson_writer_key(w, "spans");
+    yjson_writer_begin_array(w);
     for (size_t i = 0; i < n; ++i) emit_span(w, match[i]);
-    yjson_w_end_array(w);
-    yjson_w_end_object(w);
+    yjson_writer_end_array(w);
+    yjson_writer_end_object(w);
 
     pthread_mutex_unlock(&s->mu);
 }
@@ -269,9 +269,9 @@ void ytelemetry_store_write_traces(struct yjson_writer *w, const char *service,
     char seen[MAX_TRACES][33];
     size_t nseen = 0;
 
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "traces");
-    yjson_w_begin_array(w);
+    yjson_writer_begin_object(w);
+    yjson_writer_key(w, "traces");
+    yjson_writer_begin_array(w);
 
     for (size_t i = 0; i < s->count && nseen < MAX_TRACES; ++i) {
         struct ytelemetry_stored_span *sp = ytelemetry_store_nth(s, i); /* newest→oldest */
@@ -305,19 +305,19 @@ void ytelemetry_store_write_traces(struct yjson_writer *w, const char *service,
         ytelemetry_store_copystr(seen[nseen], sizeof(seen[nseen]), sp->trace_id);
         nseen++;
 
-        yjson_w_begin_object(w);
-        yjson_w_key(w, "trace_id"); yjson_w_string(w, sp->trace_id);
-        yjson_w_key(w, "root_name"); yjson_w_string(w, root_name);
-        yjson_w_key(w, "service_name"); yjson_w_string(w, root_service);
-        yjson_w_key(w, "start_time_ns"); yjson_w_int(w, (int64_t)tstart);
-        yjson_w_key(w, "duration_ns"); yjson_w_int(w, (int64_t)(tend - tstart));
-        yjson_w_key(w, "span_count"); yjson_w_int(w, (int64_t)span_count);
-        yjson_w_key(w, "status"); yjson_w_string(w, tstatus);
-        yjson_w_end_object(w);
+        yjson_writer_begin_object(w);
+        yjson_writer_key(w, "trace_id"); yjson_writer_string(w, sp->trace_id);
+        yjson_writer_key(w, "root_name"); yjson_writer_string(w, root_name);
+        yjson_writer_key(w, "service_name"); yjson_writer_string(w, root_service);
+        yjson_writer_key(w, "start_time_ns"); yjson_writer_int(w, (int64_t)tstart);
+        yjson_writer_key(w, "duration_ns"); yjson_writer_int(w, (int64_t)(tend - tstart));
+        yjson_writer_key(w, "span_count"); yjson_writer_int(w, (int64_t)span_count);
+        yjson_writer_key(w, "status"); yjson_writer_string(w, tstatus);
+        yjson_writer_end_object(w);
     }
 
-    yjson_w_end_array(w);
-    yjson_w_end_object(w);
+    yjson_writer_end_array(w);
+    yjson_writer_end_object(w);
     pthread_mutex_unlock(&s->mu);
 }
 
@@ -339,17 +339,17 @@ void ytelemetry_store_write_services(struct yjson_writer *w)
         if (j < MAX_SVC) counts[j]++;
     }
 
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "services");
-    yjson_w_begin_array(w);
+    yjson_writer_begin_object(w);
+    yjson_writer_key(w, "services");
+    yjson_writer_begin_array(w);
     for (size_t j = 0; j < n; ++j) {
-        yjson_w_begin_object(w);
-        yjson_w_key(w, "service_name"); yjson_w_string(w, names[j]);
-        yjson_w_key(w, "span_count"); yjson_w_int(w, (int64_t)counts[j]);
-        yjson_w_end_object(w);
+        yjson_writer_begin_object(w);
+        yjson_writer_key(w, "service_name"); yjson_writer_string(w, names[j]);
+        yjson_writer_key(w, "span_count"); yjson_writer_int(w, (int64_t)counts[j]);
+        yjson_writer_end_object(w);
     }
-    yjson_w_end_array(w);
-    yjson_w_end_object(w);
+    yjson_writer_end_array(w);
+    yjson_writer_end_object(w);
     pthread_mutex_unlock(&s->mu);
 }
 
@@ -372,18 +372,18 @@ void ytelemetry_store_write_operations(struct yjson_writer *w, const char *servi
         if (j < MAX_OPS) counts[j]++;
     }
 
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "service"); yjson_w_string(w, service ? service : "");
-    yjson_w_key(w, "operations");
-    yjson_w_begin_array(w);
+    yjson_writer_begin_object(w);
+    yjson_writer_key(w, "service"); yjson_writer_string(w, service ? service : "");
+    yjson_writer_key(w, "operations");
+    yjson_writer_begin_array(w);
     for (size_t j = 0; j < n; ++j) {
-        yjson_w_begin_object(w);
-        yjson_w_key(w, "name"); yjson_w_string(w, ops[j]);
-        yjson_w_key(w, "count"); yjson_w_int(w, (int64_t)counts[j]);
-        yjson_w_end_object(w);
+        yjson_writer_begin_object(w);
+        yjson_writer_key(w, "name"); yjson_writer_string(w, ops[j]);
+        yjson_writer_key(w, "count"); yjson_writer_int(w, (int64_t)counts[j]);
+        yjson_writer_end_object(w);
     }
-    yjson_w_end_array(w);
-    yjson_w_end_object(w);
+    yjson_writer_end_array(w);
+    yjson_writer_end_object(w);
     pthread_mutex_unlock(&s->mu);
 }
 
@@ -409,16 +409,16 @@ void ytelemetry_store_write_latency(struct yjson_writer *w, const char *service,
         qsort(durs, n, sizeof(uint64_t), cmp_u64);
     }
 
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "service"); yjson_w_string(w, service ? service : "");
-    yjson_w_key(w, "operation"); yjson_w_string(w, operation ? operation : "");
-    yjson_w_key(w, "window_ns"); yjson_w_int(w, (int64_t)window_ns);
-    yjson_w_key(w, "count"); yjson_w_int(w, (int64_t)n);
-    yjson_w_key(w, "p50_ns"); yjson_w_int(w, (int64_t)pctl_u64(durs, n, 50));
-    yjson_w_key(w, "p90_ns"); yjson_w_int(w, (int64_t)pctl_u64(durs, n, 90));
-    yjson_w_key(w, "p99_ns"); yjson_w_int(w, (int64_t)pctl_u64(durs, n, 99));
-    yjson_w_key(w, "max_ns"); yjson_w_int(w, (int64_t)(n ? durs[n - 1] : 0));
-    yjson_w_end_object(w);
+    yjson_writer_begin_object(w);
+    yjson_writer_key(w, "service"); yjson_writer_string(w, service ? service : "");
+    yjson_writer_key(w, "operation"); yjson_writer_string(w, operation ? operation : "");
+    yjson_writer_key(w, "window_ns"); yjson_writer_int(w, (int64_t)window_ns);
+    yjson_writer_key(w, "count"); yjson_writer_int(w, (int64_t)n);
+    yjson_writer_key(w, "p50_ns"); yjson_writer_int(w, (int64_t)pctl_u64(durs, n, 50));
+    yjson_writer_key(w, "p90_ns"); yjson_writer_int(w, (int64_t)pctl_u64(durs, n, 90));
+    yjson_writer_key(w, "p99_ns"); yjson_writer_int(w, (int64_t)pctl_u64(durs, n, 99));
+    yjson_writer_key(w, "max_ns"); yjson_writer_int(w, (int64_t)(n ? durs[n - 1] : 0));
+    yjson_writer_end_object(w);
 
     free(durs);
     pthread_mutex_unlock(&s->mu);
@@ -429,9 +429,9 @@ void ytelemetry_store_write_errors(struct yjson_writer *w, uint64_t since_ns)
     struct ytelemetry_store *s = ytelemetry_store_state();
     pthread_mutex_lock(&s->mu);
 
-    yjson_w_begin_object(w);
-    yjson_w_key(w, "errors");
-    yjson_w_begin_array(w);
+    yjson_writer_begin_object(w);
+    yjson_writer_key(w, "errors");
+    yjson_writer_begin_array(w);
     size_t emitted = 0;
     for (size_t i = 0; i < s->count && emitted < 256; ++i) {
         struct ytelemetry_stored_span *sp = ytelemetry_store_nth(s, i); /* newest first */
@@ -440,7 +440,7 @@ void ytelemetry_store_write_errors(struct yjson_writer *w, uint64_t since_ns)
         emit_span(w, sp);
         emitted++;
     }
-    yjson_w_end_array(w);
-    yjson_w_end_object(w);
+    yjson_writer_end_array(w);
+    yjson_writer_end_object(w);
     pthread_mutex_unlock(&s->mu);
 }
