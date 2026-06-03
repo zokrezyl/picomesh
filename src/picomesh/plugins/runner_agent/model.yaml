@@ -1,0 +1,165 @@
+methods:
+  - slot: runner_agent_create_token
+    domain: runner_agent
+    owning_class: runner_agent
+    return_type: struct picomesh_json_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: name
+        type: "const char *"
+      - name: labels
+        type: "const char *"
+  - slot: runner_agent_lookup_token
+    domain: runner_agent
+    owning_class: runner_agent
+    return_type: struct picomesh_uint32_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: token
+        type: "const char *"
+  - slot: runner_agent_revoke_token
+    domain: runner_agent
+    owning_class: runner_agent
+    return_type: struct picomesh_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: runner_id
+        type: uint32_t
+  - slot: runner_agent_register
+    domain: runner_agent
+    owning_class: runner_agent
+    return_type: struct picomesh_uint32_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: runner_id
+        type: uint32_t
+      - name: name
+        type: "const char *"
+      - name: labels
+        type: "const char *"
+      - name: version
+        type: "const char *"
+      - name: host
+        type: "const char *"
+  - slot: runner_agent_heartbeat
+    domain: runner_agent
+    owning_class: runner_agent
+    return_type: struct picomesh_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: runner_id
+        type: uint32_t
+      - name: status
+        type: "const char *"
+  - slot: runner_agent_get
+    domain: runner_agent
+    owning_class: runner_agent
+    return_type: struct picomesh_json_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: runner_id
+        type: uint32_t
+  - slot: runner_agent_list
+    domain: runner_agent
+    owning_class: runner_agent
+    return_type: struct picomesh_json_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: offset
+        type: int64_t
+      - name: limit
+        type: int64_t
+  - slot: runner_agent_list_all
+    domain: runner_agent
+    owning_class: runner_agent
+    return_type: struct picomesh_json_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+  - slot: runner_agent_count_active
+    domain: runner_agent
+    owning_class: runner_agent
+    return_type: struct picomesh_size_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+classes:
+  - name: runner_agent
+    domain: runner_agent
+    accessor: runner_agent_runner_agent_class_get
+    type: regular
+    source_file: /home/misi/work/my/picomesh/src/picomesh/plugins/runner_agent/store.c
+    parent: null
+    mixins: []
+    data: struct runner_agent_runner_agent_data
+    ops:
+      - slot: runner_agent_create_token
+        slot_domain: runner_agent
+        impl: runner_agent_runner_agent_create_token_impl
+      - slot: runner_agent_lookup_token
+        slot_domain: runner_agent
+        impl: runner_agent_runner_agent_lookup_token_impl
+      - slot: runner_agent_revoke_token
+        slot_domain: runner_agent
+        impl: runner_agent_runner_agent_revoke_token_impl
+      - slot: runner_agent_register
+        slot_domain: runner_agent
+        impl: runner_agent_runner_agent_register_impl
+      - slot: runner_agent_heartbeat
+        slot_domain: runner_agent
+        impl: runner_agent_runner_agent_heartbeat_impl
+      - slot: runner_agent_get
+        slot_domain: runner_agent
+        impl: runner_agent_runner_agent_get_impl
+      - slot: runner_agent_list
+        slot_domain: runner_agent
+        impl: runner_agent_runner_agent_list_impl
+      - slot: runner_agent_list_all
+        slot_domain: runner_agent
+        impl: runner_agent_runner_agent_list_all_impl
+      - slot: runner_agent_count_active
+        slot_domain: runner_agent
+        impl: runner_agent_runner_agent_count_active_impl
