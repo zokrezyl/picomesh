@@ -23,11 +23,13 @@ struct picomesh_engine;
 struct yheaders;
 
 /* Backend-side: extract the caller's verified auth context from the request
- * headers. Verifies the JWT the gateway placed in yheaders["jwt"] against the
- * shared signing secret (so a backend trusts claims by signature, not just the
- * gateway's word). If no JWT is present, falls back to the gateway-set
- * yheaders["uid"] with authenticated=0 (trusted-uid, no verifiable groups).
- * Always returns ok; `out` is populated accordingly. */
+ * headers. Identity comes ONLY from the JWT the gateway placed in
+ * yheaders["jwt"], verified against the shared signing secret (a backend trusts
+ * claims by signature, not by the gateway's word). It FAILS CLOSED: an absent
+ * or invalid JWT — or unavailable key material — yields an unauthenticated
+ * context (uid 0, authenticated 0). There is NO uid-header fallback; a stale
+ * yheaders["uid"] is never trusted. Always returns ok; `out` is populated
+ * accordingly, and resource checks must reject uid 0. */
 struct picomesh_void_result picomesh_authctx_from_headers(struct yheaders *hdrs,
                                                           struct picomesh_engine *engine,
                                                           struct picomesh_authctx *out);

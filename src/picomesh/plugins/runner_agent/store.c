@@ -34,6 +34,7 @@
 #include <picomesh/ysecurity/sha256.h>
 #include <picomesh/ysecurity/jwt.h>
 #include <picomesh/plugin/sharded_storage/sharded_storage.h>
+#include <picomesh/plugin/token_issuer/token_issuer.h>
 
 #include <errno.h>
 #include <stdint.h>
@@ -293,6 +294,37 @@ struct picomesh_uint32_result runner_agent_runner_agent_lookup_token_impl(struct
     if (lr.value == 0) return PICOMESH_OK(picomesh_uint32, 0);
     if (strcmp(rec.status, "disabled") == 0) return PICOMESH_OK(picomesh_uint32, 0);
     return PICOMESH_OK(picomesh_uint32, runner_id);
+}
+
+/* Exchange an opaque `rnr_` token for a runner access JWT. This is the
+ * credential-exchange the gateway's generic `bearer_opaque_token` authenticator
+ * calls (it passes the token, gets back a JWT, and verifies it — it never mints
+ * or learns runner internals). The JWT's sub is the runner_id and its groups
+ * are "site:runner,runner:<id>" so the policy can gate the runner-only methods.
+ * Minting stays with the token issuer; this service just composes the
+ * exchange. */
+PICOMESH_CLASS_ANNOTATE("override@runner_agent:runner_agent:runner_agent_exchange")
+struct picomesh_string_result runner_agent_runner_agent_exchange_impl(struct ctx *ctx, struct object *obj,
+                                                                      struct yheaders *hdrs, const char *token)
+{
+    struct picomesh_uint32_result idr = runner_agent_runner_agent_lookup_token_impl(ctx, obj, hdrs, token);
+    if (PICOMESH_IS_ERR(idr)) return PICOMESH_ERR(picomesh_string, "runner_agent_exchange: lookup failed", idr);
+    uint32_t runner_id = idr.value;
+    if (runner_id == 0) return PICOMESH_ERR(picomesh_string, "runner_agent_exchange: unknown or revoked runner token");
+
+    char username[40], groups[64];
+    snprintf(username, sizeof(username), "runner-%u", runner_id);
+    snprintf(groups, sizeof(groups), "site:runner,runner:%u", runner_id);
+
+    struct picomesh_engine *e = picomesh_active_engine();
+    if (!e) return PICOMESH_ERR(picomesh_string, "runner_agent_exchange: no active engine");
+    struct ctx ti_ctx = picomesh_engine_service_ctx(e, "token_issuer");
+    struct object_ptr_result ti_obj = token_issuer_token_issuer_create(&ti_ctx);
+    if (PICOMESH_IS_ERR(ti_obj)) return PICOMESH_ERR(picomesh_string, "runner_agent_exchange: token_issuer unreachable", ti_obj);
+    struct picomesh_string_result jwt =
+        token_issuer_token_issuer_mint(&ti_ctx, ti_obj.value, hdrs, runner_id, username, groups, 0);
+    if (PICOMESH_IS_ERR(jwt)) return PICOMESH_ERR(picomesh_string, "runner_agent_exchange: mint failed", jwt);
+    return jwt;
 }
 
 PICOMESH_CLASS_ANNOTATE("override@runner_agent:runner_agent:runner_agent_revoke_token")

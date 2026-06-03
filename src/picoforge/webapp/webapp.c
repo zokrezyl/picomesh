@@ -2073,6 +2073,17 @@ static void page_admin_services(struct yloop *loop, struct yloop_stream *s,
     render_page_header(&b, "Services",
                        "Active services discovered from the gateway /_describe.", NULL);
     panel_open(&b, "Active services", "from gateway /_describe");
+    /* Link to the generic /_alpine service console (a separate node) where an
+     * admin can introspect and invoke these services directly. */
+    const char *console_url = sud->cfg ? sud->cfg->console_url : NULL;
+    if (console_url && *console_url) {
+        buf_puts(&b, "<p class=\"muted\">Inspect &amp; invoke these services in the "
+                     "generic console: <a class=\"console-link\" href=\"");
+        buf_esc(&b, console_url);
+        buf_puts(&b, "\" target=\"_blank\" rel=\"noopener\"><code>");
+        buf_esc(&b, console_url);
+        buf_puts(&b, "</code></a></p>");
+    }
     buf_puts(&b, "<table class=\"service-table\"><thead><tr>"
                  "<th>Service</th><th>Source</th><th>Status</th></tr></thead><tbody>");
     for (size_t i = 0; i < sud->services.n; ++i) {

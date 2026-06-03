@@ -62,7 +62,15 @@ add_library(picomesh_runtime STATIC
     src/picomesh/ysecurity/sha256.c
     src/picomesh/ysecurity/base64.c
     src/picomesh/ysecurity/jwt.c
+    src/picomesh/ysecurity/jwt_verifier.c
     src/picomesh/ysecurity/secret.c
+    src/picomesh/authenticators/registry.c
+    src/picomesh/authenticators/session_cookie/session_cookie.c
+    src/picomesh/authenticators/bearer_jwt_token/bearer_jwt_token.c
+    src/picomesh/authenticators/bearer_opaque_token/bearer_opaque_token.c
+    src/picomesh/authorizers/registry.c
+    src/picomesh/authorizers/policy/policy.c
+    src/picomesh/authorizers/none/none.c
     src/picomesh/msgpack/msgpack.c
     vendor/cmp/cmp.c
     src/picomesh/yco/coro.c
@@ -73,7 +81,6 @@ add_library(picomesh_runtime STATIC
     src/picomesh/frontends/yttp/yttp.c
     src/picomesh/frontends/yhttp/yhttp.c
     src/picomesh/frontends/yhttp/frontend.c
-    src/picomesh/frontends/yhttp/authz.c
     src/picomesh/frontends/alpine/alpine.c
     src/picomesh/frontends/msgpack/msgpack.c
     src/picomesh/frontends/cli/cli.c
@@ -240,6 +247,11 @@ endforeach()
 add_dependencies(picomesh_plugin_token_issuer_codegen
                  picomesh_plugin_password_authn_codegen
                  picomesh_plugin_accounts_codegen)
+
+# runner_agent.exchange mints a runner JWT via token_issuer, so it #includes
+# token_issuer's generated header — AST-dump must run after token_issuer's codegen.
+add_dependencies(picomesh_plugin_runner_agent_codegen
+                 picomesh_plugin_token_issuer_codegen)
 
 # The runtime's frontend (yhttp/frontend.c) and ymain's smoke `client`
 # subcommand both pull in plugin public headers. They must therefore

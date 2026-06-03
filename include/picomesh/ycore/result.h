@@ -39,6 +39,9 @@ struct picomesh_error {
     }
 
 PICOMESH_RESULT_DECLARE(picomesh_void, int);
+/* Owned opaque pointer (caller-defined ownership). Used by factory functions
+ * that build a heap object and want to carry an error message on failure. */
+PICOMESH_RESULT_DECLARE(picomesh_void_ptr, void *);
 PICOMESH_RESULT_DECLARE(picomesh_int, int);
 PICOMESH_RESULT_DECLARE(picomesh_size, size_t);
 PICOMESH_RESULT_DECLARE(picomesh_int64, int64_t);

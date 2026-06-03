@@ -41,6 +41,9 @@ static const struct yargv_option_def WEBAPP_OPTIONS[] = {
      YARGV_VALUE, 0},
     {"--static",      NULL, "static_dir",   "Static directory (default ./static)",
      YARGV_VALUE, 0},
+    {"--console-url", NULL, "console_url",  "Service console URL linked on /admin/services "
+                                            "(default http://127.0.0.1:8231/_alpine; \"\" to hide)",
+     YARGV_VALUE, 0},
     {"--verbose",     "-v", "verbose",      "Enable debug logging",
      YARGV_BOOL,  0},
     {"--help",        "-h", "help",         "Show this message",
@@ -52,7 +55,7 @@ static void usage(const char *prog)
 {
     fprintf(stderr,
         "usage: %s --gateway-url <url> [--host <h>] [--port <p>]\n"
-        "          [--templates <dir>] [--static <dir>] [-v]\n"
+        "          [--templates <dir>] [--static <dir>] [--console-url <url>] [-v]\n"
         "\n"
         "Standalone HTML web app. Talks to the gateway via POST /_rpc.\n"
         "Works against either the picomesh C gateway or the yaapp Python gateway —\n"
@@ -100,6 +103,11 @@ int main(int argc, char **argv)
     int port = (int)yargv_get_int(cli, "port", 8080);
     const char *templates_dir = yargv_get_string(cli, "templates", "templates");
     const char *static_dir    = yargv_get_string(cli, "static_dir", "static");
+    /* The generic /_alpine service console is a SEPARATE node the webapp does
+     * not discover from the gateway; default to its conventional address so
+     * the /admin/services link works out of the box. */
+    const char *console_url   = yargv_get_string(cli, "console_url",
+                                                 "http://127.0.0.1:8231/_alpine");
 
     struct yloop_ptr_result lr = yloop_create();
     if (PICOMESH_IS_ERR(lr)) {
@@ -112,6 +120,7 @@ int main(int argc, char **argv)
         .gateway_url = gateway_url,
         .templates_dir = templates_dir,
         .static_dir = static_dir,
+        .console_url = console_url,
     };
     struct picomesh_void_result sr = webapp_start(loop, host, port, &fc);
     if (PICOMESH_IS_ERR(sr)) {

@@ -10,6 +10,7 @@
 struct picomesh_int_result;
 struct picomesh_json_result;
 struct picomesh_size_result;
+struct picomesh_string_result;
 struct picomesh_uint32_result;
 struct yheaders;
 struct object_ptr_result;
@@ -24,6 +25,7 @@ struct object_ptr_result runner_agent_runner_agent_create(struct ctx *ctx);
 /* ---- methods ---- */
 struct picomesh_json_result runner_agent_runner_agent_create_token(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * name, const char * labels);
 struct picomesh_uint32_result runner_agent_runner_agent_lookup_token(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * token);
+struct picomesh_string_result runner_agent_runner_agent_exchange(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * token);
 struct picomesh_int_result runner_agent_runner_agent_revoke_token(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t runner_id);
 struct picomesh_uint32_result runner_agent_runner_agent_register(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t runner_id, const char * name, const char * labels, const char * version, const char * host);
 struct picomesh_int_result runner_agent_runner_agent_heartbeat(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t runner_id, const char * status);

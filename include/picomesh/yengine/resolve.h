@@ -53,6 +53,17 @@ picomesh_resolve_service_call(struct picomesh_engine *engine, const char *path);
  * Safe on a zeroed/already-released call. */
 void picomesh_service_call_release(struct picomesh_service_call *call);
 
+/* Generic in-mesh invoke: resolve + dispatch `service.class.method` with the
+ * positional `args_json` (a JSON array string, e.g. "[\"abc\"]", or NULL/empty
+ * for no args), carrying `hdrs`. On success the OK value is the malloc'd
+ * response envelope `{"result": <value>}` JSON (caller frees). This is the
+ * one generic path framework pieces (e.g. authenticators calling a configured
+ * `lookup` service) use to call a service without compile-time knowledge of
+ * its typed stub. */
+struct picomesh_string_result
+picomesh_engine_invoke_json(struct picomesh_engine *engine, const char *path,
+                            const char *args_json, struct yheaders *hdrs);
+
 #ifdef __cplusplus
 }
 #endif

@@ -43,23 +43,25 @@ struct picomesh_void_result picomesh_authctx_from_headers(struct yheaders *hdrs,
                                                           struct picomesh_authctx *out)
 {
     memset(out, 0, sizeof(*out));
+    /* Identity is derived ONLY from the verified JWT the gateway forwarded.
+     * There is no uid-header fallback: an absent or invalid JWT yields an
+     * unauthenticated context (uid 0), and resource checks fail closed. This
+     * is low-level crypto glue — it must never make a policy decision such as
+     * "trust the uid anyway". */
     const char *jwt = hdrs ? yheaders_get(hdrs, "jwt") : NULL;
-    if (jwt && *jwt) {
-        struct picomesh_string_result secret = picomesh_security_jwt_secret(engine);
-        if (PICOMESH_IS_OK(secret)) {
-            struct picomesh_void_result a = picomesh_authctx_from_jwt(jwt, secret.value, out);
-            free(secret.value);
-            if (PICOMESH_IS_OK(a) && out->authenticated) return PICOMESH_OK_VOID();
-            if (PICOMESH_IS_ERR(a)) picomesh_error_destroy(a.error);
-            memset(out, 0, sizeof(*out)); /* invalid jwt → fall back to uid header */
-        } else {
-            picomesh_error_destroy(secret.error);
-        }
+    if (!jwt || !*jwt) return PICOMESH_OK_VOID(); /* anonymous */
+
+    struct picomesh_string_result secret = picomesh_security_jwt_secret(engine);
+    if (PICOMESH_IS_ERR(secret)) {
+        picomesh_error_destroy(secret.error);
+        return PICOMESH_OK_VOID(); /* no key → cannot verify → fail closed */
     }
-    /* Fallback: trust the gateway-set uid (the gateway already verified it).
-     * No verifiable groups are available locally in this case. */
-    out->uid = hdrs ? yheaders_get_u32(hdrs, "uid", 0) : 0;
-    out->authenticated = 0;
+    struct picomesh_void_result verified = picomesh_authctx_from_jwt(jwt, secret.value, out);
+    free(secret.value);
+    if (PICOMESH_IS_ERR(verified)) {
+        picomesh_error_destroy(verified.error);
+        memset(out, 0, sizeof(*out)); /* invalid JWT → unauthenticated, fail closed */
+    }
     return PICOMESH_OK_VOID();
 }
 

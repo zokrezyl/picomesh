@@ -929,6 +929,14 @@ const struct yconfig_node *yconfig_node_at(const struct yconfig_node *n, size_t 
     return n->u.list.items[idx];
 }
 
+const struct yconfig_node *yconfig_node_get(const struct yconfig_node *n, const char *key)
+{
+    if (!n || n->kind != YCONFIG_MAP || !key) return NULL;
+    for (size_t i = 0; i < n->u.map.count; ++i)
+        if (strcmp(n->u.map.entries[i].key, key) == 0) return n->u.map.entries[i].value;
+    return NULL;
+}
+
 /* ---------------- pretty-print ------------------------------------ */
 
 static int dump_node(const struct yconfig_node *n, char *buf, size_t cap, size_t off, int indent);

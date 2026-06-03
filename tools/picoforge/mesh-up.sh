@@ -212,6 +212,28 @@ code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -XPOST http://127.0
 [ "$code" = "401" ] && note_pass "invalid sid → 401 (no credential downgrade)" \
                      || note_fail "invalid sid returned $code (want 401)"
 
+# An invalid/malformed BEARER JWT → 401 (the bearer_jwt_token authenticator
+# matched the credential shape but verification failed; no fall-through).
+code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -XPOST http://127.0.0.1:$WEB/_rpc \
+            -H 'Authorization: Bearer aaaa.bbbb.cccc' \
+            -H 'Content-Type: application/json' \
+            -d '{"path":"git_repo.git_repo.count_total","args":[]}')
+[ "$code" = "401" ] && note_pass "malformed bearer JWT → 401 (issue #27)" \
+                     || note_fail "malformed bearer JWT returned $code (want 401)"
+
+# A NON-Bearer Authorization scheme (Basic) must NOT be treated as a bearer
+# token: it is no-match → request is anonymous → an authed endpoint answers 401
+# with "authentication required" (NOT a bearer "verification failed"). (issue #27)
+resp=$(curl -sS --max-time 10 -XPOST http://127.0.0.1:$WEB/_rpc \
+            -H 'Authorization: Basic dXNlcjpwYXNzd29yZA==' \
+            -H 'Content-Type: application/json' \
+            -d '{"path":"git_repo.git_repo.count_total","args":[]}')
+if [[ "$resp" == *"authentication required"* ]]; then
+    note_pass "non-Bearer Authorization is no-match (anonymous, not a failed bearer)"
+else
+    note_fail "non-Bearer Authorization mishandled — got: ${resp:0:160}"
+fi
+
 # A method ABSENT from the policy is denied by default → 403, even for a
 # signed-in user (accounts.exists is not in the gateway policy).
 code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b tmp/cookies.txt -XPOST http://127.0.0.1:$WEB/_rpc \

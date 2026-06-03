@@ -128,6 +128,11 @@ int yconfig_node_for_each(const struct yconfig_node *n,
                           int (*cb)(const char *key, const struct yconfig_node *val, void *ud),
                           void *ud);
 
+/* Look up `key` directly in a MAP node (no dot-path traversal, so the key may
+ * itself contain dots — e.g. a policy keyed by "service.class.method"). Returns
+ * the child node or NULL when `n` is not a map or the key is absent. */
+const struct yconfig_node *yconfig_node_get(const struct yconfig_node *n, const char *key);
+
 /* List iteration. */
 const struct yconfig_node *yconfig_node_at(const struct yconfig_node *n, size_t idx);
 

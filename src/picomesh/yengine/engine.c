@@ -60,6 +60,13 @@ struct picomesh_worker {
      * thread + loop when the service config enables `perf`. NULL when the
      * feature is off. Owned here; destroyed at engine teardown. */
     struct yperf *perf;
+    /* Per-worker cached frontend security pipeline (authn chain + authorizer),
+     * built once on this worker's first gated request and reused thereafter.
+     * Per-worker so it is thread-confined (no locking) and reuses this
+     * worker's own remotes/loop. Owned here; freed via `security_free` at
+     * engine teardown. */
+    void *security;
+    void (*security_free)(void *);
     /* Transient: handed to the spawned thread for its one-shot setup. */
     picomesh_worker_setup_fn setup;
     void *setup_ud;
@@ -87,6 +94,24 @@ static struct picomesh_worker *engine_current_worker(struct picomesh_engine *e)
     struct picomesh_worker *w = *current_worker_slot();
     if (w) return w;
     return e->workers; /* worker 0 — main/bootstrap/pool-thread fallback */
+}
+
+void *picomesh_engine_worker_security(struct picomesh_engine *e)
+{
+    if (!e) return NULL;
+    struct picomesh_worker *w = engine_current_worker(e);
+    return w ? w->security : NULL;
+}
+
+void picomesh_engine_worker_set_security(struct picomesh_engine *e, void *ptr,
+                                         void (*free_fn)(void *))
+{
+    if (!e) return;
+    struct picomesh_worker *w = engine_current_worker(e);
+    if (!w) return;
+    if (w->security_free) w->security_free(w->security);
+    w->security = ptr;
+    w->security_free = free_fn;
 }
 
 static void apply_cli_env(const struct yargv_chain *cli)
@@ -208,6 +233,7 @@ void picomesh_engine_destroy(struct picomesh_engine *e)
 {
     if (!e) return;
     for (size_t i = 0; i < e->worker_count; ++i) {
+        if (e->workers[i].security_free) e->workers[i].security_free(e->workers[i].security);
         yperf_destroy(e->workers[i].perf);
         struct remote_entry *r = e->workers[i].remotes;
         while (r) {

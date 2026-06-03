@@ -40,7 +40,6 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "frontend.h"
-#include "authz.h"
 
 #include <picomesh/yengine/engine.h>
 #include <picomesh/yengine/resolve.h>
@@ -58,6 +57,8 @@
 #include <picomesh/ycore/ytelemetry.h>
 #include <picomesh/ysecurity/jwt.h>
 #include <picomesh/ysecurity/secret.h>
+#include <picomesh/authenticators/registry.h>
+#include <picomesh/authorizers/registry.h>
 
 /* Each service header brings in its create() + method stubs. */
 #include <picomesh/plugin/sharded_storage/sharded_storage.h>
@@ -1415,6 +1416,67 @@ static uint32_t uid_for_token(const char *token)
     return lr.value;
 }
 
+/* The frontend's security pipeline, built ONCE per worker and reused for every
+ * gated request (cached on the worker via the engine). `secured` records
+ * whether this node carries `security.authenticators` at all; when it does,
+ * `build_ok` records whether the chain + authorizer built cleanly. Per-worker,
+ * so it is thread-confined and reuses this worker's own remotes — no locking. */
+struct gateway_security {
+    int secured;
+    int build_ok;
+    struct picomesh_authn_chain *chain;
+    struct picomesh_authorizer *authorizer;
+};
+
+static void gateway_security_free(void *ptr)
+{
+    struct gateway_security *security = ptr;
+    if (!security) return;
+    picomesh_authn_chain_free(security->chain);
+    picomesh_authorizer_free(security->authorizer);
+    free(security);
+}
+
+/* Return this worker's cached pipeline, building it on first use. NULL only on
+ * allocation failure. A build error is cached as `secured && !build_ok` so a
+ * misconfig is reported per request without rebuilding every time. */
+static struct gateway_security *gateway_security_get(struct picomesh_engine *e)
+{
+    struct gateway_security *security = picomesh_engine_worker_security(e);
+    if (security) return security;
+
+    security = calloc(1, sizeof(*security));
+    if (!security) return NULL;
+
+    const struct yconfig *config = picomesh_engine_config(e);
+    struct yconfig_node_ptr_result authn_r =
+        config ? yconfig_get(config, "security.authenticators") : (struct yconfig_node_ptr_result){.ok = 0};
+    const struct yconfig_node *authn_list = PICOMESH_IS_OK(authn_r) ? authn_r.value : NULL;
+    if (PICOMESH_IS_ERR(authn_r)) picomesh_error_destroy(authn_r.error);
+    security->secured = authn_list && yconfig_node_kind(authn_list) == YCONFIG_LIST;
+
+    if (security->secured) {
+        struct picomesh_void_ptr_result chain_r = picomesh_authn_chain_build(e, authn_list);
+        if (PICOMESH_IS_OK(chain_r)) {
+            security->chain = chain_r.value;
+            struct yconfig_node_ptr_result authz_r = yconfig_get(config, "security.authorizer");
+            const struct yconfig_node *authz_cfg = PICOMESH_IS_OK(authz_r) ? authz_r.value : NULL;
+            if (PICOMESH_IS_ERR(authz_r)) picomesh_error_destroy(authz_r.error);
+            struct picomesh_void_ptr_result authorizer_r = picomesh_authorizer_build(e, authz_cfg);
+            if (PICOMESH_IS_OK(authorizer_r)) {
+                security->authorizer = authorizer_r.value;
+                security->build_ok = 1;
+            } else {
+                picomesh_error_destroy(authorizer_r.error);
+            }
+        } else {
+            picomesh_error_destroy(chain_r.error);
+        }
+    }
+    picomesh_engine_worker_set_security(e, security, gateway_security_free);
+    return security;
+}
+
 /* POST /_rpc — yaapp-style public gateway dispatch. Body:
  *   {"path":"service.class.method","args":[...],"kwargs":{...}}
  * Resolves the opaque session token to a uid, builds a REMOTE ctx for
@@ -1469,48 +1531,71 @@ static void route_json_rpc(struct yloop_stream *s,
         return;
     }
 
-    /* Authentication + authorization (issue #19). On a node configured with
-     * `security.authenticators` (the gateway), every /_rpc call runs the
-     * authenticator chain, then the policy authorizer, BEFORE the backend is
-     * invoked. A node with no security block (a plain transport bridge) keeps
-     * the legacy session→uid resolution with no policy. */
+    /* Authentication + authorization. A frontend configured with
+     * `security.authenticators` (the gateway) runs the configured authenticator
+     * chain, then the configured authorizer, BEFORE the backend is invoked.
+     * Both are pluggable framework categories selected by `type:` — this
+     * frontend just builds and runs them. A node with no `security` block (a
+     * plain transport bridge) keeps the legacy session→uid resolution. */
     uint32_t uid = 0;
     char *verified_jwt = NULL; /* owned; copied into yheaders below */
-    if (picomesh_security_configured(e)) {
-        /* Credential-exchange methods (sid→JWT, refresh, PAT lookup, login,
-         * mint) are authenticator-internal and never callable via public
-         * /_rpc — the gateway invokes them itself, off this path. */
-        if (picomesh_is_credential_exchange(path)) {
+    struct gateway_security *security = gateway_security_get(e);
+    if (!security) {
+        picomesh_service_call_release(&call);
+        yjson_doc_free(doc);
+        send_json_error(s, 500, "_rpc: security pipeline unavailable", keep_alive);
+        return;
+    }
+
+    if (security->secured) {
+        if (!security->build_ok) {
             picomesh_service_call_release(&call);
             yjson_doc_free(doc);
-            send_json_error(s, 403, "_rpc: credential-exchange method not callable here", keep_alive);
+            send_json_error(s, 500, "_rpc: security config error (authenticators/authorizer)", keep_alive);
             return;
         }
-        struct picomesh_authn_outcome authn =
-            picomesh_gateway_authenticate(e, headers_raw, headers_raw_len);
-        if (authn.http_status != 0) {
-            int code = authn.http_status;
-            picomesh_authn_outcome_free(&authn);
+        struct picomesh_authn_request authn_req = {
+            .engine = e, .headers_raw = headers_raw,
+            .headers_raw_len = headers_raw_len, .endpoint = path,
+        };
+        struct picomesh_authn_outcome outcome = picomesh_authn_chain_run(security->chain, &authn_req);
+        if (picomesh_authn_outcome_failed(&outcome)) {
+            char msg[288];
+            snprintf(msg, sizeof(msg), "_rpc: %s", outcome.error ? outcome.error : "invalid credentials");
+            picomesh_authn_outcome_free(&outcome);
             picomesh_service_call_release(&call);
             yjson_doc_free(doc);
-            send_json_error(s, code,
-                            code == 401 ? "_rpc: invalid or missing credentials"
-                                        : "_rpc: security misconfigured", keep_alive);
+            send_json_error(s, 401, msg, keep_alive);
             return;
         }
-        int decision = picomesh_gateway_authorize(e, path, args, &authn.claims);
-        if (decision != 0) {
-            picomesh_authn_outcome_free(&authn);
+        struct picomesh_authz_decision decision =
+            picomesh_authorizer_decide(security->authorizer, path, args, outcome.jwt);
+        if (!decision.allowed) {
+            char msg[288];
+            snprintf(msg, sizeof(msg), "_rpc: %s", decision.reason[0] ? decision.reason : "forbidden");
+            picomesh_authn_outcome_free(&outcome);
             picomesh_service_call_release(&call);
             yjson_doc_free(doc);
-            send_json_error(s, decision,
-                            decision == 401 ? "_rpc: authentication required"
-                                            : "_rpc: forbidden", keep_alive);
+            send_json_error(s, decision.status ? decision.status : 403, msg, keep_alive);
             return;
         }
-        uid = authn.claims.uid;
-        if (authn.jwt) verified_jwt = strdup(authn.jwt);
-        picomesh_authn_outcome_free(&authn);
+        /* Allowed: carry the verified JWT downstream; derive uid from its
+         * claims for the trace/log line (backends use the JWT, not the uid). */
+        if (outcome.jwt) {
+            verified_jwt = strdup(outcome.jwt);
+            struct picomesh_string_result secret = picomesh_security_jwt_secret(e);
+            if (PICOMESH_IS_OK(secret)) {
+                struct picomesh_authctx claims;
+                struct picomesh_void_result ctx_r =
+                    picomesh_authctx_from_jwt(outcome.jwt, secret.value, &claims);
+                if (PICOMESH_IS_OK(ctx_r) && claims.authenticated) uid = claims.uid;
+                else if (PICOMESH_IS_ERR(ctx_r)) picomesh_error_destroy(ctx_r.error);
+                free(secret.value);
+            } else {
+                picomesh_error_destroy(secret.error);
+            }
+        }
+        picomesh_authn_outcome_free(&outcome);
     } else {
         char token[64];
         if (extract_session_token(headers_raw, headers_raw_len, token, sizeof(token)))

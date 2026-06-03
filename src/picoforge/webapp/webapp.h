@@ -11,6 +11,8 @@ struct webapp_config {
     const char *gateway_url;    /* e.g. "http://127.0.0.1:8090" */
     const char *templates_dir;  /* may be NULL → no templates */
     const char *static_dir;     /* may be NULL → no static files */
+    const char *console_url;    /* generic /_alpine service console URL, shown
+                                 * on /admin/services; NULL/"" → no link */
 };
 
 /* Start the HTTP listener on host:port. Spawns serve coroutines via

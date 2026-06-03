@@ -313,6 +313,9 @@ mesh:
             port: 8212
           - service: trace_collector
             port: 8220
+          # runner_agent.exchange mints the runner JWT via the token issuer.
+          - service: token_issuer
+            port: 8207
 
     # The gateway. Per CLAUDE.md: this is the ONE service that
     # listens yhttp — it's the auth boundary. External clients
@@ -379,83 +382,109 @@ mesh:
         # only, and the gateway resolves those to a verified JWT internally.
         security:
           authenticators:
-            - session_cookie
-            - bearer_opaque_token
-          policy:
-            # Service discovery is open (handled as a gateway route, listed
-            # here for intent/forward-compat).
-            _describe: anonymous
-            _describe_tree: anonymous
-            # Product reads/writes require a signed-in user; git_repo enforces
-            # resource-level ownership on top of this gate.
-            git_repo.git_repo.count_total: authenticated
-            git_repo.git_repo.count_for_owner: authenticated
-            git_repo.git_repo.list_for_owner: authenticated
-            git_repo.git_repo.read_file: authenticated
-            git_repo.git_repo.read_tree: authenticated
-            git_repo.git_repo.make: authenticated
-            git_repo.git_repo.put_file: authenticated
-            issues.issues.open: authenticated
-            issues.issues.close: authenticated
-            issues.issues.count_open_in_repo: authenticated
-            git_pipeline.git_pipeline.enqueue: authenticated
-            git_pipeline.git_pipeline.enqueue_job: authenticated
-            git_pipeline.git_pipeline.lease: authenticated
-            git_pipeline.git_pipeline.count_pending: authenticated
-            git_pipeline.git_pipeline.count_running: authenticated
-            git_pipeline.git_pipeline.count_done: authenticated
-            git_pipeline.git_pipeline.job_descriptor: authenticated
-            git_pipeline.git_pipeline.read_log: authenticated
-            # Runner-only job lifecycle: the caller must hold a runner token
-            # (gateway mints groups "site:runner,runner:<id>" for an rnr_ token).
-            git_pipeline.git_pipeline.lease_job:
-              required_group: "site:runner"
-            git_pipeline.git_pipeline.append_log:
-              required_group: "site:runner"
-            git_pipeline.git_pipeline.complete_job:
-              required_group: "site:runner"
-            git_pipeline.git_pipeline.requeue_expired:
-              required_role: owner
-              account_from: site
-            # Runner registry: admins mint/revoke/list tokens; runners
-            # register/heartbeat/get themselves with their runner token.
-            runner_agent.runner_agent.create_token:
-              required_role: owner
-              account_from: site
-            runner_agent.runner_agent.revoke_token:
-              required_role: owner
-              account_from: site
-            runner_agent.runner_agent.list:
-              required_role: owner
-              account_from: site
-            runner_agent.runner_agent.list_all:
-              required_role: owner
-              account_from: site
-            runner_agent.runner_agent.count_active:
-              required_role: owner
-              account_from: site
-            runner_agent.runner_agent.register:
-              required_group: "site:runner"
-            runner_agent.runner_agent.heartbeat:
-              required_group: "site:runner"
-            runner_agent.runner_agent.get:
-              required_group: "site:runner"
-            trace_collector.trace_collector.get_trace: authenticated
-            trace_collector.trace_collector.services: authenticated
-            trace_collector.trace_collector.operations: authenticated
-            trace_collector.trace_collector.latency: authenticated
-            trace_collector.trace_collector.errors: authenticated
-            # Admin surfaces — site-owner only, expressed through the model
-            # (replaces the gateway's old raw role:<uid> read).
-            accounts.accounts.list:
-              required_role: owner
-              account_from: site
-            accounts.accounts.count:
-              required_role: owner
-              account_from: site
-            personal_access_tokens.personal_access_tokens.count_active:
-              required_role: owner
-              account_from: site
+            # browser → webapp → gateway: opaque sid cookie (or forwarded
+            # same-named header) exchanged for the stored access JWT.
+            - type: session_cookie
+              cookie: picomesh-sid
+              header: picomesh-sid
+              lookup: session.session.jwt
+            # API clients holding a real access JWT. Tokens with an opaque
+            # prefix belong to the opaque schemes below, so skip them here.
+            - type: bearer_jwt_token
+              reject_prefixes: ["pat_", "rnr_"]
+            # Opaque bearer schemes — one entry PER prefix, each with its
+            # own lookup service. The authenticator does NOT know PAT/runner
+            # internals: it hands the whole token to `lookup`, which returns
+            # a JWT. (Making these lookups return a JWT is the PAT/runner
+            # follow-up; the framework + config shape are generic now.)
+            # NOTE: a `pat_` opaque entry is intentionally NOT enabled yet. The
+            # personal_access_tokens plugin is still an in-memory numeric POC:
+            # its `lookup` returns a uid (not a JWT) and `mint` does not even
+            # hand a usable token back. Enabling a `pat_` entry would advertise
+            # a flow that cannot work. When PATs become real random opaque
+            # tokens (hash-at-rest), add a `personal_access_tokens.exchange`
+            # that returns a JWT — exactly like runner_agent.exchange below —
+            # and add the entry here. (issue #27 / docs/security.md follow-up)
+            - type: bearer_opaque_token
+              prefix: "rnr_"
+              lookup: runner_agent.runner_agent.exchange
+          authorizer:
+            type: policy
+            policy:
+              # Service discovery is open (handled as a gateway route, listed
+              # here for intent/forward-compat).
+              _describe: anonymous
+              _describe_tree: anonymous
+              # Product reads/writes require a signed-in user; git_repo enforces
+              # resource-level ownership on top of this gate.
+              git_repo.git_repo.count_total: authenticated
+              git_repo.git_repo.count_for_owner: authenticated
+              git_repo.git_repo.list_for_owner: authenticated
+              git_repo.git_repo.read_file: authenticated
+              git_repo.git_repo.read_tree: authenticated
+              git_repo.git_repo.make: authenticated
+              git_repo.git_repo.put_file: authenticated
+              issues.issues.open: authenticated
+              issues.issues.close: authenticated
+              issues.issues.count_open_in_repo: authenticated
+              git_pipeline.git_pipeline.enqueue: authenticated
+              git_pipeline.git_pipeline.enqueue_job: authenticated
+              git_pipeline.git_pipeline.lease: authenticated
+              git_pipeline.git_pipeline.count_pending: authenticated
+              git_pipeline.git_pipeline.count_running: authenticated
+              git_pipeline.git_pipeline.count_done: authenticated
+              git_pipeline.git_pipeline.job_descriptor: authenticated
+              git_pipeline.git_pipeline.read_log: authenticated
+              # Runner-only job lifecycle: the caller must hold a runner token
+              # (gateway mints groups "site:runner,runner:<id>" for an rnr_ token).
+              git_pipeline.git_pipeline.lease_job:
+                required_group: "site:runner"
+              git_pipeline.git_pipeline.append_log:
+                required_group: "site:runner"
+              git_pipeline.git_pipeline.complete_job:
+                required_group: "site:runner"
+              git_pipeline.git_pipeline.requeue_expired:
+                required_role: owner
+                account_from: site
+              # Runner registry: admins mint/revoke/list tokens; runners
+              # register/heartbeat/get themselves with their runner token.
+              runner_agent.runner_agent.create_token:
+                required_role: owner
+                account_from: site
+              runner_agent.runner_agent.revoke_token:
+                required_role: owner
+                account_from: site
+              runner_agent.runner_agent.list:
+                required_role: owner
+                account_from: site
+              runner_agent.runner_agent.list_all:
+                required_role: owner
+                account_from: site
+              runner_agent.runner_agent.count_active:
+                required_role: owner
+                account_from: site
+              runner_agent.runner_agent.register:
+                required_group: "site:runner"
+              runner_agent.runner_agent.heartbeat:
+                required_group: "site:runner"
+              runner_agent.runner_agent.get:
+                required_group: "site:runner"
+              trace_collector.trace_collector.get_trace: authenticated
+              trace_collector.trace_collector.services: authenticated
+              trace_collector.trace_collector.operations: authenticated
+              trace_collector.trace_collector.latency: authenticated
+              trace_collector.trace_collector.errors: authenticated
+              # Admin surfaces — site-owner only, expressed through the model
+              # (replaces the gateway's old raw role:<uid> read).
+              accounts.accounts.list:
+                required_role: owner
+                account_from: site
+              accounts.accounts.count:
+                required_role: owner
+                account_from: site
+              personal_access_tokens.personal_access_tokens.count_active:
+                required_role: owner
+                account_from: site
         # gh#14: per-node Linux perf_event_open(2) profiling, driven from
         # this service's own config — no separate `perf record` wrapper.
         # Flip `enabled: true` to have each gateway worker open the listed

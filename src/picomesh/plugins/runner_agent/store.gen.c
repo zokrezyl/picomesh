@@ -6,6 +6,8 @@ static runner_agent_runner_agent_create_token_fn _runner_agent_runner_agent_runn
 __attribute__((unused))
 static runner_agent_runner_agent_lookup_token_fn _runner_agent_runner_agent_runner_agent_runner_agent_lookup_token_check = runner_agent_runner_agent_lookup_token_impl;
 __attribute__((unused))
+static runner_agent_runner_agent_exchange_fn _runner_agent_runner_agent_runner_agent_runner_agent_exchange_check = runner_agent_runner_agent_exchange_impl;
+__attribute__((unused))
 static runner_agent_runner_agent_revoke_token_fn _runner_agent_runner_agent_runner_agent_runner_agent_revoke_token_check = runner_agent_runner_agent_revoke_token_impl;
 __attribute__((unused))
 static runner_agent_runner_agent_register_fn _runner_agent_runner_agent_runner_agent_runner_agent_register_check = runner_agent_runner_agent_register_impl;
@@ -34,6 +36,7 @@ struct class_ptr_result runner_agent_runner_agent_class_get(void)
     static const struct op ops[] = {
         {"runner_agent", "runner_agent_create_token", (method_id_t)runner_agent_runner_agent_create_token, (impl_t)runner_agent_runner_agent_create_token_impl},
         {"runner_agent", "runner_agent_lookup_token", (method_id_t)runner_agent_runner_agent_lookup_token, (impl_t)runner_agent_runner_agent_lookup_token_impl},
+        {"runner_agent", "runner_agent_exchange", (method_id_t)runner_agent_runner_agent_exchange, (impl_t)runner_agent_runner_agent_exchange_impl},
         {"runner_agent", "runner_agent_revoke_token", (method_id_t)runner_agent_runner_agent_revoke_token, (impl_t)runner_agent_runner_agent_revoke_token_impl},
         {"runner_agent", "runner_agent_register", (method_id_t)runner_agent_runner_agent_register, (impl_t)runner_agent_runner_agent_register_impl},
         {"runner_agent", "runner_agent_heartbeat", (method_id_t)runner_agent_runner_agent_heartbeat, (impl_t)runner_agent_runner_agent_heartbeat_impl},

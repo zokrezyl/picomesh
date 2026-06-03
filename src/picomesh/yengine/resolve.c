@@ -10,11 +10,13 @@
 #include <picomesh/yengine/resolve.h>
 
 #include <picomesh/yengine/engine.h>
-#include <picomesh/yclass/jinvoke.h> /* jinvoke_params_for */
+#include <picomesh/yclass/jinvoke.h> /* jinvoke_params_for, jinvoke_for, jinvoke_fn */
 #include <picomesh/yclass/rpc.h>     /* object_create_in_ctx / object_release_in_ctx */
+#include <picomesh/yjson/yjson.h>
 
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* Split "service.class.method" (needs at least two dots) into the service
@@ -135,4 +137,51 @@ void picomesh_service_call_release(struct picomesh_service_call *call)
         return;
     object_release_in_ctx(&call->ctx, call->obj);
     call->obj = NULL;
+}
+
+struct picomesh_string_result
+picomesh_engine_invoke_json(struct picomesh_engine *engine, const char *path,
+                            const char *args_json, struct yheaders *hdrs)
+{
+    struct picomesh_service_call_result call_r = picomesh_resolve_service_call(engine, path);
+    if (PICOMESH_IS_ERR(call_r))
+        return PICOMESH_ERR(picomesh_string, "engine_invoke: resolve failed", call_r);
+    struct picomesh_service_call call = call_r.value;
+
+    jinvoke_fn fn = jinvoke_for(call.method_qname);
+    if (!fn) {
+        picomesh_service_call_release(&call);
+        return PICOMESH_ERR(picomesh_string, "engine_invoke: no such method");
+    }
+
+    struct yjson_doc *args_doc = NULL;
+    const struct yjson_value *args = NULL;
+    if (args_json && *args_json) {
+        args_doc = yjson_parse(args_json, strlen(args_json));
+        if (args_doc) args = yjson_doc_root(args_doc);
+    }
+
+    struct yjson_writer *writer = yjson_writer_new();
+    if (!writer) {
+        if (args_doc) yjson_doc_free(args_doc);
+        picomesh_service_call_release(&call);
+        return PICOMESH_ERR(picomesh_string, "engine_invoke: writer alloc failed");
+    }
+    yjson_writer_begin_object(writer);
+    yjson_writer_key(writer, "result");
+    char err[256] = {0};
+    int rc = fn(&call.ctx, call.obj, hdrs, args, writer, err, sizeof(err));
+    picomesh_service_call_release(&call);
+    if (args_doc) yjson_doc_free(args_doc);
+    if (rc != 0) {
+        yjson_writer_free(writer);
+        return PICOMESH_ERR(picomesh_string, err[0] ? err : "engine_invoke: call failed");
+    }
+    yjson_writer_end_object(writer);
+    size_t len = 0;
+    const char *data = yjson_writer_data(writer, &len);
+    char *out = data ? strdup(data) : NULL;
+    yjson_writer_free(writer);
+    if (!out) return PICOMESH_ERR(picomesh_string, "engine_invoke: out of memory");
+    return PICOMESH_OK(picomesh_string, out);
 }

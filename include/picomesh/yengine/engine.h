@@ -129,6 +129,16 @@ struct picomesh_engine *picomesh_active_engine(void);
 /* The engine's config tree. Owned by the engine; do not destroy. */
 const struct yconfig *picomesh_engine_config(struct picomesh_engine *e);
 
+/* Per-worker cached state for a client-facing frontend's security pipeline
+ * (the authenticator chain + authorizer). A frontend builds the pipeline once
+ * on the worker's first gated request and stashes it here; subsequent requests
+ * on the same worker reuse it. The slot is per-worker (thread-confined), so no
+ * locking is needed. `set` stores `ptr` with `free_fn`, invoked at engine
+ * destroy (and when replacing an existing value). `get` returns NULL if unset. */
+void *picomesh_engine_worker_security(struct picomesh_engine *e);
+void picomesh_engine_worker_set_security(struct picomesh_engine *e, void *ptr,
+                                         void (*free_fn)(void *));
+
 /* Plugin shortcut: return the top-level `<plugin>` subtree, or NULL.
  * Mirrors `yaapp_engine.get_config('<plugin>')`. */
 const struct yconfig_node *picomesh_engine_plugin_config(struct picomesh_engine *e, const char *plugin);
