@@ -272,37 +272,44 @@ Failure handling:
   state ever logs in, so there is no security window. (This is why the credential
   goes *before* the `users` row — a `users` row can never exist without a
   credential.)
-- **Abandoned claim — credential-orphan hazard (the hard case):** if step 2 wrote
-  a credential but step 3 never ran, the credential is orphaned. Since
-  `password_authn.register` is put-if-absent, a *later* registration of the same
-  username gets "already exists" (0) for the credential. The gateway used to
-  treat 0 as success and proceed, so with `uid = FNV(username)` (same name →
-  same uid) the new registrant would **inherit the stale credential** instead of
-  setting their own password. **This is now closed (gh#29).** The gateway's
-  `route_register_post` (`frontend.c`):
-  1. **Gates on the completion marker first** — `accounts.exists(uid)` (the
-     `users` row). A *completed* account is never re-registrable through
-     register; the response is "username already taken". (Password changes for a
-     real account go through an authenticated change-password flow, never
-     register — otherwise: account takeover.)
-  2. **Makes the new password authoritative** — once the gate proves no
-     completed account uses this uid, no live login depends on whatever
-     credential might be stored for it, so an orphan is safe to overwrite. When
-     `password_authn.register` reports "already exists" (0), the gateway calls
-     `password_authn.change_password(uid, pw)` so the *new* registrant's password
-     wins. The orphan can no longer be inherited.
+- **Abandoned claim — credential-orphan hazard (the hard case):** if a
+  credential was written but the `users` row never was, the credential is
+  orphaned. Since `password_authn.register` is put-if-absent, a *later*
+  registration of the same username gets "already exists" (0) for the
+  credential. **Closed (gh#29) by claiming the name BEFORE any credential
+  write.** The gateway's `route_register_post` (`frontend.c`) runs the protocol
+  in claim-first order:
+  1. **Claim** — `accounts.claim_username(uid, username)` does the
+     `INSERT OR IGNORE` and returns 1 ONLY to the request whose insert actually
+     landed (SQLite `changes == 1`). Exactly one registrant wins; everyone else
+     gets "username already taken". This is the serialization point.
+  2. **Credential — winner only.** Only the claim winner writes the credential.
+     `password_authn.register` is put-if-absent; a 0 return is only possible as a
+     *legacy* orphan (an older flow wrote the credential before the claim), and
+     overwriting it with `password_authn.change_password` is safe **precisely
+     because we hold the fresh claim** — no concurrent registrant can be at this
+     step, so the overwrite can't stomp a live account's or a competitor's
+     password. (The earlier "exists-gate then unconditional overwrite" left a
+     window where two concurrent registrations both passed the gate and the
+     loser overwrote the winner's password — an account-takeover race. Tying the
+     overwrite to *winning the claim* closes it.)
+  3. **Complete** — `accounts.register` writes the `users` completion marker
+     after the credential, then confirms the claim.
 
-  The two end-state options remain valid framings of why this is safe:
-  - **(preferred, still future) assigned, never-reused uid.** Assign the uid at
+  Consequence and remaining gap: a registration that wins the claim but then
+  fails before completing (e.g. the credential backend is down) leaves an
+  unconfirmed claim with no `users` row and no usable credential. It **fails
+  closed** — nothing can log in (login requires the `users` row) — but the name
+  is stuck until reclaimed. Self-heal-on-retry is intentionally given up in
+  exchange for closing the takeover; reclaiming a stuck claim is the abandoned-
+  claim reaper's job (below), which must verify **both** no `users` row **and**
+  no credential for that uid before freeing the name.
+  - **(preferred end state) assigned, never-reused uid.** Assign the uid at
     claim time (sequence / snowflake), never `FNV(username)`, never reuse. A
     failed registration's uid is dead; a retry gets a *fresh* uid with an empty
     credential slot; the orphan under the old uid is unreachable garbage (lazy
-    GC, never inherited). Makes any reaper safe by construction — see "assigned
-    uid" below.
-  - **(implemented, uid stays FNV)** the gateway's gate-then-overwrite above:
-    overwrite an *incomplete* account's credential, never a *completed* one. A
-    background reaper, if added, must likewise reclaim only after verifying
-    **both** no `users` row **and** no credential for that uid.
+    GC, never inherited). Restores clean idempotent self-heal AND makes the
+    reaper safe by construction — see "assigned uid" below.
 - **No cross-cluster compensation** (delete-the-claim-on-failure): the
   compensating delete can itself fail. Prefer idempotent-retry + the
   written-last completion marker.

@@ -93,6 +93,34 @@ static int autoport_registry_addr(struct picomesh_engine *engine, char *host_out
     return 1;
 }
 
+/* True iff `plugin` is in THIS node's activated plugins list. Read from
+ * config — NOT by probing a local object create, because `<class>_create`
+ * lazily registers the class even for a remote proxy, which would make every
+ * node look like it hosts portalloc/registry after the first call. */
+static int autoport_plugin_active(struct picomesh_engine *engine, const char *name,
+                                  const char *plugin)
+{
+    const struct yconfig_node *plugins = NULL;
+    if (name && *name) {
+        char path[256];
+        snprintf(path, sizeof(path), "mesh.services.%s.plugins", name);
+        struct yconfig_node_ptr_result r = yconfig_get(picomesh_engine_config(engine), path);
+        if (PICOMESH_IS_OK(r) && r.value && yconfig_node_kind(r.value) == YCONFIG_LIST) plugins = r.value;
+    }
+    if (!plugins) {
+        struct yconfig_node_ptr_result r = yconfig_get(picomesh_engine_config(engine), "plugins");
+        if (PICOMESH_IS_OK(r) && r.value && yconfig_node_kind(r.value) == YCONFIG_LIST) plugins = r.value;
+    }
+    if (!plugins) return 0;
+    size_t n = yconfig_node_size(plugins);
+    for (size_t i = 0; i < n; ++i) {
+        const struct yconfig_node *item = yconfig_node_at(plugins, i);
+        const char *s = item ? yconfig_node_as_string(item, NULL) : NULL;
+        if (s && strcmp(s, plugin) == 0) return 1;
+    }
+    return 0;
+}
+
 /* A short-lived synchronous RPC session to the registry. */
 struct reg_session {
     struct peer_channel *channel;
@@ -203,18 +231,23 @@ int picomesh_autoport_allocate(struct picomesh_engine *engine, const char *name,
     if (!engine || !name || !*name) return -1;
     if (!host || !*host) host = "127.0.0.1";
 
-    struct ctx pctx = picomesh_engine_service_ctx(engine, "portalloc");
+    struct ctx pctx = {0};
     struct object *pobj = NULL;
     struct peer_channel *pa_channel = NULL;
 
     /* Bootstrap case: THIS node provides portalloc. It cannot discover itself
-     * through a registry it hasn't registered with yet, so allocate from a
-     * local instance — the served instances bind-probe, so reusing this port
-     * is still prevented once this node is listening on it. */
-    if (pctx.peer == NULL) {
+     * through a registry it hasn't registered with yet, so allocate from its
+     * local instance — every receiver shares the one process-wide lease table,
+     * so the port portalloc takes for itself is never handed to a caller. */
+    if (autoport_plugin_active(engine, name, "portalloc")) {
+        pctx = picomesh_engine_service_ctx(engine, "portalloc");
         struct object_ptr_result obj_r = portalloc_portalloc_create(&pctx);
-        if (PICOMESH_IS_OK(obj_r)) pobj = obj_r.value;
-        else picomesh_error_destroy(obj_r.error);
+        if (PICOMESH_IS_ERR(obj_r)) {
+            picomesh_error_destroy(obj_r.error);
+            ywarn("autoport: portalloc node failed to create its local allocator");
+            return -1;
+        }
+        pobj = obj_r.value;
     }
 
     /* Normal case: discover the remote portalloc through the registry. */
@@ -296,16 +329,8 @@ void picomesh_autoport_register_self(struct picomesh_engine *engine, const char 
 
     /* The registry node does not register itself: it can't connect to its own
      * listener before that listener is up, and nothing discovers the registry
-     * through the registry. Detect "are we the registry" by a local create. */
-    struct ctx local = picomesh_engine_service_ctx(engine, "registry");
-    if (local.peer == NULL) {
-        struct object_ptr_result obj_r = registry_registry_create(&local);
-        if (PICOMESH_IS_OK(obj_r)) {
-            object_release_in_ctx(&local, obj_r.value);
-            return; /* this IS the registry */
-        }
-        picomesh_error_destroy(obj_r.error);
-    }
+     * through the registry. */
+    if (autoport_plugin_active(engine, name, "registry")) return;
 
     struct reg_session session = {0};
     if (!reg_session_open(engine, &session)) return;
