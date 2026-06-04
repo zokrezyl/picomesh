@@ -146,6 +146,89 @@ _short_body:
     return _resp_max >= 1 ? 1 : 0;
 }
 
+static size_t trace_collector_trace_collector_traces_skel(const void *_body, size_t _body_len,
+                          void *_resp, size_t _resp_max)
+{
+    size_t _off = 0;
+    struct ctx _local = {0};
+    /* The framework header section is first on every CALL body — parse
+     * it back into the `hdrs` argument before the packed business args. */
+    struct yheaders *_hdrs = NULL;
+    {
+        size_t _hconsumed = 0;
+        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
+        if (!_hdrs) goto _short_body;
+        _off = _hconsumed;
+    }
+    struct object *_obj = NULL;
+    {
+        if (_off + 8 > _body_len) goto _short_body;
+        uint64_t _h;
+        memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
+        _obj = (struct object *)rpc_handle_resolve(_h);
+    }
+    char _s1[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s1)) goto _short_body;
+        if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
+        _s1[_slen] = 0; _off += _slen;
+    }
+    char _s2[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s2)) goto _short_body;
+        if (_slen) memcpy(_s2, (const uint8_t *)_body + _off, _slen);
+        _s2[_slen] = 0; _off += _slen;
+    }
+    uint32_t _v3 = 0;
+    if (_off + sizeof(_v3) > _body_len) goto _short_body;
+    memcpy(&_v3, (const uint8_t *)_body + _off, sizeof(_v3));
+    _off += sizeof(_v3);
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.trace_collector_trace_collector_traces");
+    struct picomesh_string_result _r = trace_collector_trace_collector_traces(&_local, _obj, _hdrs, _s1, _s2, _v3);
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
+    yheaders_free(_hdrs); _hdrs = NULL;
+    if (_resp_max < 1) return 0;
+    if (PICOMESH_IS_ERR(_r)) {
+        picomesh_error_print(stderr, "[skel] trace_collector_trace_collector_traces", _r.error);
+        const char *_msg = _r.error.msg ? _r.error.msg : "(no msg)";
+        uint32_t _ml = (uint32_t)strlen(_msg);
+        if (_ml > 256) _ml = 256;
+        if (_resp_max < 1 + 4 + _ml) {
+            picomesh_error_destroy(_r.error);
+            ((uint8_t *)_resp)[0] = 1;
+            return _resp_max >= 1 ? 1 : 0;
+        }
+        ((uint8_t *)_resp)[0] = 1;
+        memcpy((uint8_t *)_resp + 1, &_ml, 4);
+        memcpy((uint8_t *)_resp + 5, _msg, _ml);
+        picomesh_error_destroy(_r.error);
+        return 1 + 4 + _ml;
+    }
+    {
+        const char *_sv = _r.value ? _r.value : "";
+        uint32_t _svlen = (uint32_t)strlen(_sv);
+        if (_resp_max < 1 + 4 + (size_t)_svlen) { free(_r.value); return 0; }
+        ((uint8_t *)_resp)[0] = 0;
+        memcpy((uint8_t *)_resp + 1, &_svlen, 4);
+        if (_svlen) memcpy((uint8_t *)_resp + 5, _sv, _svlen);
+        free(_r.value);
+        return 1 + 4 + (size_t)_svlen;
+    }
+_short_body:
+    yheaders_free(_hdrs);
+    if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
+    return _resp_max >= 1 ? 1 : 0;
+}
+
 static size_t trace_collector_trace_collector_services_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
@@ -516,6 +599,27 @@ static int trace_collector_trace_collector_get_trace_jinvoke(struct ctx *ctx, st
     return 0;
 }
 
+static int trace_collector_trace_collector_traces_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
+{
+    const char *arg0 = yjson_as_string(yjson_array_at(args, 0), "");
+    const char *arg1 = yjson_as_string(yjson_array_at(args, 1), "");
+    uint32_t arg2 = (uint32_t)yjson_as_int(yjson_array_at(args, 2), 0);
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_string_result call_result = trace_collector_trace_collector_traces(call_ctx, obj, hdrs, arg0, arg1, arg2);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(err, err_cap, "%s: %s", "trace_collector_trace_collector_traces",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    yjson_writer_string(result, call_result.value ? call_result.value : "");
+    free(call_result.value);
+    return 0;
+}
+
 static int trace_collector_trace_collector_services_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
@@ -663,6 +767,55 @@ static int trace_collector_trace_collector_get_trace_minvoke(struct ctx *ctx, st
     struct picomesh_string_result call_result = trace_collector_trace_collector_get_trace(call_ctx, obj, hdrs, _v0);
     if (PICOMESH_IS_ERR(call_result)) {
         snprintf(_err, _err_cap, "%s: %s", "trace_collector_trace_collector_get_trace",
+                 call_result.error.msg ? call_result.error.msg : "<no message>");
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    {
+        const char *_sv = call_result.value ? call_result.value : "";
+        cmp_write_str(_mw, _sv, (uint32_t)strlen(_sv));
+        free(call_result.value);
+    }
+    return 0;
+}
+
+static int trace_collector_trace_collector_traces_minvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          cmp_ctx_t *_mr, uint32_t _argc, cmp_ctx_t *_mw,
+                          char *_err, size_t _err_cap)
+{
+    (void)_mr;
+    if (_argc != 3u) {
+        snprintf(_err, _err_cap, "trace_collector_trace_collector_traces: expected 3 arg(s), got %u", _argc);
+        return -1;
+    }
+    char _v0[4096];
+    {
+        uint32_t _sz = (uint32_t)sizeof(_v0);
+        if (!cmp_read_str(_mr, _v0, &_sz)) {
+            snprintf(_err, _err_cap, "service: expected str arg (%s)", cmp_strerror(_mr));
+            return -1;
+        }
+    }
+    char _v1[4096];
+    {
+        uint32_t _sz = (uint32_t)sizeof(_v1);
+        if (!cmp_read_str(_mr, _v1, &_sz)) {
+            snprintf(_err, _err_cap, "status: expected str arg (%s)", cmp_strerror(_mr));
+            return -1;
+        }
+    }
+    uint32_t _v2;
+    {
+        uint64_t _u;
+        if (!cmp_read_uinteger(_mr, &_u)) { snprintf(_err, _err_cap, "since_secs: expected unsigned int (%s)", cmp_strerror(_mr)); return -1; }
+        if (_u > UINT32_MAX) { snprintf(_err, _err_cap, "since_secs: value %llu out of range for uint32_t", (unsigned long long)_u); return -1; }
+        _v2 = (uint32_t)_u;
+    }
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_string_result call_result = trace_collector_trace_collector_traces(call_ctx, obj, hdrs, _v0, _v1, _v2);
+    if (PICOMESH_IS_ERR(call_result)) {
+        snprintf(_err, _err_cap, "%s: %s", "trace_collector_trace_collector_traces",
                  call_result.error.msg ? call_result.error.msg : "<no message>");
         picomesh_error_destroy(call_result.error);
         return -1;
@@ -862,6 +1015,7 @@ struct trace_collector_jinvoke_row { const char *name; jinvoke_fn fn; };
 static const struct trace_collector_jinvoke_row trace_collector_jinvoke_rows[] = {
     {"trace_collector_trace_collector_ingest", trace_collector_trace_collector_ingest_jinvoke},
     {"trace_collector_trace_collector_get_trace", trace_collector_trace_collector_get_trace_jinvoke},
+    {"trace_collector_trace_collector_traces", trace_collector_trace_collector_traces_jinvoke},
     {"trace_collector_trace_collector_services", trace_collector_trace_collector_services_jinvoke},
     {"trace_collector_trace_collector_operations", trace_collector_trace_collector_operations_jinvoke},
     {"trace_collector_trace_collector_latency", trace_collector_trace_collector_latency_jinvoke},
@@ -885,6 +1039,7 @@ struct trace_collector_minvoke_row { const char *name; minvoke_fn fn; };
 static const struct trace_collector_minvoke_row trace_collector_minvoke_rows[] = {
     {"trace_collector_trace_collector_ingest", trace_collector_trace_collector_ingest_minvoke},
     {"trace_collector_trace_collector_get_trace", trace_collector_trace_collector_get_trace_minvoke},
+    {"trace_collector_trace_collector_traces", trace_collector_trace_collector_traces_minvoke},
     {"trace_collector_trace_collector_services", trace_collector_trace_collector_services_minvoke},
     {"trace_collector_trace_collector_operations", trace_collector_trace_collector_operations_minvoke},
     {"trace_collector_trace_collector_latency", trace_collector_trace_collector_latency_minvoke},
@@ -909,6 +1064,11 @@ static const struct jinvoke_param trace_collector_trace_collector_ingest_params[
 static const struct jinvoke_param trace_collector_trace_collector_get_trace_params[] = {
     {"trace_id", "const char *"}
 };
+static const struct jinvoke_param trace_collector_trace_collector_traces_params[] = {
+    {"service", "const char *"},
+    {"status", "const char *"},
+    {"since_secs", "uint32_t"}
+};
 static const struct jinvoke_param trace_collector_trace_collector_operations_params[] = {
     {"service", "const char *"}
 };
@@ -925,6 +1085,7 @@ struct trace_collector_params_row { const char *name; struct jinvoke_params para
 static const struct trace_collector_params_row trace_collector_params_rows[] = {
     {"trace_collector_trace_collector_ingest", {trace_collector_trace_collector_ingest_params, 1}},
     {"trace_collector_trace_collector_get_trace", {trace_collector_trace_collector_get_trace_params, 1}},
+    {"trace_collector_trace_collector_traces", {trace_collector_trace_collector_traces_params, 3}},
     {"trace_collector_trace_collector_services", {NULL, 0}},
     {"trace_collector_trace_collector_operations", {trace_collector_trace_collector_operations_params, 1}},
     {"trace_collector_trace_collector_latency", {trace_collector_trace_collector_latency_params, 3}},
@@ -955,6 +1116,7 @@ struct trace_collector_skel_row { const char *name; rpc_skel_fn fn; };
 static const struct trace_collector_skel_row trace_collector_skel_rows[] = {
     {"trace_collector_trace_collector_ingest", trace_collector_trace_collector_ingest_skel},
     {"trace_collector_trace_collector_get_trace", trace_collector_trace_collector_get_trace_skel},
+    {"trace_collector_trace_collector_traces", trace_collector_trace_collector_traces_skel},
     {"trace_collector_trace_collector_services", trace_collector_trace_collector_services_skel},
     {"trace_collector_trace_collector_operations", trace_collector_trace_collector_operations_skel},
     {"trace_collector_trace_collector_latency", trace_collector_trace_collector_latency_skel},

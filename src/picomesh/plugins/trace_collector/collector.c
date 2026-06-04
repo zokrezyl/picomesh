@@ -104,6 +104,30 @@ struct picomesh_string_result trace_collector_trace_collector_get_trace_impl(
     return render(emit_trace, &t);
 }
 
+static void emit_traces(struct yjson_writer *w, void *ud)
+{
+    struct trace_arg *t = ud;
+    ytelemetry_store_write_traces(w, (t->a && *t->a) ? t->a : NULL,
+                                  t->n,
+                                  (t->b && *t->b) ? t->b : NULL);
+}
+
+PICOMESH_CLASS_ANNOTATE("override@trace_collector:trace_collector:trace_collector_traces")
+struct picomesh_string_result trace_collector_trace_collector_traces_impl(
+    struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+    const char *service, const char *status, uint32_t since_secs)
+{
+    (void)ctx; (void)obj; (void)hdrs;
+    uint64_t floor = 0;
+    if (since_secs) {
+        uint64_t window = (uint64_t)since_secs * 1000000000ull;
+        uint64_t now = collector_now_ns();
+        floor = now > window ? now - window : 0;
+    }
+    struct trace_arg t = {.a = service, .b = status, .n = floor};
+    return render(emit_traces, &t);
+}
+
 static void emit_services(struct yjson_writer *w, void *ud)
 {
     (void)ud;

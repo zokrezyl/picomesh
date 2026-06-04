@@ -461,7 +461,17 @@ static int mesh_write_node_config(struct picomesh_engine *e, const char *name,
 
     snprintf(path, sizeof(path), "%s.port", base);
     struct yconfig_node_ptr_result pr = yconfig_get(picomesh_engine_config(e), path);
-    int64_t port = (PICOMESH_IS_OK(pr) && pr.value) ? yconfig_node_as_int(pr.value, -1) : -1;
+    const struct yconfig_node *port_node = (PICOMESH_IS_OK(pr) && pr.value) ? pr.value : NULL;
+    int64_t port = -1;
+    int port_auto = 0;
+    if (port_node) {
+        if (yconfig_node_kind(port_node) == YCONFIG_STRING) {
+            const char *ps = yconfig_node_as_string(port_node, NULL);
+            port_auto = (ps && strcmp(ps, "auto") == 0);
+        } else {
+            port = yconfig_node_as_int(port_node, -1);
+        }
+    }
 
     snprintf(path, sizeof(path), "%s.host", base);
     struct yconfig_node_ptr_result hr = yconfig_get(picomesh_engine_config(e), path);
@@ -485,9 +495,32 @@ static int mesh_write_node_config(struct picomesh_engine *e, const char *name,
     size_t off = 0;
     off += (size_t)snprintf(body + off, sizeof(body) - off, "name: \"%s\"\n", name);
     if (host)     off += (size_t)snprintf(body + off, sizeof(body) - off, "host: \"%s\"\n", host);
-    if (port > 0) off += (size_t)snprintf(body + off, sizeof(body) - off, "port: %lld\n", (long long)port);
+    /* `port: auto` is passed through verbatim — the child resolves it via
+     * portalloc at serve time. A numeric port is baked in as before. */
+    if (port_auto)    off += (size_t)snprintf(body + off, sizeof(body) - off, "port: auto\n");
+    else if (port > 0) off += (size_t)snprintf(body + off, sizeof(body) - off, "port: %lld\n", (long long)port);
     if (frontend) off += (size_t)snprintf(body + off, sizeof(body) - off, "frontend: \"%s\"\n", frontend);
     if (workers > 0) off += (size_t)snprintf(body + off, sizeof(body) - off, "workers: %lld\n", (long long)workers);
+
+    /* Inject the registry's fixed address as a global block so the child can
+     * reach the registry (and, through it, portalloc and its auto remotes)
+     * before it knows where anything else lives. Sourced from the registry
+     * service's own config — the single place its port is pinned; overriding
+     * that one key is how a second instance avoids colliding. */
+    struct yconfig_node_ptr_result reg_hr =
+        yconfig_get(picomesh_engine_config(e), "mesh.services.registry.host");
+    struct yconfig_node_ptr_result reg_pr =
+        yconfig_get(picomesh_engine_config(e), "mesh.services.registry.port");
+    int64_t reg_port = (PICOMESH_IS_OK(reg_pr) && reg_pr.value)
+                           ? yconfig_node_as_int(reg_pr.value, -1) : -1;
+    if (reg_port > 0) {
+        const char *reg_host = (PICOMESH_IS_OK(reg_hr) && reg_hr.value)
+                                   ? yconfig_node_as_string(reg_hr.value, NULL) : NULL;
+        off += (size_t)snprintf(body + off, sizeof(body) - off,
+                                "registry:\n  host: \"%s\"\n  port: %lld\n",
+                                (reg_host && *reg_host) ? reg_host : "127.0.0.1",
+                                (long long)reg_port);
+    }
     if (plugins_node) {
         off += (size_t)snprintf(body + off, sizeof(body) - off, "plugins: ");
         off += yconfig_node_dump(plugins_node, body + off, sizeof(body) - off);
@@ -610,11 +643,19 @@ struct reconcile_ctx {
     int spawned;
 };
 
+/* The discovery plane comes up first and is spawned explicitly, so the walk
+ * must not spawn these a second time. */
+static int reconcile_is_discovery_plane(const char *service_name)
+{
+    return strcmp(service_name, "registry") == 0 || strcmp(service_name, "portalloc") == 0;
+}
+
 static int reconcile_walk_cb(const char *service_name,
                              const struct yconfig_node *val, void *ud)
 {
     struct reconcile_ctx *rc = ud;
     if (yconfig_node_kind(val) != YCONFIG_MAP) return 0;
+    if (reconcile_is_discovery_plane(service_name)) return 0; /* already spawned */
 
     int pid = mesh_internal_spawn(rc->obj, service_name);
     if (pid > 0) {
@@ -624,6 +665,24 @@ static int reconcile_walk_cb(const char *service_name,
         ywarn("mesh.reconcile: failed to spawn '%s'", service_name);
     }
     return 0;
+}
+
+/* Spawn one named service if it exists in mesh.services. Used to bring the
+ * discovery plane (registry, then portalloc) up before everything else. */
+static void reconcile_spawn_named(struct reconcile_ctx *rc, struct picomesh_engine *e,
+                                  const char *name)
+{
+    char path[160];
+    snprintf(path, sizeof(path), "mesh.services.%s", name);
+    struct yconfig_node_ptr_result r = yconfig_get(picomesh_engine_config(e), path);
+    if (PICOMESH_IS_ERR(r) || !r.value || yconfig_node_kind(r.value) != YCONFIG_MAP) return;
+    int pid = mesh_internal_spawn(rc->obj, name);
+    if (pid > 0) {
+        rc->spawned++;
+        yinfo("mesh.reconcile: '%s' (discovery plane) → pid=%d", name, pid);
+    } else {
+        ywarn("mesh.reconcile: failed to spawn discovery-plane service '%s'", name);
+    }
 }
 
 PICOMESH_CLASS_ANNOTATE("override@mesh:mesh:mesh_reconcile_from_config")
@@ -659,6 +718,12 @@ struct picomesh_int_result mesh_mesh_reconcile_from_config_impl(struct ctx *ctx,
         return PICOMESH_ERR(picomesh_int, "reconcile_from_config: mesh.services not a map");
     }
     struct reconcile_ctx rc = {.obj = obj, .spawned = 0};
+    /* Discovery plane first: the registry (fixed address) so nodes can
+     * register/discover, then portalloc so `port: auto` nodes can allocate.
+     * Children retry-connect while these finish binding, so no barrier is
+     * needed — just a head start. The walk then skips both. */
+    reconcile_spawn_named(&rc, e, "registry");
+    reconcile_spawn_named(&rc, e, "portalloc");
     yconfig_node_for_each(r.value, reconcile_walk_cb, &rc);
     yinfo("mesh.reconcile_from_config: spawned %d services", rc.spawned);
     return PICOMESH_OK(picomesh_int, rc.spawned);

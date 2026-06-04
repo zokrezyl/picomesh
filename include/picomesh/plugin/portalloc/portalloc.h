@@ -22,7 +22,7 @@ struct class_ptr_result portalloc_portalloc_class_get(void);
 struct object_ptr_result portalloc_portalloc_create(struct ctx *ctx);
 
 /* ---- methods ---- */
-struct picomesh_uint32_result portalloc_portalloc_allocate(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t service_id);
+struct picomesh_uint32_result portalloc_portalloc_allocate(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * service_name, const char * host);
 struct picomesh_int_result portalloc_portalloc_release(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t port);
 struct picomesh_size_result portalloc_portalloc_count_used(struct ctx * ctx, struct object * obj, struct yheaders * hdrs);
 struct picomesh_json_result portalloc_portalloc_list(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, int64_t offset, int64_t limit);

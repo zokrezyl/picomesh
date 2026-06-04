@@ -21,8 +21,9 @@ service / gateway process
 trace_collector plugin (a normal yrpc backend)      ▼
   ├─ trace_collector_ingest(span_json)  receives spans
   ├─ in-memory bounded store        (ycore/ytelemetry_store.{h,c})
-  └─ query methods                  trace_collector_get_trace / _services /
-                                    _operations / _latency / _errors / _stats
+  └─ query methods                  trace_collector_traces / _get_trace /
+                                    _services / _operations / _latency /
+                                    _errors / _stats
 ```
 
 The collector is a **service-driven backend plugin**, not a hardcoded HTTP
@@ -98,6 +99,8 @@ them via the gateway like any backend. Each returns a JSON string in the
 `/_rpc` `result` field.
 
 ```sh
+# recent traces, filterable by service/status and lookback seconds
+curl -s -XPOST :8090/_rpc -d '{"path":"trace_collector.trace_collector.traces","args":["gateway","",3600]}'
 # whole trace as a parent/child tree
 curl -s -XPOST :8090/_rpc -d '{"path":"trace_collector.trace_collector.get_trace","args":["<trace_id>"]}'
 # services seen + span counts

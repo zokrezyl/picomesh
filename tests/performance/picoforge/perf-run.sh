@@ -41,6 +41,13 @@ sed -E 's/\b8([0-9]{3})\b/9\1/g; s#/tmp/picoforge#/tmp/picoforge-perf#g' \
 
 rm -rf "$DATADIR"; mkdir -p "$DATADIR" tmp
 
+# The security refactor (gh#19) made the HS256 signing secret mandatory: the
+# config has `security.jwt_secret: "${PICOMESH_JWT_SECRET}"` and the issuer also
+# falls back to this env var. Without it token_issuer.login fails at "mint
+# access" and EVERY login collapses (0 sessions established). The control parent
+# must carry it so the spawned backends inherit it — mirror mesh-up.sh's default.
+export PICOMESH_JWT_SECRET="${PICOMESH_JWT_SECRET:-picoforge-dev-mesh-secret-change-me}"
+
 PARENT=
 cleanup() { [ -n "$PARENT" ] && kill -TERM "$PARENT" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM

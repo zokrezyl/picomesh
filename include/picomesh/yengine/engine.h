@@ -198,6 +198,20 @@ int picomesh_engine_service_addr(struct picomesh_engine *e, const char *service,
  * matching the scenario YAML's `mesh.services.<svc>.host/port` shape. */
 size_t picomesh_engine_open_remotes(struct picomesh_engine *e, const char *plugin);
 
+/* ---- resolved-remote side table (port: auto discovery) ----------- *
+ *
+ * A node that consumes a remote with `port: auto` cannot read the
+ * producer's port from config — it discovers it through the registry at
+ * boot. The discovery (an RPC) is driven once on the main thread by the
+ * driver, which records each (name → host:port) here BEFORE the worker
+ * threads spin. `picomesh_engine_open_remotes` then consults this table
+ * for any remote that lacks an explicit port. The table is write-once at
+ * bootstrap and read-only thereafter, so worker reads need no locking. */
+void picomesh_engine_set_resolved_remote(struct picomesh_engine *e, const char *name,
+                                         const char *host, int port);
+int picomesh_engine_get_resolved_remote(struct picomesh_engine *e, const char *name,
+                                        char *host_out, size_t host_cap, int *port_out);
+
 /* Iterate every registered plugin class. The engine walks the class
  * registry's accessor-lookup chain by name pattern — by default,
  * everything registered as a `class@*:*` annotation. Returns names

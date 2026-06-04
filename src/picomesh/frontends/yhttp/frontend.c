@@ -53,6 +53,7 @@
 #include <picomesh/yargv/yargv.h>
 #include <picomesh/ycore/result.h>
 #include <picomesh/ycore/ytrace.h>
+#include <picomesh/ycore/idkey.h>
 #include <picomesh/ycore/yspan.h>
 #include <picomesh/ycore/ytelemetry.h>
 #include <picomesh/ysecurity/jwt.h>
@@ -162,16 +163,18 @@ static void buf_esc(struct buf *b, const char *s)
 /* Deterministic hashes so we can keep typing real usernames/passwords
  * while the underlying plugins still index on uint32/int64 (their wire
  * shape today). FNV-1a, no salt — fine for a demo where the goal is
- * "same name + same password always reach the same account". */
+ * "same name + same password always reach the same account".
+ *
+ * The username → uid hash is the lookup-cluster SHARD KEY: every producer and
+ * consumer (gateway, webapp, accounts) must compute it from the identical bytes
+ * with the identical function, or they route to different shards and the
+ * lookup/uniqueness guarantee silently breaks. So it goes through the single
+ * shared primitive (picomesh_fnv1a32) rather than a re-implemented loop; the
+ * only gateway-local policy is the uid==0 (anonymous) reservation. */
 static uint32_t hash_username(const char *s)
 {
-    uint32_t h = 2166136261u;
-    if (s) for (const unsigned char *p = (const unsigned char *)s; *p; ++p) {
-        h ^= *p;
-        h *= 16777619u;
-    }
-    if (!h) h = 1; /* uid==0 means anonymous */
-    return h;
+    uint32_t h = picomesh_fnv1a32(s);
+    return h ? h : 1; /* uid==0 means anonymous */
 }
 
 static int64_t hash_password(const char *s)
@@ -966,25 +969,63 @@ static void route_register_post(struct yloop_stream *s, const char *body,
     uint32_t uid = hash_username(uname);
     int64_t  pw  = hash_password(pwtext);
 
-    /* Store the credential FIRST, and CHECK it. If this is skipped or its
-     * result ignored (as it was), a failed password write — e.g. a backend
-     * still coming up during the slow in-browser VM boot — leaves a
-     * passwordless account in `accounts`, and every later login then fails
-     * with the misleading "invalid username or password". Doing the
-     * password write before the accounts entry also means a failure leaves
-     * nothing half-created, so the user can just retry once the mesh is up
-     * (the retry re-uses the now-stored hash: register returns 0 = already
-     * present, which is fine here). */
+    /* Reject re-registration of a COMPLETED account up front — the accounts
+     * `users` row is the completion marker. This gate is also what makes the
+     * credential overwrite below SAFE: if no completed account exists for this
+     * uid, no live login depends on whatever credential might already be stored
+     * for it, so a fresh registrant may take it. A completed account's password
+     * is changed only through an authenticated change-password flow, never
+     * through register — otherwise a passer-by could overwrite an existing
+     * user's password (account takeover). */
+    SVC_OPEN(acc_chk, "accounts", accounts_accounts_create);
+    if (!acc_chk.ok) { render_register(s, "accounts service unreachable", keep_alive); return; }
+    struct picomesh_int_result exists_r = accounts_accounts_exists(&acc_chk.c, acc_chk.obj, NULL, uid);
+    SVC_CLOSE(acc_chk);
+    if (PICOMESH_IS_ERR(exists_r)) {
+        /* Could not determine whether a completed account already owns this uid.
+         * FAIL CLOSED: the credential overwrite below is only safe once we have
+         * POSITIVELY confirmed no completed account exists. Treating an error as
+         * "not registered" would let a transient accounts/rstore_uid outage turn
+         * register into a credential overwrite of an existing account. */
+        picomesh_error_destroy(exists_r.error);
+        render_register(s, "registration temporarily unavailable — try again", keep_alive);
+        return;
+    }
+    if (exists_r.value) {
+        render_register(s, "username already taken", keep_alive);
+        return;
+    }
+
+    /* Store the credential before the accounts row, so a crash here leaves
+     * nothing half-created and the user can simply retry. register is
+     * put-if-absent; a 0 return means a credential for this uid ALREADY exists.
+     * Because the gate above proved no completed account uses this uid, that
+     * credential is an ORPHAN from an earlier registration that never finished
+     * — overwrite it with the new password so the new registrant's password is
+     * authoritative. (The old put-if-absent-and-ignore path silently kept the
+     * orphan: the new user could never log in with the password they chose, and
+     * the stale secret stayed usable — the credential-orphan hazard.) */
     SVC_OPEN(pw_sv, "password_authn", password_authn_password_authn_create);
     if (!pw_sv.ok) { render_register(s, "password_authn unreachable", keep_alive); return; }
     struct picomesh_int_result pwreg =
         password_authn_password_authn_register(&pw_sv.c, pw_sv.obj, NULL, uid, pw);
-    SVC_CLOSE(pw_sv);
     if (PICOMESH_IS_ERR(pwreg)) {
         picomesh_error_destroy(pwreg.error);
+        SVC_CLOSE(pw_sv);
         render_register(s, "could not store credentials (backend not ready?) — try again", keep_alive);
         return;
     }
+    if (pwreg.value == 0) {
+        struct picomesh_int_result chg =
+            password_authn_password_authn_change_password(&pw_sv.c, pw_sv.obj, NULL, uid, pw);
+        if (PICOMESH_IS_ERR(chg)) {
+            picomesh_error_destroy(chg.error);
+            SVC_CLOSE(pw_sv);
+            render_register(s, "could not store credentials (backend not ready?) — try again", keep_alive);
+            return;
+        }
+    }
+    SVC_CLOSE(pw_sv);
 
     SVC_OPEN(acc, "accounts", accounts_accounts_create);
     if (!acc.ok) { render_register(s, "accounts service unreachable", keep_alive); return; }

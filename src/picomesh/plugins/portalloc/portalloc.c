@@ -1,32 +1,57 @@
-/* portalloc — port allocator.
+/* socket/bind/inet_pton on glibc want a feature macro defined before any
+ * include pulls in <features.h>; the codegen runs clang without it, so pin
+ * the minimum here at file-top. */
+#define _POSIX_C_SOURCE 200809L
+
+/* portalloc — port allocator for the mesh.
  *
- * The mesh assigns this plugin a fixed port (8200 in the scenario);
- * every other service asks portalloc for a free port at spawn time.
+ * Hands out a free TCP port from a configured range to a named service.
+ * Unlike a pure counter, every candidate is BIND-PROBED first: portalloc
+ * tries to bind+close a socket on (host, port), so it never leases a port
+ * already held by another process — which is exactly what lets several mesh
+ * instances coexist on one host. The lease table additionally prevents
+ * handing the same port to two services within this instance.
+ *
+ * A race still exists between "portalloc says port P is free" and "the
+ * requesting node actually binds P": some other process can grab P in that
+ * window. portalloc cannot close that window alone, so the protocol is:
+ * the consumer tries to bind the returned port and, on failure, RELEASEs it
+ * and asks again — portalloc's next probe sees P taken and moves on.
  *
  * Methods:
- *   allocate(service_id) → uint32 port (0 on full)
- *   release(port)        → 1 ok, 0 unknown
- *   count_used()         → size of in-use set
+ *   allocate(service_name, host) → uint32 port (err when the range is full)
+ *   release(port)                → 1 ok, 0 unknown
+ *   count_used()                 → number of live leases
+ *   list(offset, limit)          → JSON [{service, port}, …]
+ *   list_all()                   → JSON [{service, port}, …] (unbounded)
  *
- * `service_id` is the requester's stable id. Calling allocate twice
- * with the same id returns the same port — idempotent across crashes
- * once the persistence file is wired up (TODO). */
+ * Idempotent: allocate twice for the same service returns the same port,
+ * provided it is still bindable; a lease whose port was stolen is dropped
+ * and reassigned. State is in-memory (persistence is a follow-up). */
 
 #include <picomesh/ycore/result.h>
 #include <picomesh/ycore/ytrace.h>
 #include <picomesh/yclass/class.h>
+#include <picomesh/yengine/engine.h>
+#include <picomesh/yconfig/yconfig.h>
 #include <picomesh/yjson/yjson.h>
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
 
-#define PORTALLOC_RANGE_LO 8201
-#define PORTALLOC_RANGE_HI 8299
-#define PORTALLOC_MAX_ENTRIES ((PORTALLOC_RANGE_HI - PORTALLOC_RANGE_LO) + 1)
+#define PORTALLOC_DEFAULT_LO 8300
+#define PORTALLOC_DEFAULT_HI 8999
+#define PORTALLOC_MAX_ENTRIES 1024
+#define PORTALLOC_NAME_MAX 64
 
 struct port_entry {
-    uint32_t service_id;
+    char service_name[PORTALLOC_NAME_MAX];
     uint32_t port;
     int used;
 };
@@ -41,44 +66,102 @@ static struct portalloc_portalloc_data *pa(struct object *obj)
     return (struct portalloc_portalloc_data *)((char *)obj + sizeof(struct object));
 }
 
-PICOMESH_CLASS_ANNOTATE("override@portalloc:portalloc:portalloc_allocate")
-struct picomesh_uint32_result portalloc_portalloc_allocate_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
-                                                         uint32_t service_id)
+/* Parse the inclusive "LO-HI" range from `portalloc.port_range`; fall back to
+ * the built-in default when unset or malformed. */
+static void portalloc_range(uint32_t *lo, uint32_t *hi)
 {
-    (void)ctx;
-    struct portalloc_portalloc_data *d = pa(obj);
-    /* idempotent: already-allocated → same port */
-    for (size_t i = 0; i < PORTALLOC_MAX_ENTRIES; ++i) {
-        if (d->entries[i].used && d->entries[i].service_id == service_id) {
-            return PICOMESH_OK(picomesh_uint32, d->entries[i].port);
+    *lo = PORTALLOC_DEFAULT_LO;
+    *hi = PORTALLOC_DEFAULT_HI;
+    struct picomesh_engine *e = picomesh_active_engine();
+    if (!e) return;
+    struct yconfig_node_ptr_result r =
+        yconfig_get(picomesh_engine_config(e), "portalloc.port_range");
+    if (PICOMESH_IS_OK(r) && r.value) {
+        const char *s = yconfig_node_as_string(r.value, NULL);
+        unsigned a = 0, b = 0;
+        if (s && sscanf(s, "%u-%u", &a, &b) == 2 && a > 0 && b >= a) {
+            *lo = a;
+            *hi = b;
         }
     }
-    /* first-fit on the range */
-    for (uint32_t p = PORTALLOC_RANGE_LO; p <= PORTALLOC_RANGE_HI; ++p) {
+}
+
+/* True iff (host, port) can be bound right now. SO_REUSEADDR mirrors the
+ * listener's own option so the probe reflects real availability; the bind
+ * still fails if any process (including a SO_REUSEPORT listener from another
+ * mesh instance) already holds the port. The probe socket is closed at once. */
+static int portalloc_port_free(const char *host, uint32_t port)
+{
+    if (!host || !*host) host = "127.0.0.1";
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return 0;
+    int one = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in addr = {0};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)port);
+    if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) {
+        close(fd);
+        return 0;
+    }
+    int rc = bind(fd, (struct sockaddr *)&addr, sizeof(addr));
+    close(fd);
+    return rc == 0;
+}
+
+PICOMESH_CLASS_ANNOTATE("override@portalloc:portalloc:portalloc_allocate")
+struct picomesh_uint32_result portalloc_portalloc_allocate_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                                                         const char *service_name, const char *host)
+{
+    (void)ctx; (void)hdrs;
+    if (!service_name || !*service_name)
+        return PICOMESH_ERR(picomesh_uint32, "portalloc_allocate: empty service name");
+    if (!host || !*host) host = "127.0.0.1";
+    struct portalloc_portalloc_data *d = pa(obj);
+    uint32_t lo, hi;
+    portalloc_range(&lo, &hi);
+
+    /* Idempotent: a service keeps the port it already holds — but only while
+     * that port is still bindable. A lease stolen by a foreign process is
+     * dropped here and reassigned below. */
+    for (size_t i = 0; i < PORTALLOC_MAX_ENTRIES; ++i) {
+        if (d->entries[i].used && strcmp(d->entries[i].service_name, service_name) == 0) {
+            if (portalloc_port_free(host, d->entries[i].port))
+                return PICOMESH_OK(picomesh_uint32, d->entries[i].port);
+            d->entries[i].used = 0;
+            d->count--;
+            break;
+        }
+    }
+
+    /* First-fit: skip ports leased here OR currently held on the host. */
+    for (uint32_t p = lo; p <= hi; ++p) {
         int taken = 0;
         for (size_t i = 0; i < PORTALLOC_MAX_ENTRIES; ++i) {
             if (d->entries[i].used && d->entries[i].port == p) { taken = 1; break; }
         }
         if (taken) continue;
+        if (!portalloc_port_free(host, p)) continue;
         for (size_t i = 0; i < PORTALLOC_MAX_ENTRIES; ++i) {
             if (!d->entries[i].used) {
-                d->entries[i].service_id = service_id;
+                snprintf(d->entries[i].service_name, sizeof(d->entries[i].service_name), "%s", service_name);
                 d->entries[i].port = p;
                 d->entries[i].used = 1;
                 d->count++;
-                yinfo("portalloc: service %u → port %u", service_id, p);
+                yinfo("portalloc: '%s' → port %u (host %s)", service_name, p, host);
                 return PICOMESH_OK(picomesh_uint32, p);
             }
         }
+        return PICOMESH_ERR(picomesh_uint32, "portalloc_allocate: lease table full");
     }
-    return PICOMESH_ERR(picomesh_uint32, "portalloc_allocate: no ports left in range");
+    return PICOMESH_ERR(picomesh_uint32, "portalloc_allocate: no free port in range");
 }
 
 PICOMESH_CLASS_ANNOTATE("override@portalloc:portalloc:portalloc_release")
 struct picomesh_int_result portalloc_portalloc_release_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                      uint32_t port)
 {
-    (void)ctx;
+    (void)ctx; (void)hdrs;
     struct portalloc_portalloc_data *d = pa(obj);
     for (size_t i = 0; i < PORTALLOC_MAX_ENTRIES; ++i) {
         if (d->entries[i].used && d->entries[i].port == port) {
@@ -94,14 +177,12 @@ struct picomesh_int_result portalloc_portalloc_release_impl(struct ctx *ctx, str
 PICOMESH_CLASS_ANNOTATE("override@portalloc:portalloc:portalloc_count_used")
 struct picomesh_size_result portalloc_portalloc_count_used_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
 {
-    (void)ctx;
+    (void)ctx; (void)hdrs;
     return PICOMESH_OK(picomesh_size, pa(obj)->count);
 }
 
-/* List ALL port allocations this service manages, as a JSON array
- * `[{"service_id":…,"port":…}, …]` (gh#15) — every allocation, not a count.
- * State is the in-memory entry table. */
-/* Build the allocation list as JSON, honoring offset/limit (< 0 == all). */
+/* Build the allocation list as JSON `[{service,port}, …]`, honoring
+ * offset/limit (limit < 0 == all). */
 static struct picomesh_json_result portalloc_list_window(struct object *obj, int64_t offset, int64_t limit)
 {
     struct portalloc_portalloc_data *d = pa(obj);
@@ -113,8 +194,8 @@ static struct picomesh_json_result portalloc_list_window(struct object *obj, int
         if (!d->entries[i].used) continue;
         if (skip > 0) { --skip; continue; }
         yjson_writer_begin_object(w);
-        yjson_writer_key(w, "service_id"); yjson_writer_int(w, (int64_t)d->entries[i].service_id);
-        yjson_writer_key(w, "port");       yjson_writer_int(w, (int64_t)d->entries[i].port);
+        yjson_writer_key(w, "service"); yjson_writer_string(w, d->entries[i].service_name);
+        yjson_writer_key(w, "port");    yjson_writer_int(w, (int64_t)d->entries[i].port);
         yjson_writer_end_object(w);
         ++emitted;
     }
@@ -127,8 +208,7 @@ static struct picomesh_json_result portalloc_list_window(struct object *obj, int
     return PICOMESH_OK(picomesh_json, out);
 }
 
-/* List ALL port allocations as a JSON array `[{"service_id":…,"port":…}]`,
- * paginated by offset/limit (gh#15). */
+/* List port allocations as a JSON array `[{service,port}]`, paginated. */
 PICOMESH_CLASS_ANNOTATE("override@portalloc:portalloc:portalloc_list")
 struct picomesh_json_result portalloc_portalloc_list_impl(struct ctx *ctx, struct object *obj,
                                                       struct yheaders *hdrs,

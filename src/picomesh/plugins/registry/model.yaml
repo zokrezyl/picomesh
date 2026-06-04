@@ -1,0 +1,111 @@
+methods:
+  - slot: registry_register_service
+    domain: registry
+    owning_class: registry
+    return_type: struct picomesh_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: name
+        type: "const char *"
+      - name: instance_id
+        type: "const char *"
+      - name: host
+        type: "const char *"
+      - name: port
+        type: uint32_t
+  - slot: registry_deregister_service
+    domain: registry
+    owning_class: registry
+    return_type: struct picomesh_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: name
+        type: "const char *"
+      - name: instance_id
+        type: "const char *"
+  - slot: registry_resolve
+    domain: registry
+    owning_class: registry
+    return_type: struct picomesh_string_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: name
+        type: "const char *"
+  - slot: registry_discover_service
+    domain: registry
+    owning_class: registry
+    return_type: struct picomesh_json_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: name
+        type: "const char *"
+  - slot: registry_list_services
+    domain: registry
+    owning_class: registry
+    return_type: struct picomesh_json_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+  - slot: registry_count
+    domain: registry
+    owning_class: registry
+    return_type: struct picomesh_size_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+classes:
+  - name: registry
+    domain: registry
+    accessor: registry_registry_class_get
+    type: regular
+    source_file: /home/misi/work/my/picomesh/src/picomesh/plugins/registry/registry.c
+    parent: null
+    mixins: []
+    data: struct registry_registry_data
+    ops:
+      - slot: registry_register_service
+        slot_domain: registry
+        impl: registry_registry_register_service_impl
+      - slot: registry_deregister_service
+        slot_domain: registry
+        impl: registry_registry_deregister_service_impl
+      - slot: registry_resolve
+        slot_domain: registry
+        impl: registry_registry_resolve_impl
+      - slot: registry_discover_service
+        slot_domain: registry
+        impl: registry_registry_discover_service_impl
+      - slot: registry_list_services
+        slot_domain: registry
+        impl: registry_registry_list_services_impl
+      - slot: registry_count
+        slot_domain: registry
+        impl: registry_registry_count_impl

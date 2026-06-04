@@ -9,8 +9,15 @@
  * It carries NO application data model. The per-shard schema (CREATE TABLE/
  * INDEX) and the shard count come from CONFIG — picoforge's product schema
  * lives in picoforge.yaml, never here. The shard id is whatever the caller
- * routes by (picoforge uses the namespace = user/org, so a namespace's repos/
- * issues/pipelines land in ONE database and stay joinable + transactional).
+ * routes by: a data cluster routes by the owning `uid` (a user's rows land in
+ * ONE shard and stay joinable + transactional), a lookup cluster by
+ * `hash(external_id)` (see docs/sharded-relational-storage.md). The engine never
+ * interprets the id — it only does `shard_id % N`.
+ *
+ * One running instance == one cluster == one shard set. The shard set is
+ * process-global, so a process hosts exactly ONE relational cluster; multiple
+ * clusters are multiple instances, i.e. multiple processes in the split mesh
+ * (the supported deployment — see rel_set()).
  *
  * Generic surface — raw storage, not a product API; the service layer owns
  * routing and correctness:
@@ -61,6 +68,20 @@ struct rel_set {
     pthread_mutex_t init_mu;
 };
 
+/* The process-global shard set. COMMITTED DECISION (gh#29): one process hosts
+ * exactly ONE relational cluster. Multiple clusters = multiple instances =
+ * multiple processes — which is how the split mesh already deploys every
+ * relational_storage service (each `rstore_*` is its own process with its own
+ * `relational_storage.path`/`shards` projection). Collocated/all-in-one mode
+ * with two relational clusters in one process is therefore NOT supported: there
+ * is one config projection and one shard set per process. Keying the shard set
+ * by config path to lift that limit is possible but unneeded while the mesh
+ * spawns a process per service; revisit only if collocated multi-cluster is
+ * ever required.
+ *
+ * This is the one sanctioned file-scope datum here: a process-lifetime
+ * subsystem singleton guarded by its own init mutex, with no per-engine slot to
+ * hang it off of. */
 static struct rel_set *rel_set(void)
 {
     static struct rel_set s = {.init_mu = PTHREAD_MUTEX_INITIALIZER};
@@ -80,6 +101,26 @@ static void rel_mkdir_p(const char *dir)
         if (*p == '/') { *p = 0; mkdir(tmp, 0755); *p = '/'; }
     }
     mkdir(tmp, 0755);
+}
+
+/* Read a single-row, single-column PRAGMA value as text into `out`. Returns 1
+ * if a row was produced, 0 otherwise (out is left empty). Used to VERIFY a
+ * PRAGMA actually took effect: setting one can "succeed" (sqlite3_exec returns
+ * OK) yet be silently downgraded — journal_mode returns the resulting mode as a
+ * row and falls back off WAL on filesystems that reject it, and a non-enforcing
+ * foreign_keys leaves the relational guarantees off without an error. */
+static int rel_pragma_text(sqlite3 *db, const char *pragma, char *out, size_t cap)
+{
+    if (cap) out[0] = 0;
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(db, pragma, -1, &st, NULL) != SQLITE_OK) return 0;
+    int got = 0;
+    if (sqlite3_step(st) == SQLITE_ROW) {
+        const unsigned char *text = sqlite3_column_text(st, 0);
+        if (text) { snprintf(out, cap, "%s", (const char *)text); got = 1; }
+    }
+    sqlite3_finalize(st);
+    return got;
 }
 
 /* Lazy one-shot open: read config, open N shard DBs, apply the schema.
@@ -131,15 +172,44 @@ static struct rel_set *rel_init(void)
             pthread_mutex_unlock(&s->init_mu);
             return NULL;
         }
-        /* WAL + FK pragmas are engine policy; the table schema is whatever the
-         * node configured (or nothing — then the caller runs its own DDL). */
-        /* WAL + FK are engine policy; a failure silently weakens guarantees, so
-         * surface it loudly (do not fail the open — some filesystems reject WAL,
-         * and the caller may not need FKs). */
+        /* WAL + FK are engine policy. A PRAGMA can "succeed" (sqlite3_exec
+         * returns OK) yet not take effect, so set each and READ IT BACK.
+         *
+         * Explicit policy decision (gh#29):
+         *   - WAL is BEST-EFFORT. A rejected WAL (some filesystems do) falls
+         *     back to a rollback journal, which is still ACID — only concurrency
+         *     suffers — so we log and continue.
+         *   - FK enforcement is REQUIRED. A configured schema may declare foreign
+         *     keys and depend on them for referential integrity, and unlike WAL,
+         *     `PRAGMA foreign_keys=ON` is not filesystem-dependent — it only
+         *     fails to stick on a SQLite built without FK support. Running with
+         *     it silently off is a correctness downgrade, so we FAIL the open. */
         char *pragma_err = NULL;
-        if (sqlite3_exec(db, "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;", NULL, NULL, &pragma_err) != SQLITE_OK) {
-            ywarn("relational_storage: PRAGMA WAL/FK on %s failed: %s", path, pragma_err ? pragma_err : "?");
+        if (sqlite3_exec(db, "PRAGMA journal_mode=WAL;", NULL, NULL, &pragma_err) != SQLITE_OK) {
+            ywarn("relational_storage: set journal_mode=WAL on %s failed: %s", path, pragma_err ? pragma_err : "?");
             sqlite3_free(pragma_err);
+            pragma_err = NULL;
+        }
+        char journal_mode[16];
+        if (rel_pragma_text(db, "PRAGMA journal_mode;", journal_mode, sizeof(journal_mode))
+            && strcmp(journal_mode, "wal") != 0)
+            ywarn("relational_storage: %s journal_mode is '%s', not WAL — durability/concurrency reduced",
+                  path, journal_mode[0] ? journal_mode : "?");
+
+        if (sqlite3_exec(db, "PRAGMA foreign_keys=ON;", NULL, NULL, &pragma_err) != SQLITE_OK) {
+            ywarn("relational_storage: set foreign_keys=ON on %s failed: %s", path, pragma_err ? pragma_err : "?");
+            sqlite3_free(pragma_err);
+            pragma_err = NULL;
+        }
+        char foreign_keys[8];
+        if (!rel_pragma_text(db, "PRAGMA foreign_keys;", foreign_keys, sizeof(foreign_keys))
+            || strcmp(foreign_keys, "1") != 0) {
+            ywarn("relational_storage: %s foreign_keys could NOT be enabled (got '%s') — refusing "
+                  "to start with FK enforcement off", path, foreign_keys[0] ? foreign_keys : "?");
+            sqlite3_close(db);
+            s->ready = -1;
+            pthread_mutex_unlock(&s->init_mu);
+            return NULL;
         }
         if (schema && *schema) {
             char *err = NULL;
@@ -394,6 +464,22 @@ struct picomesh_json_result relational_storage_db_query_impl(struct ctx *ctx, st
 {
     (void)ctx; (void)obj; (void)hdrs;
     return rel_call(REL_QUERY, shard_key, sql, args_json);
+}
+
+/* The number of shards THIS instance actually opened. Fan-out (DDL broadcast,
+ * cross-shard aggregates and pagination) must iterate the serving instance's
+ * shard count — in the split mesh a consumer is wired to a remote cluster whose
+ * shard count it cannot read from its own local config. Reading the count from
+ * the caller's config instead would miss shards (undercount) or wrap onto
+ * already-queried shards (double-count). So consumers ask the instance. */
+PICOMESH_CLASS_ANNOTATE("override@relational_storage:db:db_shard_count")
+struct picomesh_int_result relational_storage_db_shard_count_impl(struct ctx *ctx, struct object *obj,
+                                                                  struct yheaders *hdrs)
+{
+    (void)ctx; (void)obj; (void)hdrs;
+    struct rel_set *s = rel_init();
+    if (!s) return PICOMESH_ERR(picomesh_int, "relational_storage: not configured");
+    return PICOMESH_OK(picomesh_int, s->n);
 }
 
 #include "relational_storage.gen.c"

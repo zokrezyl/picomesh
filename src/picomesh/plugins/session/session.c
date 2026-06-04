@@ -177,8 +177,9 @@ struct picomesh_size_result session_session_count_active_impl(struct ctx *ctx, s
     struct rel_handle h;
     struct picomesh_void_result oh = session_open(&h, hdrs, obj);
     if (PICOMESH_IS_ERR(oh)) return PICOMESH_ERR(picomesh_size, "session_count: open failed", oh);
-    int64_t n = rel_query_int_all(&h, hdrs, "SELECT COUNT(*) AS n FROM sessions", "[]", "n");
-    return PICOMESH_OK(picomesh_size, (size_t)(n < 0 ? 0 : n));
+    struct picomesh_int64_result n = rel_query_int_all(&h, hdrs, "SELECT COUNT(*) AS n FROM sessions", "[]", "n");
+    if (PICOMESH_IS_ERR(n)) return PICOMESH_ERR(picomesh_size, "session_count: aggregate failed", n);
+    return PICOMESH_OK(picomesh_size, (size_t)(n.value < 0 ? 0 : n.value));
 }
 
 /* List sessions as `[{"uid":…,"created_at":…}, …]` — non-secret metadata only.
@@ -191,13 +192,11 @@ struct picomesh_json_result session_session_list_impl(struct ctx *ctx, struct ob
                                                     int64_t offset, int64_t limit)
 {
     (void)ctx;
-    /* No cross-shard pagination yet (needs a global merge after fan-out); return
-     * all shards' rows shard-grouped. Use count_active() + client-side paging. */
-    (void)offset; (void)limit;
     struct rel_handle h;
     struct picomesh_void_result oh = session_open(&h, hdrs, obj);
     if (PICOMESH_IS_ERR(oh)) return PICOMESH_ERR(picomesh_json, "session_list: open failed", oh);
-    return rel_query_all(&h, hdrs, "SELECT uid,created_at FROM sessions ORDER BY created_at", "[]");
+    /* Globally ordered + paginated across shards by created_at. */
+    return rel_query_page(&h, hdrs, "SELECT uid,created_at FROM sessions", "[]", "created_at", 0, offset, limit);
 }
 
 PICOMESH_CLASS_ANNOTATE("override@session:session:session_list_all")
@@ -208,7 +207,8 @@ struct picomesh_json_result session_session_list_all_impl(struct ctx *ctx, struc
     struct rel_handle h;
     struct picomesh_void_result oh = session_open(&h, hdrs, obj);
     if (PICOMESH_IS_ERR(oh)) return PICOMESH_ERR(picomesh_json, "session_list_all: open failed", oh);
-    return rel_query_all(&h, hdrs, "SELECT uid,created_at FROM sessions ORDER BY created_at", "[]");
+    /* Unbounded but GLOBALLY ordered by created_at (limit<=0). */
+    return rel_query_page(&h, hdrs, "SELECT uid,created_at FROM sessions", "[]", "created_at", 0, 0, 0);
 }
 
 #include "session.gen.c"

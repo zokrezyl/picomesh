@@ -201,8 +201,9 @@ struct picomesh_size_result accounts_accounts_count_impl(struct ctx *ctx, struct
     struct picomesh_void_result oh = accounts_open_uid(&h, hdrs, obj);
     if (PICOMESH_IS_ERR(oh)) return PICOMESH_ERR(picomesh_size, "accounts_count: open failed", oh);
     /* Users spread across shards by uid → sum the per-shard counts. */
-    int64_t n = rel_query_int_all(&h, hdrs, "SELECT COUNT(*) AS n FROM users", "[]", "n");
-    return PICOMESH_OK(picomesh_size, (size_t)(n < 0 ? 0 : n));
+    struct picomesh_int64_result n = rel_query_int_all(&h, hdrs, "SELECT COUNT(*) AS n FROM users", "[]", "n");
+    if (PICOMESH_IS_ERR(n)) return PICOMESH_ERR(picomesh_size, "accounts_count: aggregate failed", n);
+    return PICOMESH_OK(picomesh_size, (size_t)(n.value < 0 ? 0 : n.value));
 }
 
 PICOMESH_CLASS_ANNOTATE("override@accounts:accounts:accounts_set_groups")
@@ -255,15 +256,11 @@ struct picomesh_json_result accounts_accounts_list_impl(struct ctx *ctx, struct 
                                                         int64_t offset, int64_t limit)
 {
     (void)ctx;
-    /* Cross-shard pagination needs a global merge/sort after fan-out, which is
-     * not implemented; a per-shard LIMIT/OFFSET would over-return and mis-order.
-     * Until then, list returns every shard's rows (shard-grouped order) — use
-     * count() + client-side paging. */
-    (void)offset; (void)limit;
     struct rel_handle h;
     struct picomesh_void_result oh = accounts_open_uid(&h, hdrs, obj);
     if (PICOMESH_IS_ERR(oh)) return PICOMESH_ERR(picomesh_json, "accounts_list: open failed", oh);
-    return rel_query_all(&h, hdrs, "SELECT uid,username FROM users ORDER BY uid", "[]");
+    /* Globally ordered, globally paginated across shards (uid is the order key). */
+    return rel_query_page(&h, hdrs, "SELECT uid,username FROM users", "[]", "uid", 0, offset, limit);
 }
 
 PICOMESH_CLASS_ANNOTATE("override@accounts:accounts:accounts_list_all")
@@ -274,7 +271,9 @@ struct picomesh_json_result accounts_accounts_list_all_impl(struct ctx *ctx, str
     struct rel_handle h;
     struct picomesh_void_result oh = accounts_open_uid(&h, hdrs, obj);
     if (PICOMESH_IS_ERR(oh)) return PICOMESH_ERR(picomesh_json, "accounts_list_all: open failed", oh);
-    return rel_query_all(&h, hdrs, "SELECT uid,username FROM users ORDER BY uid", "[]");
+    /* Unbounded but GLOBALLY ordered (limit<=0): a plain shard-concat would
+     * only be shard-locally ordered despite the ORDER BY. */
+    return rel_query_page(&h, hdrs, "SELECT uid,username FROM users", "[]", "uid", 0, 0, 0);
 }
 
 #include "accounts.gen.c"

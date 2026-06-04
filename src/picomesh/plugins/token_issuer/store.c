@@ -266,8 +266,9 @@ struct picomesh_size_result token_issuer_token_issuer_count_active_impl(struct c
     struct rel_handle h;
     struct picomesh_void_result oh = ti_open(&h, hdrs, obj);
     if (PICOMESH_IS_ERR(oh)) return PICOMESH_ERR(picomesh_size, "token_issuer_count: storage open failed", oh);
-    int64_t n = rel_query_int_all(&h, hdrs, "SELECT COUNT(*) AS n FROM refresh_tokens", "[]", "n");
-    return PICOMESH_OK(picomesh_size, (size_t)(n < 0 ? 0 : n));
+    struct picomesh_int64_result n = rel_query_int_all(&h, hdrs, "SELECT COUNT(*) AS n FROM refresh_tokens", "[]", "n");
+    if (PICOMESH_IS_ERR(n)) return PICOMESH_ERR(picomesh_size, "token_issuer_count: aggregate failed", n);
+    return PICOMESH_OK(picomesh_size, (size_t)(n.value < 0 ? 0 : n.value));
 }
 
 /* List live refresh tokens as `[{"uid":…,"username":…,"created_at":…}, …]` —
@@ -281,13 +282,11 @@ struct picomesh_json_result token_issuer_token_issuer_list_impl(struct ctx *ctx,
                                                          int64_t offset, int64_t limit)
 {
     (void)ctx;
-    /* No cross-shard pagination yet (needs a global merge after fan-out); return
-     * all shards' rows shard-grouped. Use count_active() + client-side paging. */
-    (void)offset; (void)limit;
     struct rel_handle h;
     struct picomesh_void_result oh = ti_open(&h, hdrs, obj);
     if (PICOMESH_IS_ERR(oh)) return PICOMESH_ERR(picomesh_json, "token_issuer_list: storage open failed", oh);
-    return rel_query_all(&h, hdrs, "SELECT uid,username,created_at FROM refresh_tokens ORDER BY created_at", "[]");
+    /* Globally ordered + paginated across shards by created_at. */
+    return rel_query_page(&h, hdrs, "SELECT uid,username,created_at FROM refresh_tokens", "[]", "created_at", 0, offset, limit);
 }
 
 PICOMESH_CLASS_ANNOTATE("override@token_issuer:token_issuer:token_issuer_list_all")
@@ -298,7 +297,8 @@ struct picomesh_json_result token_issuer_token_issuer_list_all_impl(struct ctx *
     struct rel_handle h;
     struct picomesh_void_result oh = ti_open(&h, hdrs, obj);
     if (PICOMESH_IS_ERR(oh)) return PICOMESH_ERR(picomesh_json, "token_issuer_list_all: storage open failed", oh);
-    return rel_query_all(&h, hdrs, "SELECT uid,username,created_at FROM refresh_tokens ORDER BY created_at", "[]");
+    /* Unbounded but GLOBALLY ordered by created_at (limit<=0). */
+    return rel_query_page(&h, hdrs, "SELECT uid,username,created_at FROM refresh_tokens", "[]", "created_at", 0, 0, 0);
 }
 
 #include "store.gen.c"

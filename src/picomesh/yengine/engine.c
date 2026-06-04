@@ -72,12 +72,63 @@ struct picomesh_worker {
     void *setup_ud;
 };
 
+/* A remote whose address was discovered at boot via the registry
+ * (`port: auto`). Filled on the main thread before workers spin; read-only
+ * afterwards. See picomesh_engine_set/get_resolved_remote. */
+struct resolved_remote {
+    char name[64];
+    char host[64];
+    int port;
+    int used;
+};
+
+#define PICOMESH_MAX_RESOLVED_REMOTES 64
+
 struct picomesh_engine {
     struct yconfig *config;
     struct yargv_chain *cli; /* may be NULL */
     struct picomesh_worker *workers;
     size_t worker_count;
+    struct resolved_remote resolved[PICOMESH_MAX_RESOLVED_REMOTES];
+    size_t resolved_count;
 };
+
+void picomesh_engine_set_resolved_remote(struct picomesh_engine *e, const char *name,
+                                         const char *host, int port)
+{
+    if (!e || !name || !*name) return;
+    if (!host || !*host) host = "127.0.0.1";
+    for (size_t i = 0; i < e->resolved_count; ++i) {
+        if (e->resolved[i].used && strcmp(e->resolved[i].name, name) == 0) {
+            snprintf(e->resolved[i].host, sizeof(e->resolved[i].host), "%s", host);
+            e->resolved[i].port = port;
+            return;
+        }
+    }
+    if (e->resolved_count >= PICOMESH_MAX_RESOLVED_REMOTES) {
+        ywarn("engine: resolved-remote table full, dropping '%s'", name);
+        return;
+    }
+    struct resolved_remote *r = &e->resolved[e->resolved_count++];
+    snprintf(r->name, sizeof(r->name), "%s", name);
+    snprintf(r->host, sizeof(r->host), "%s", host);
+    r->port = port;
+    r->used = 1;
+}
+
+int picomesh_engine_get_resolved_remote(struct picomesh_engine *e, const char *name,
+                                        char *host_out, size_t host_cap, int *port_out)
+{
+    if (!e || !name) return 0;
+    for (size_t i = 0; i < e->resolved_count; ++i) {
+        if (e->resolved[i].used && strcmp(e->resolved[i].name, name) == 0) {
+            if (host_out && host_cap) snprintf(host_out, host_cap, "%s", e->resolved[i].host);
+            if (port_out) *port_out = e->resolved[i].port;
+            return 1;
+        }
+    }
+    return 0;
+}
 
 /* The worker bound to the calling thread. Set at the top of each worker
  * thread (and for worker 0 by run/run_workers); thread-local so every
@@ -726,6 +777,18 @@ size_t picomesh_engine_open_remotes(struct picomesh_engine *e, const char *plugi
 
         const char *host = fc.host;
         int port = fc.port;
+        /* `port: auto` (or no port) — the address was discovered through the
+         * registry at boot and recorded in the resolved-remote table. */
+        char resolved_host[128];
+        if (port <= 0) {
+            int rp = 0;
+            if (picomesh_engine_get_resolved_remote(e, fc.svc, resolved_host,
+                                                    sizeof(resolved_host), &rp) && rp > 0) {
+                if (!host || !*host) host = resolved_host;
+                port = rp;
+            }
+        }
+        /* Legacy fallback: the static `mesh.services.<svc>.port` shape. */
         if (port <= 0) {
             char h2[128];
             int p2 = 0;

@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-struct picomesh_uint32_result portalloc_portalloc_allocate(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t service_id)
+struct picomesh_uint32_result portalloc_portalloc_allocate(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * service_name, const char * host)
 {
     static method_slot _slot = METHOD_SLOT_UNDEFINED;
     if (_slot == METHOD_SLOT_UNDEFINED) {
@@ -37,8 +37,9 @@ struct picomesh_uint32_result portalloc_portalloc_allocate(struct ctx * ctx, str
             struct picomesh_msgpack_buffer _mab;
             cmp_ctx_t _maw;
             picomesh_msgpack_writer_init(&_maw, &_mab, _margs, 16384);
-            cmp_write_array(&_maw, 1u);
-            cmp_write_uinteger(&_maw, (uint64_t)service_id);
+            cmp_write_array(&_maw, 2u);
+            cmp_write_str(&_maw, service_name ? service_name : "", (uint32_t)(service_name ? strlen(service_name) : 0));
+            cmp_write_str(&_maw, host ? host : "", (uint32_t)(host ? strlen(host) : 0));
             size_t _mrlen = 0;
             char _merr[256] = {0};
             if (!peer_channel_msgpack_call(_s->peer, "portalloc.portalloc.allocate", hdrs,
@@ -86,9 +87,20 @@ struct picomesh_uint32_result portalloc_portalloc_allocate(struct ctx * ctx, str
                 { ytelemetry_span_end(&_tsp, 0, "portalloc_portalloc_allocate: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "portalloc_portalloc_allocate: pack overflow"); }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(service_id) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "portalloc_portalloc_allocate: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "portalloc_portalloc_allocate: pack overflow"); }
-        memcpy(_a + _off, &service_id, sizeof(service_id)); _off += sizeof(service_id);
+        {
+            uint32_t _slen = (uint32_t)(service_name ? strlen(service_name) : 0);
+            if (_off + 4 + _slen > sizeof(_a))
+                { ytelemetry_span_end(&_tsp, 0, "portalloc_portalloc_allocate: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "portalloc_portalloc_allocate: pack overflow"); }
+            memcpy(_a + _off, &_slen, 4); _off += 4;
+            if (_slen) { memcpy(_a + _off, service_name, _slen); _off += _slen; }
+        }
+        {
+            uint32_t _slen = (uint32_t)(host ? strlen(host) : 0);
+            if (_off + 4 + _slen > sizeof(_a))
+                { ytelemetry_span_end(&_tsp, 0, "portalloc_portalloc_allocate: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "portalloc_portalloc_allocate: pack overflow"); }
+            memcpy(_a + _off, &_slen, 4); _off += 4;
+            if (_slen) { memcpy(_a + _off, host, _slen); _off += _slen; }
+        }
         uint8_t _wbuf[261];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
                               _wbuf, sizeof(_wbuf));
@@ -110,7 +122,7 @@ struct picomesh_uint32_result portalloc_portalloc_allocate(struct ctx * ctx, str
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_uint32, "portalloc_portalloc_allocate: no impl on this class");
-        return ((portalloc_portalloc_allocate_fn)fn)(ctx, obj, hdrs, service_id);
+        return ((portalloc_portalloc_allocate_fn)fn)(ctx, obj, hdrs, service_name, host);
     }
 }
 

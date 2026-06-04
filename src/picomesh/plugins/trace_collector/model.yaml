@@ -25,6 +25,23 @@ methods:
         type: "struct yheaders *"
       - name: trace_id
         type: "const char *"
+  - slot: trace_collector_traces
+    domain: trace_collector
+    owning_class: trace_collector
+    return_type: struct picomesh_string_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: service
+        type: "const char *"
+      - name: status
+        type: "const char *"
+      - name: since_secs
+        type: uint32_t
   - slot: trace_collector_services
     domain: trace_collector
     owning_class: trace_collector
@@ -106,6 +123,9 @@ classes:
       - slot: trace_collector_get_trace
         slot_domain: trace_collector
         impl: trace_collector_trace_collector_get_trace_impl
+      - slot: trace_collector_traces
+        slot_domain: trace_collector
+        impl: trace_collector_trace_collector_traces_impl
       - slot: trace_collector_services
         slot_domain: trace_collector
         impl: trace_collector_trace_collector_services_impl

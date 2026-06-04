@@ -23,7 +23,10 @@
 #include <picomesh/plugin/time/time.h>
 #include <picomesh/plugin/accounts/accounts.h>
 #include <picomesh/plugin/portalloc/portalloc.h>
+#include <picomesh/plugin/registry/registry.h>
 #include <picomesh/plugin/session/session.h>
+
+#include "autoport.h"
 #include <picomesh/plugin/password_authn/password_authn.h>
 #include <picomesh/plugin/github_authn/github_authn.h>
 #include <picomesh/plugin/token_issuer/token_issuer.h>
@@ -107,6 +110,7 @@ static const struct plugin_reg *plugin_registry(size_t *count)
         {"time",                   picomesh_plugin_time_register},
         {"accounts",               picomesh_plugin_accounts_register},
         {"portalloc",              picomesh_plugin_portalloc_register},
+        {"registry",               picomesh_plugin_registry_register},
         {"session",                picomesh_plugin_session_register},
         {"password_authn",         picomesh_plugin_password_authn_register},
         {"github_authn",           picomesh_plugin_github_authn_register},
@@ -412,7 +416,26 @@ static int cmd_serve(struct picomesh_engine *e)
 
     const char *name = yargv_get_string(picomesh_engine_cli(e), "name", NULL);
     const char *host = resolve_host(e);
-    int port = resolve_port(e);
+    /* `port: auto` — allocate the listen port through portalloc (discovered
+     * via the registry) before any worker binds. Otherwise the static port. */
+    int port;
+    if (picomesh_serve_port_is_auto(e, name)) {
+        port = picomesh_autoport_allocate(e, name, host);
+        if (port <= 0) {
+            fprintf(stderr, "serve[%s]: port:auto allocation failed\n", name ? name : "?");
+            return 1;
+        }
+    } else {
+        port = resolve_port(e);
+    }
+    /* Registration is an internal feature of every mesh node: announce
+     * (name -> host:port) so `port: auto` consumers can discover us, then
+     * discover the addresses of our own `port: auto` remotes. Both are no-ops
+     * when no registry is configured. Register BEFORE resolving remotes so the
+     * registration phase can never deadlock against a peer that is waiting on
+     * us. */
+    picomesh_autoport_register_self(e, name, host, port);
+    picomesh_autoport_resolve_remotes(e, name);
     int workers = resolve_workers(e);
     const char *frontend = yargv_get_string(picomesh_engine_cli(e), "frontend", "yrpc");
     if (!frontend) frontend = "yrpc";

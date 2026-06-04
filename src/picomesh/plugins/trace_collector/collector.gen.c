@@ -6,6 +6,8 @@ static trace_collector_trace_collector_ingest_fn _trace_collector_trace_collecto
 __attribute__((unused))
 static trace_collector_trace_collector_get_trace_fn _trace_collector_trace_collector_trace_collector_trace_collector_get_trace_check = trace_collector_trace_collector_get_trace_impl;
 __attribute__((unused))
+static trace_collector_trace_collector_traces_fn _trace_collector_trace_collector_trace_collector_trace_collector_traces_check = trace_collector_trace_collector_traces_impl;
+__attribute__((unused))
 static trace_collector_trace_collector_services_fn _trace_collector_trace_collector_trace_collector_trace_collector_services_check = trace_collector_trace_collector_services_impl;
 __attribute__((unused))
 static trace_collector_trace_collector_operations_fn _trace_collector_trace_collector_trace_collector_trace_collector_operations_check = trace_collector_trace_collector_operations_impl;
@@ -30,6 +32,7 @@ struct class_ptr_result trace_collector_trace_collector_class_get(void)
     static const struct op ops[] = {
         {"trace_collector", "trace_collector_ingest", (method_id_t)trace_collector_trace_collector_ingest, (impl_t)trace_collector_trace_collector_ingest_impl},
         {"trace_collector", "trace_collector_get_trace", (method_id_t)trace_collector_trace_collector_get_trace, (impl_t)trace_collector_trace_collector_get_trace_impl},
+        {"trace_collector", "trace_collector_traces", (method_id_t)trace_collector_trace_collector_traces, (impl_t)trace_collector_trace_collector_traces_impl},
         {"trace_collector", "trace_collector_services", (method_id_t)trace_collector_trace_collector_services, (impl_t)trace_collector_trace_collector_services_impl},
         {"trace_collector", "trace_collector_operations", (method_id_t)trace_collector_trace_collector_operations, (impl_t)trace_collector_trace_collector_operations_impl},
         {"trace_collector", "trace_collector_latency", (method_id_t)trace_collector_trace_collector_latency, (impl_t)trace_collector_trace_collector_latency_impl},

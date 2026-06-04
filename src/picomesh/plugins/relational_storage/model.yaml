@@ -33,6 +33,17 @@ methods:
         type: "const char *"
       - name: args_json
         type: "const char *"
+  - slot: db_shard_count
+    domain: relational_storage
+    owning_class: db
+    return_type: struct picomesh_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
 classes:
   - name: db
     domain: relational_storage
@@ -49,3 +60,6 @@ classes:
       - slot: db_query
         slot_domain: relational_storage
         impl: relational_storage_db_query_impl
+      - slot: db_shard_count
+        slot_domain: relational_storage
+        impl: relational_storage_db_shard_count_impl

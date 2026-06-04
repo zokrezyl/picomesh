@@ -57,17 +57,33 @@ mesh:
   auto_reconcile: true
   services:
 
+    # registry — service discovery for the mesh. One of only TWO fixed-address
+    # nodes (the other is the mesh control parent on `control.port`). The mesh
+    # injects this host:port into every child's config as a global `registry:`
+    # block, so a freshly spawned node can reach the registry — and through it
+    # portalloc and its `port: auto` remotes — before it knows where anything
+    # else lives. To run a SECOND instance on this host, override just this
+    # port and `control.port`: every other node is `port: auto`, so nothing
+    # else can collide. In-memory; the mesh re-spawns and every node
+    # re-registers on boot. Spawned first by reconcile_from_config.
+    registry:
+      port: 8202
+      plugins: [registry]
+      config:
+        remotes: []
+
     # The trace collector (issue #11): an ordinary yrpc backend plugin that
     # RECEIVES spans on its exposed `trace_collector_ingest` method and answers
-    # the query methods (trace_collector_get_trace / _services / _operations /
-    # _latency / _errors). Every other service lists it as a remote
+    # the query methods used by picotrace and operators: _traces /
+    # _get_trace / _services / _operations / _latency / _errors / _stats.
+    # Every other service lists it as a remote
     # and ships finished spans to it over its OWN per-worker connection,
     # fire-and-forget (see ytelemetry). State is an in-memory bounded store —
     # no durable storage in v1. Reached for queries like any backend, through
     # the gateway's /_rpc + /_describe (service-driven, no bespoke routes).
     # Listed first so it binds before the services that emit to it.
     trace_collector:
-      port: 8220
+      port: auto
       # Multi-worker like the gateway: N threads, each its own loop +
       # coroutine scheduler, all accept()ing on :8220 via SO_REUSEPORT and
       # multiplexing keep-alive connections. The receiver must drain ~5
@@ -84,19 +100,26 @@ mesh:
           max_age_seconds: 3600
         remotes: []
 
+    # portalloc — bind-probing port allocator. Itself `port: auto`: it cannot
+    # allocate through itself, so it self-allocates from a LOCAL instance at
+    # boot, then registers in the registry like everyone else. The dynamic
+    # range deliberately avoids every fixed port (control 8800, registry 8202,
+    # gateway 8090, the two consoles 8230/8231), so a candidate is never one of
+    # them. Several mesh instances can share this range — each candidate is
+    # bind-probed, so two instances never hand out the same live port.
     portalloc:
-      port: 8201
+      port: auto
       plugins: [portalloc]
       config:
         portalloc:
-          port_range: "8201-8299"
+          port_range: "8300-8799"
 
     # Storage = write-parallel sharded KV store (N mdbx shard envs keyed
     # by hash(ns·key); one writer + fsync stream per shard). The plain
     # single-env `storage` plugin still exists in the tree but is no
     # longer run as a mesh service — every backend uses this.
     sharded_storage:
-      port: 8212
+      port: auto
       # gh#6: in-process multithreaded workers. Set `workers: N` to run
       # this service as N worker threads in ONE process — each with its
       # own libuv event loop AND its own libco coroutine scheduler, all
@@ -116,7 +139,7 @@ mesh:
         # so it still needs a connection to ship them to the collector.
         remotes:
           - service: trace_collector
-            port: 8220
+            port: auto
 
     # relational_storage (gh#18): SQLite per namespace-shard for relational
     # PRODUCT state (users, repos, members, issues, pipeline runs) — real SQL
@@ -129,7 +152,7 @@ mesh:
     # sharded by hash(external id). Each is the same generic plugin, its own
     # shard files.
     rstore_uid:
-      port: 8213
+      port: auto
       workers: 4
       plugins: [relational_storage]
       config:
@@ -188,12 +211,12 @@ mesh:
             CREATE INDEX IF NOT EXISTS ix_members_uid ON repo_members(uid);
         remotes:
           - service: trace_collector
-            port: 8220
+            port: auto
 
     # Lookup clusters: map an external id → uid, sharded by hash(id). Tables are
     # plugin-owned (accounts/session/token_issuer create them via DDL broadcast).
     rstore_username:
-      port: 8215
+      port: auto
       workers: 4
       plugins: [relational_storage]
       config:
@@ -202,9 +225,9 @@ mesh:
           path: /tmp/picoforge/rel/username
         remotes:
           - service: trace_collector
-            port: 8220
+            port: auto
     rstore_session:
-      port: 8216
+      port: auto
       workers: 4
       plugins: [relational_storage]
       config:
@@ -213,9 +236,9 @@ mesh:
           path: /tmp/picoforge/rel/session
         remotes:
           - service: trace_collector
-            port: 8220
+            port: auto
     rstore_token:
-      port: 8217
+      port: auto
       workers: 4
       plugins: [relational_storage]
       config:
@@ -224,10 +247,10 @@ mesh:
           path: /tmp/picoforge/rel/token
         remotes:
           - service: trace_collector
-            port: 8220
+            port: auto
 
     session:
-      port: 8203
+      port: auto
       # Hit on EVERY authenticated /_rpc (token→uid). State is in
       # sharded_storage (no in-memory bookkeeping); start mints a random
       # 128-bit token (no shared counter) and lookup is a single read, so
@@ -237,89 +260,104 @@ mesh:
       config:
         remotes:
           - service: sharded_storage
-            port: 8212
+            port: auto
           # session rows live in the rstore_session lookup cluster, sharded by
           # hash(session_id); the session plugin owns the table.
           - service: rstore_session
-            port: 8216
+            port: auto
           - service: trace_collector
-            port: 8220
+            port: auto
           - service: token_issuer
-            port: 8207
+            port: auto
 
     accounts:
-      port: 8204
+      port: auto
       plugins: [accounts]
       config:
         remotes:
           - service: sharded_storage
-            port: 8212
+            port: auto
           # accounts: users in rstore_uid (sharded by uid); the username→uid
           # uniqueness lookup in rstore_username (sharded by hash(username)).
           - service: rstore_uid
-            port: 8213
+            port: auto
           - service: rstore_username
-            port: 8215
+            port: auto
           - service: trace_collector
-            port: 8220
+            port: auto
 
     password_authn:
-      port: 8205
+      port: auto
       plugins: [password_authn]
       config:
         remotes:
           - service: sharded_storage
-            port: 8212
+            port: auto
           - service: trace_collector
-            port: 8220
+            port: auto
           - service: accounts
-            port: 8204
+            port: auto
 
     github_authn:
-      port: 8206
+      port: auto
       plugins: [github_authn]
       config:
         remotes:
           - service: sharded_storage
-            port: 8212
+            port: auto
           - service: trace_collector
-            port: 8220
+            port: auto
 
     token_issuer:
-      port: 8207
+      port: auto
       plugins: [token_issuer]
       config:
         remotes:
           - service: sharded_storage
-            port: 8212
+            port: auto
           # refresh_tokens live in rstore_token, sharded by hash(token).
           - service: rstore_token
-            port: 8217
+            port: auto
           - service: trace_collector
-            port: 8220
+            port: auto
           - service: accounts
-            port: 8204
+            port: auto
           # login delegates credential verification to password_authn.
           - service: password_authn
-            port: 8205
+            port: auto
 
     issues:
-      port: 8208
+      port: auto
       plugins: [issues]
       config:
         remotes:
           - service: sharded_storage
-            port: 8212
+            port: auto
           - service: trace_collector
-            port: 8220
+            port: auto
 
     git_repo:
-      port: 8209
+      port: auto
       # Metadata is in sharded_storage (the bare repos on disk are the content
       # source of truth). Creation elects one writer via storage put_if_absent
       # and bumps the count / owner index with atomic db_incr + compare-and-set,
-      # so concurrent creates can't double-count or lose index entries. Fewer
-      # workers than the storage/session tier — repo ops are heavier (libgit2).
+      # so concurrent creates can't double-count or lose index entries.
+      #
+      # Sizing (profiled with an isolated put_file load — see findings below).
+      # repo ops are CPU-bound libgit2 work: zlib deflate/inflate (~27%) + the
+      # collision-detecting SHA-1 / SHA1DC (~15%) + tree rebuild. The actual
+      # disk write/fsync is ~0.1% — git_repo is NOT disk-bound. That work runs
+      # on the libuv worker pool (sized workers*4), not the serving loop, and it
+      # parallelises per bare repo: under a multi-client load git_repo scaled to
+      # ~13 cores at IPC 1.25.
+      #
+      # Do NOT raise `workers` to "use more cores": workers:4 already gives a
+      # 16-thread pool, and an A/B vs workers:6 (24-thread pool) was a dead heat
+      # (~4.7k commits/s either way). On this ~24-core box the TOTAL core budget
+      # (shared with gateway/session/storage), not git_repo's pool, is the
+      # ceiling — a bigger pool just steals cores from the other tiers. The real
+      # wins are build-level (zlib-ng; hardware SHA-NI instead of bundled
+      # SHA1DC) and structural (less loose-object churn), not a config knob.
       workers: 4
       plugins: [git_repo]
       config:
@@ -330,29 +368,29 @@ mesh:
           repos_dir: /tmp/picoforge/repos
         remotes:
           - service: sharded_storage
-            port: 8212
+            port: auto
           - service: trace_collector
-            port: 8220
+            port: auto
 
     git_pipeline:
-      port: 8210
+      port: auto
       plugins: [git_pipeline]
       config:
         remotes:
           - service: sharded_storage
-            port: 8212
+            port: auto
           - service: trace_collector
-            port: 8220
+            port: auto
 
     personal_access_tokens:
-      port: 8211
+      port: auto
       plugins: [personal_access_tokens]
       config:
         remotes:
           - service: sharded_storage
-            port: 8212
+            port: auto
           - service: trace_collector
-            port: 8220
+            port: auto
 
     # runner_agent (docs/runner-agent.md): the registry of external CI runner
     # agents. Owns runner identity — opaque `rnr_` token mint/lookup/revoke and
@@ -361,17 +399,17 @@ mesh:
     # id and mints a runner JWT; git_pipeline owns the job state the runner then
     # leases. yrpc backend like the rest — no HTTP, behind the gateway.
     runner_agent:
-      port: 8214
+      port: auto
       plugins: [runner_agent]
       config:
         remotes:
           - service: sharded_storage
-            port: 8212
+            port: auto
           - service: trace_collector
-            port: 8220
+            port: auto
           # runner_agent.exchange mints the runner JWT via the token issuer.
           - service: token_issuer
-            port: 8207
+            port: auto
 
     # The gateway. Per CLAUDE.md: this is the ONE service that
     # listens yhttp — it's the auth boundary. External clients
@@ -390,8 +428,9 @@ mesh:
     # FRONTEND DIRECTION (resolved): the browser-facing HTML is the
     # standalone `picoforge-webapp` sidecar (src/picoforge/webapp/), NOT a
     # combined gateway. The sidecar links no plugins and reaches every
-    # backend only through this gateway's /_rpc — see mesh-up.sh, which
-    # launches it on :8080. The HTML routes still compiled into the
+    # backend only through this gateway's /_rpc — including picotrace at
+    # /traces — see mesh-up.sh, which launches it on :8080. The HTML routes
+    # still compiled into the
     # gateway (src/picomesh/frontends/yhttp/frontend.c) are LEGACY, kept
     # only until the sidecar renders the full page set.
     #
@@ -526,10 +565,12 @@ mesh:
               runner_agent.runner_agent.get:
                 required_group: "site:runner"
               trace_collector.trace_collector.get_trace: authenticated
+              trace_collector.trace_collector.traces: authenticated
               trace_collector.trace_collector.services: authenticated
               trace_collector.trace_collector.operations: authenticated
               trace_collector.trace_collector.latency: authenticated
               trace_collector.trace_collector.errors: authenticated
+              trace_collector.trace_collector.stats: authenticated
               # Admin surfaces — site-owner only, expressed through the model
               # (replaces the gateway's old raw role:<uid> read).
               accounts.accounts.list:
@@ -564,29 +605,29 @@ mesh:
           log: true
         remotes:
           - service: sharded_storage
-            port: 8212
+            port: auto
           - service: trace_collector
-            port: 8220
+            port: auto
           - service: session
-            port: 8203
+            port: auto
           - service: accounts
-            port: 8204
+            port: auto
           - service: password_authn
-            port: 8205
+            port: auto
           - service: github_authn
-            port: 8206
+            port: auto
           - service: token_issuer
-            port: 8207
+            port: auto
           - service: issues
-            port: 8208
+            port: auto
           - service: git_repo
-            port: 8209
+            port: auto
           - service: git_pipeline
-            port: 8210
+            port: auto
           - service: personal_access_tokens
-            port: 8211
+            port: auto
           - service: runner_agent
-            port: 8214
+            port: auto
 
     # ---- gh#15: generic service-console tooling ------------------------
     #
@@ -619,39 +660,39 @@ mesh:
           bridge_only: true
         remotes:
           - service: sharded_storage
-            port: 8212
+            port: auto
           - service: rstore_uid
-            port: 8213
+            port: auto
           - service: rstore_username
-            port: 8215
+            port: auto
           - service: rstore_session
-            port: 8216
+            port: auto
           - service: rstore_token
-            port: 8217
+            port: auto
           - service: trace_collector
-            port: 8220
+            port: auto
           - service: session
-            port: 8203
+            port: auto
           - service: accounts
-            port: 8204
+            port: auto
           - service: password_authn
-            port: 8205
+            port: auto
           - service: github_authn
-            port: 8206
+            port: auto
           - service: token_issuer
-            port: 8207
+            port: auto
           - service: issues
-            port: 8208
+            port: auto
           - service: git_repo
-            port: 8209
+            port: auto
           - service: git_pipeline
-            port: 8210
+            port: auto
           - service: personal_access_tokens
-            port: 8211
+            port: auto
           - service: runner_agent
-            port: 8214
+            port: auto
           - service: portalloc
-            port: 8201
+            port: auto
 
     # Generic /_alpine service console: its OWN frontend (`frontend:
     # alpine`), a separate Picomesh application/tool. It serves the static

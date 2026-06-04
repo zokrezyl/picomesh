@@ -208,6 +208,7 @@ set(PICOMESH_PLUGINS
     time
     accounts
     portalloc
+    registry
     session
     password_authn
     github_authn

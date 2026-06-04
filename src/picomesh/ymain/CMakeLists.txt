@@ -8,7 +8,7 @@
 # does, and is includable as an object library if a downstream binary
 # (tests, embedding host) wants to swap the entry point.
 
-add_library(picomesh_ymain OBJECT ymain.c)
+add_library(picomesh_ymain OBJECT ymain.c autoport.c)
 target_link_libraries(picomesh_ymain PUBLIC picomesh_runtime)
 # ymain.c uses a couple of plugin public stubs (the legacy `client`
 # smoke). All public headers live under

@@ -8,6 +8,7 @@
 
 typedef struct picomesh_void_result (*trace_collector_trace_collector_ingest_fn)(struct ctx *, struct object *, struct yheaders *, const char *);
 typedef struct picomesh_string_result (*trace_collector_trace_collector_get_trace_fn)(struct ctx *, struct object *, struct yheaders *, const char *);
+typedef struct picomesh_string_result (*trace_collector_trace_collector_traces_fn)(struct ctx *, struct object *, struct yheaders *, const char *, const char *, uint32_t);
 typedef struct picomesh_string_result (*trace_collector_trace_collector_services_fn)(struct ctx *, struct object *, struct yheaders *);
 typedef struct picomesh_string_result (*trace_collector_trace_collector_operations_fn)(struct ctx *, struct object *, struct yheaders *, const char *);
 typedef struct picomesh_string_result (*trace_collector_trace_collector_latency_fn)(struct ctx *, struct object *, struct yheaders *, const char *, const char *, uint32_t);

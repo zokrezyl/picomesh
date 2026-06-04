@@ -10,8 +10,10 @@ methods:
         type: "struct object *"
       - name: hdrs
         type: "struct yheaders *"
-      - name: service_id
-        type: uint32_t
+      - name: service_name
+        type: "const char *"
+      - name: host
+        type: "const char *"
   - slot: portalloc_release
     domain: portalloc
     owning_class: portalloc

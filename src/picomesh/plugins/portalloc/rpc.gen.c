@@ -37,13 +37,29 @@ static size_t portalloc_portalloc_allocate_skel(const void *_body, size_t _body_
         memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
         _obj = (struct object *)rpc_handle_resolve(_h);
     }
-    uint32_t _v1 = 0;
-    if (_off + sizeof(_v1) > _body_len) goto _short_body;
-    memcpy(&_v1, (const uint8_t *)_body + _off, sizeof(_v1));
-    _off += sizeof(_v1);
+    char _s1[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s1)) goto _short_body;
+        if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
+        _s1[_slen] = 0; _off += _slen;
+    }
+    char _s2[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s2)) goto _short_body;
+        if (_slen) memcpy(_s2, (const uint8_t *)_body + _off, _slen);
+        _s2[_slen] = 0; _off += _slen;
+    }
     struct ytelemetry_span _tsp;
     ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.portalloc_portalloc_allocate");
-    struct picomesh_uint32_result _r = portalloc_portalloc_allocate(&_local, _obj, _hdrs, _v1);
+    struct picomesh_uint32_result _r = portalloc_portalloc_allocate(&_local, _obj, _hdrs, _s1, _s2);
     ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
@@ -313,10 +329,11 @@ static int portalloc_portalloc_allocate_jinvoke(struct ctx *ctx, struct object *
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
 {
-    uint32_t arg0 = (uint32_t)yjson_as_int(yjson_array_at(args, 0), 0);
+    const char *arg0 = yjson_as_string(yjson_array_at(args, 0), "");
+    const char *arg1 = yjson_as_string(yjson_array_at(args, 1), "");
     struct ctx local_ctx = {0};
     struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct picomesh_uint32_result call_result = portalloc_portalloc_allocate(call_ctx, obj, hdrs, arg0);
+    struct picomesh_uint32_result call_result = portalloc_portalloc_allocate(call_ctx, obj, hdrs, arg0, arg1);
     if (PICOMESH_IS_ERR(call_result)) {
         snprintf(err, err_cap, "%s: %s", "portalloc_portalloc_allocate",
                  call_result.error.msg ? call_result.error.msg : "<no message>");
@@ -405,20 +422,29 @@ static int portalloc_portalloc_allocate_minvoke(struct ctx *ctx, struct object *
                           char *_err, size_t _err_cap)
 {
     (void)_mr;
-    if (_argc != 1u) {
-        snprintf(_err, _err_cap, "portalloc_portalloc_allocate: expected 1 arg(s), got %u", _argc);
+    if (_argc != 2u) {
+        snprintf(_err, _err_cap, "portalloc_portalloc_allocate: expected 2 arg(s), got %u", _argc);
         return -1;
     }
-    uint32_t _v0;
+    char _v0[4096];
     {
-        uint64_t _u;
-        if (!cmp_read_uinteger(_mr, &_u)) { snprintf(_err, _err_cap, "service_id: expected unsigned int (%s)", cmp_strerror(_mr)); return -1; }
-        if (_u > UINT32_MAX) { snprintf(_err, _err_cap, "service_id: value %llu out of range for uint32_t", (unsigned long long)_u); return -1; }
-        _v0 = (uint32_t)_u;
+        uint32_t _sz = (uint32_t)sizeof(_v0);
+        if (!cmp_read_str(_mr, _v0, &_sz)) {
+            snprintf(_err, _err_cap, "service_name: expected str arg (%s)", cmp_strerror(_mr));
+            return -1;
+        }
+    }
+    char _v1[4096];
+    {
+        uint32_t _sz = (uint32_t)sizeof(_v1);
+        if (!cmp_read_str(_mr, _v1, &_sz)) {
+            snprintf(_err, _err_cap, "host: expected str arg (%s)", cmp_strerror(_mr));
+            return -1;
+        }
     }
     struct ctx local_ctx = {0};
     struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct picomesh_uint32_result call_result = portalloc_portalloc_allocate(call_ctx, obj, hdrs, _v0);
+    struct picomesh_uint32_result call_result = portalloc_portalloc_allocate(call_ctx, obj, hdrs, _v0, _v1);
     if (PICOMESH_IS_ERR(call_result)) {
         snprintf(_err, _err_cap, "%s: %s", "portalloc_portalloc_allocate",
                  call_result.error.msg ? call_result.error.msg : "<no message>");
@@ -593,7 +619,8 @@ static minvoke_fn portalloc_minvoke_lookup(const char *qname)
 /* ---- portalloc: per-method parameter signatures (runtime reflection) -- */
 
 static const struct jinvoke_param portalloc_portalloc_allocate_params[] = {
-    {"service_id", "uint32_t"}
+    {"service_name", "const char *"},
+    {"host", "const char *"}
 };
 static const struct jinvoke_param portalloc_portalloc_release_params[] = {
     {"port", "uint32_t"}
@@ -605,7 +632,7 @@ static const struct jinvoke_param portalloc_portalloc_list_params[] = {
 struct portalloc_params_row { const char *name; struct jinvoke_params params; };
 
 static const struct portalloc_params_row portalloc_params_rows[] = {
-    {"portalloc_portalloc_allocate", {portalloc_portalloc_allocate_params, 1}},
+    {"portalloc_portalloc_allocate", {portalloc_portalloc_allocate_params, 2}},
     {"portalloc_portalloc_release", {portalloc_portalloc_release_params, 1}},
     {"portalloc_portalloc_count_used", {NULL, 0}},
     {"portalloc_portalloc_list", {portalloc_portalloc_list_params, 2}},

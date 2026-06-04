@@ -5,6 +5,8 @@ __attribute__((unused))
 static relational_storage_db_exec_fn _relational_storage_db_relational_storage_db_exec_check = relational_storage_db_exec_impl;
 __attribute__((unused))
 static relational_storage_db_query_fn _relational_storage_db_relational_storage_db_query_check = relational_storage_db_query_impl;
+__attribute__((unused))
+static relational_storage_db_shard_count_fn _relational_storage_db_relational_storage_db_shard_count_check = relational_storage_db_shard_count_impl;
 
 struct class_ptr_result relational_storage_db_class_get(void)
 {
@@ -20,6 +22,7 @@ struct class_ptr_result relational_storage_db_class_get(void)
     static const struct op ops[] = {
         {"relational_storage", "db_exec", (method_id_t)relational_storage_db_exec, (impl_t)relational_storage_db_exec_impl},
         {"relational_storage", "db_query", (method_id_t)relational_storage_db_query, (impl_t)relational_storage_db_query_impl},
+        {"relational_storage", "db_shard_count", (method_id_t)relational_storage_db_shard_count, (impl_t)relational_storage_db_shard_count_impl},
     };
     struct class_ptr_result _r =
         class_register(&desc, ops, sizeof(ops) / sizeof(ops[0]),
