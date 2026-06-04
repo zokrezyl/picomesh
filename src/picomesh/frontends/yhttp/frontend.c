@@ -953,6 +953,18 @@ static void route_login_post(struct yloop_stream *s, const char *body,
                   keep_alive, cookie_hdr);
 }
 
+/* Best-effort: release a username claim THIS registration won but could not
+ * complete, so a later step's failure does not strand the name permanently
+ * (release_username only deletes an UNCONFIRMED claim, never a completed one). */
+static void register_release_claim(uint32_t uid, const char *uname)
+{
+    SVC_OPEN(acc_rel, "accounts", accounts_accounts_create);
+    if (!acc_rel.ok) return;
+    struct picomesh_int_result rel = accounts_accounts_release_username(&acc_rel.c, acc_rel.obj, NULL, uid, uname);
+    if (PICOMESH_IS_ERR(rel)) picomesh_error_destroy(rel.error);
+    SVC_CLOSE(acc_rel);
+}
+
 /* POST /register — create the account + credential, then start a
  * session and redirect to the user's namespace page. Fails if the
  * username is already taken (so the flow forks cleanly from /login). */
@@ -969,12 +981,35 @@ static void route_register_post(struct yloop_stream *s, const char *body,
     uint32_t uid = hash_username(uname);
     int64_t  pw  = hash_password(pwtext);
 
+    /* Step 0 — reject if a COMPLETED account already owns this uid. Because
+     * uid = FNV(username), a DIFFERENT username can hash to an existing user's
+     * uid (a chosen 32-bit collision); that different name would win a fresh
+     * claim in step 1, and without this gate the credential overwrite in step 2
+     * would then stomp the victim's password — account takeover under the
+     * colliding name. The `users` row is the completion marker, so its presence
+     * means a real account holds this uid: refuse and NEVER touch the credential.
+     * A read error FAILS CLOSED — this gate is a security boundary, so an outage
+     * must not be read as "no account". (The real fix is assigned, never-reused
+     * uids; this gate is the stopgap while uid is hash-derived.) */
+    SVC_OPEN(acc_chk, "accounts", accounts_accounts_create);
+    if (!acc_chk.ok) { render_register(s, "accounts service unreachable", keep_alive); return; }
+    struct picomesh_int_result exists_r = accounts_accounts_exists(&acc_chk.c, acc_chk.obj, NULL, uid);
+    SVC_CLOSE(acc_chk);
+    if (PICOMESH_IS_ERR(exists_r)) {
+        picomesh_error_destroy(exists_r.error);
+        render_register(s, "registration temporarily unavailable — try again", keep_alive);
+        return;
+    }
+    if (exists_r.value) {
+        render_register(s, "username already taken", keep_alive);
+        return;
+    }
+
     /* Step 1 — CLAIM the username BEFORE touching any credential. The claim
      * (INSERT OR IGNORE on the lookup cluster) elects exactly ONE winner for the
      * name: only the request whose insert actually landed gets claim==1. This is
      * what serializes concurrent registrations of the same name — a loser can
-     * never reach step 2 and overwrite the winner's password (the takeover the
-     * old "exists-gate then unconditional overwrite" left open). A claim already
+     * never reach step 2 and overwrite the winner's password. A claim already
      * held means the name belongs to a completed account, an in-flight
      * registration, or an abandoned one — in every case we are NOT the owner. */
     SVC_OPEN(acc_claim, "accounts", accounts_accounts_create);
@@ -996,17 +1031,20 @@ static void route_register_post(struct yloop_stream *s, const char *body,
      * credential. register is put-if-absent; a 0 return means a credential
      * already exists for this uid, only possible as a LEGACY orphan (an older
      * flow wrote the credential before the claim, then failed before
-     * completing). Overwriting it is safe precisely because we hold the fresh
-     * claim — no concurrent registrant can be here, so we are not stomping a
-     * live account's password. The credential is written before the `users`
-     * row, so a crash here leaves no half-created account. */
+     * completing). Overwriting it is safe: step 0 proved no completed account
+     * holds this uid, and we hold the fresh claim, so no concurrent registrant
+     * can be here — we are not stomping a live account's password. The credential
+     * is written before the `users` row, so a crash here leaves no half-created
+     * account. On any failure after winning the claim we RELEASE it so the name
+     * is not stranded. */
     SVC_OPEN(pw_sv, "password_authn", password_authn_password_authn_create);
-    if (!pw_sv.ok) { render_register(s, "password_authn unreachable", keep_alive); return; }
+    if (!pw_sv.ok) { register_release_claim(uid, uname); render_register(s, "password_authn unreachable", keep_alive); return; }
     struct picomesh_int_result pwreg =
         password_authn_password_authn_register(&pw_sv.c, pw_sv.obj, NULL, uid, pw);
     if (PICOMESH_IS_ERR(pwreg)) {
         picomesh_error_destroy(pwreg.error);
         SVC_CLOSE(pw_sv);
+        register_release_claim(uid, uname);
         render_register(s, "could not store credentials (backend not ready?) — try again", keep_alive);
         return;
     }
@@ -1016,6 +1054,7 @@ static void route_register_post(struct yloop_stream *s, const char *body,
         if (PICOMESH_IS_ERR(chg)) {
             picomesh_error_destroy(chg.error);
             SVC_CLOSE(pw_sv);
+            register_release_claim(uid, uname);
             render_register(s, "could not store credentials (backend not ready?) — try again", keep_alive);
             return;
         }
@@ -1024,14 +1063,16 @@ static void route_register_post(struct yloop_stream *s, const char *body,
 
     /* Step 3 — complete the account: accounts_register writes the `users`
      * completion marker (after the credential) and confirms the claim. Its
-     * internal INSERT OR IGNORE re-claim is idempotent (we already hold it). */
+     * internal INSERT OR IGNORE re-claim is idempotent (we already hold it). On
+     * failure, release the claim (best-effort) so the name is not stranded. */
     SVC_OPEN(acc, "accounts", accounts_accounts_create);
-    if (!acc.ok) { render_register(s, "accounts service unreachable", keep_alive); return; }
+    if (!acc.ok) { register_release_claim(uid, uname); render_register(s, "accounts service unreachable", keep_alive); return; }
     struct picomesh_int_result reg = accounts_accounts_register(&acc.c, acc.obj, NULL, uid, uname);
     SVC_CLOSE(acc);
     int was_new = PICOMESH_IS_OK(reg) && reg.value == 1;
     if (PICOMESH_IS_ERR(reg)) picomesh_error_destroy(reg.error);
     if (!was_new) {
+        register_release_claim(uid, uname);
         render_register(s, "username already taken", keep_alive);
         return;
     }

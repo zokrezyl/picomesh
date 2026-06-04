@@ -1,9 +1,15 @@
 # picoforge — mirror of yaapp's scenarios/git-yaapp/yaapp.yaml.
 #
-# A "mesh" parent process spawns each backend as a child picomesh serving
-# JSON-RPC over yttp on the listed port. Real portalloc integration
-# would assign ports dynamically; for today every service has an
-# explicit `port:` so the mesh can spawn deterministically.
+# A "mesh" parent process spawns each backend as a child picomesh node.
+# Only TWO nodes have a fixed address: the mesh control parent (control.port)
+# and the `registry`. Every other node sets `port: auto` — at boot it
+# allocates its listen port through `portalloc` (discovered via the registry),
+# registers itself in the registry, and discovers each `port: auto` remote it
+# consumes through the registry too. To run a SECOND instance on this host,
+# override just `control.port` and `mesh.services.registry.port`; every other
+# port is allocated dynamically and bind-probed, so nothing else collides.
+# The public-facing gateway (8090) and the inspection consoles (8230/8231)
+# keep fixed ports because external clients address them directly.
 #
 # To bring it up:
 #

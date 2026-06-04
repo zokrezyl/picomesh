@@ -25,9 +25,14 @@ set_target_properties(libgit2 PROPERTIES
     IMPORTED_LOCATION             "${_LG_LIB}"
     INTERFACE_INCLUDE_DIRECTORIES "${_LG_DIR}/include"
 )
-# Minimal libgit2 (no HTTPS, no SSH, bundled zlib) only depends on
-# libc + pthread at runtime — plus librt on glibc for clock_gettime.
+# Minimal libgit2 (no HTTPS, no SSH) built against zlib-ng instead of the
+# bundled zlib (USE_BUNDLED_ZLIB=OFF — see the _build.sh). libgit2.a therefore
+# carries UNDEFINED deflate/inflate symbols; the zlib-ng IMPORTED lib resolves
+# them at the final link (it must follow libgit2 on the link line, which it does
+# as a libgit2 INTERFACE dependency). Beyond zlib-ng it only needs libc +
+# pthread — plus librt on glibc for clock_gettime.
+include(${PICOMESH_ROOT}/build-tools/picomesh/libs/zlib-ng.cmake)
 find_package(Threads REQUIRED)
-target_link_libraries(libgit2 INTERFACE Threads::Threads rt)
+target_link_libraries(libgit2 INTERFACE zlib-ng Threads::Threads rt)
 
 message(STATUS "libgit2: prebuilt v${PICOMESH_3RDPARTY_libgit2_VERSION} (${_LG_LIB})")

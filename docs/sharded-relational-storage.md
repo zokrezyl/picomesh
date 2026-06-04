@@ -278,32 +278,56 @@ Failure handling:
   registration of the same username gets "already exists" (0) for the
   credential. **Closed (gh#29) by claiming the name BEFORE any credential
   write.** The gateway's `route_register_post` (`frontend.c`) runs the protocol
-  in claim-first order:
+  as:
+  0. **Collision gate** — `accounts.exists(uid)` (the `users` completion marker).
+     Because `uid = FNV(username)`, a *different* username can hash to an
+     existing user's uid (a chosen 32-bit collision); that different name would
+     win a fresh claim in step 1, so without this gate the step-2 overwrite would
+     stomp the victim's password — takeover under the colliding name. If a
+     completed account already holds this uid, refuse and NEVER touch the
+     credential. The read **fails closed** (an `accounts`/`rstore_uid` outage is
+     not read as "no account"), which is why `accounts.exists` propagates backend
+     errors instead of collapsing them to 0.
   1. **Claim** — `accounts.claim_username(uid, username)` does the
      `INSERT OR IGNORE` and returns 1 ONLY to the request whose insert actually
      landed (SQLite `changes == 1`). Exactly one registrant wins; everyone else
-     gets "username already taken". This is the serialization point.
+     gets "username already taken". This is the serialization point for
+     concurrent same-name registrations.
   2. **Credential — winner only.** Only the claim winner writes the credential.
      `password_authn.register` is put-if-absent; a 0 return is only possible as a
      *legacy* orphan (an older flow wrote the credential before the claim), and
-     overwriting it with `password_authn.change_password` is safe **precisely
-     because we hold the fresh claim** — no concurrent registrant can be at this
-     step, so the overwrite can't stomp a live account's or a competitor's
-     password. (The earlier "exists-gate then unconditional overwrite" left a
-     window where two concurrent registrations both passed the gate and the
-     loser overwrote the winner's password — an account-takeover race. Tying the
-     overwrite to *winning the claim* closes it.)
+     overwriting it with `password_authn.change_password` is safe because step 0
+     proved no completed account holds this uid **and** we hold the fresh claim —
+     so no concurrent registrant can be here to have its password stomped.
   3. **Complete** — `accounts.register` writes the `users` completion marker
      after the credential, then confirms the claim.
 
-  Consequence and remaining gap: a registration that wins the claim but then
-  fails before completing (e.g. the credential backend is down) leaves an
-  unconfirmed claim with no `users` row and no usable credential. It **fails
-  closed** — nothing can log in (login requires the `users` row) — but the name
-  is stuck until reclaimed. Self-heal-on-retry is intentionally given up in
-  exchange for closing the takeover; reclaiming a stuck claim is the abandoned-
-  claim reaper's job (below), which must verify **both** no `users` row **and**
-  no credential for that uid before freeing the name.
+  Why both step 0 AND step 1: the claim alone stops two registrations of the
+  *same name string*, but a *colliding different name* wins a fresh claim, so the
+  uid-keyed `exists` gate is what stops the cross-name takeover. The earlier
+  "exists-gate then UNCONDITIONAL overwrite" was insufficient the other way —
+  two concurrent same-name registrations both passed the gate and the loser
+  overwrote the winner; tying the overwrite to *winning the claim* closes that.
+
+  Residual (inherent to hash-derived uid, NOT closed by the stopgap): this gate
+  stops takeover of an *already-completed* victim. It cannot stop two colliding
+  names registered in the same instant — both pass step 0 (no `users` row yet),
+  both win their own (different-string) claims, and the credential keyed by the
+  shared uid races. That is not a targeted takeover (the attacker cannot force a
+  victim to register in that window) and only the assigned-uid fix below removes
+  it, because the credential is keyed by uid while the claim is keyed by name —
+  they only become 1:1 once the uid is assigned per account rather than hashed
+  from the name.
+
+  Failure handling: on any failure AFTER winning the claim (credential backend
+  down, completion fails), the gateway calls `accounts.release_username` — a
+  best-effort delete of the still-`confirmed=0` claim — so the name is not
+  stranded and a retry can re-claim it. It **fails closed** throughout (nothing
+  can log in without the `users` row). The only residual strand is the rare case
+  where that compensating delete *also* fails; that (and any pre-release crash)
+  is the abandoned-claim reaper's job — it must verify **both** no `users` row
+  **and** no credential for that uid before freeing the name. Self-heal-on-retry
+  via plain idempotency is given up in exchange for closing the takeover.
   - **(preferred end state) assigned, never-reused uid.** Assign the uid at
     claim time (sequence / snowflake), never `FNV(username)`, never reuse. A
     failed registration's uid is dead; a retry gets a *fresh* uid with an empty

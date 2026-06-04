@@ -1,9 +1,12 @@
 #!/bin/bash
-# Builds libgit2 for $TARGET_PLATFORM as a single static library, with
-# every transitive dependency either bundled (zlib) or compiled out
-# (https, ssh, ntlm, external http-parser, external regex). The
-# resulting libgit2.a is self-contained: it only links against libc +
-# pthread at runtime, which makes the BSL-license combined work clean.
+# Builds libgit2 for $TARGET_PLATFORM as a static library. Network
+# transports (https, ssh, ntlm) and the external http-parser/regex are
+# compiled out; zlib is provided by zlib-ng (USE_BUNDLED_ZLIB=OFF) for its
+# SIMD deflate/inflate, staged from the sibling zlib-ng recipe below. The
+# resulting libgit2.a carries UNDEFINED zlib symbols (deflate/inflate); the
+# consumer resolves them by linking zlib-ng's libz.a at the final link (see
+# build-tools/picomesh/libs/libgit2.cmake). At runtime it then needs only
+# libc + pthread + zlib-ng, which keeps the BSL-license combined work clean.
 #
 # License posture: libgit2 is GPLv2 with a linking exception that
 # explicitly permits combining with code under any other license,
@@ -77,10 +80,43 @@ macos-arm64)  CC=clang; CXX=clang++; CMAKE_EXTRA+=("-DCMAKE_OSX_ARCHITECTURES=ar
 *) echo "unknown TARGET_PLATFORM: $TARGET_PLATFORM" >&2; exit 1 ;;
 esac
 
-echo "==> configuring libgit2"
-# Minimal build: no network transports (HTTPS, SSH, NTLM), bundled
-# zlib, builtin regex, builtin http-parser. We only need libgit2 for
-# local-filesystem repo work (init, tree, blob, commit walks).
+# --- stage zlib-ng so libgit2 links the SIMD zlib, not the bundled one ----
+# Prefer the published prebuilt for this platform; on a miss (offline, not
+# yet released) fall back to building it from the sibling recipe. Both yield
+# the lib/libz.a + include/zlib.h layout FindZLIB needs.
+ZLIBNG_VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/../zlib-ng/version")"
+ZLIBNG_DIR="$WORK_DIR/zlib-ng-${ZLIBNG_VERSION}-${TARGET_PLATFORM}"
+ZLIBNG_TAR_NAME="zlib-ng-${TARGET_PLATFORM}-${ZLIBNG_VERSION}.tar.gz"
+ZLIBNG_TAR_CACHE="$HOME/.cache/picomesh-3rdparty/${ZLIBNG_TAR_NAME}"
+URL_BASE="${PICOMESH_3RDPARTY_URL_BASE:-https://github.com/zokrezyl/picomesh/releases/download}"
+ZLIBNG_URL="${URL_BASE}/lib-zlib-ng-${ZLIBNG_VERSION}/${ZLIBNG_TAR_NAME}"
+
+if [ ! -f "$ZLIBNG_DIR/lib/libz.a" ]; then
+    rm -rf "$ZLIBNG_DIR"; mkdir -p "$ZLIBNG_DIR"
+    if [ ! -f "$ZLIBNG_TAR_CACHE" ]; then
+        echo "==> fetching prebuilt zlib-ng ${ZLIBNG_VERSION} ($TARGET_PLATFORM)"
+        if curl -fL --retry 5 --retry-delay 3 --retry-all-errors \
+                -o "$ZLIBNG_TAR_CACHE.part" "$ZLIBNG_URL"; then
+            mv "$ZLIBNG_TAR_CACHE.part" "$ZLIBNG_TAR_CACHE"
+        else
+            echo "==> no prebuilt zlib-ng — building it from the sibling recipe"
+            rm -f "$ZLIBNG_TAR_CACHE.part"
+            OUTPUT_DIR="$(dirname "$ZLIBNG_TAR_CACHE")" \
+            TARGET_PLATFORM="$TARGET_PLATFORM" \
+            WORK_DIR="$WORK_DIR/zlib-ng-src" \
+                bash "$SCRIPT_DIR/../zlib-ng/_build.sh"
+        fi
+    fi
+    tar -C "$ZLIBNG_DIR" -xzf "$ZLIBNG_TAR_CACHE"
+fi
+[ -f "$ZLIBNG_DIR/lib/libz.a" ]     || { echo "zlib-ng staging failed: no libz.a"   >&2; exit 1; }
+[ -f "$ZLIBNG_DIR/include/zlib.h" ] || { echo "zlib-ng staging failed: no zlib.h"   >&2; exit 1; }
+
+echo "==> configuring libgit2 (zlib-ng @ $ZLIBNG_DIR)"
+# Minimal build: no network transports (HTTPS, SSH, NTLM), builtin regex,
+# builtin http-parser. zlib comes from zlib-ng (USE_BUNDLED_ZLIB=OFF) for SIMD
+# deflate/inflate. We only need libgit2 for local-filesystem repo work (init,
+# tree, blob, commit walks).
 cmake -S "$SRC_DIR" -B "$BUILD_DIR" -G "Unix Makefiles" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_C_COMPILER="$CC" \
@@ -95,7 +131,10 @@ cmake -S "$SRC_DIR" -B "$BUILD_DIR" -G "Unix Makefiles" \
     -DUSE_HTTPS=OFF \
     -DUSE_SSH=OFF \
     -DUSE_NTLMCLIENT=OFF \
-    -DUSE_BUNDLED_ZLIB=ON \
+    -DUSE_BUNDLED_ZLIB=OFF \
+    -DZLIB_ROOT="$ZLIBNG_DIR" \
+    -DZLIB_LIBRARY="$ZLIBNG_DIR/lib/libz.a" \
+    -DZLIB_INCLUDE_DIR="$ZLIBNG_DIR/include" \
     -DREGEX_BACKEND=builtin \
     -DUSE_HTTP_PARSER=builtin \
     "${CMAKE_EXTRA[@]}"

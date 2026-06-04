@@ -102,7 +102,18 @@ SPAWNED=$(echo "$out" | sed -E 's/.*"result":([0-9]+).*/\1/')
 echo "  spawned: $SPAWNED children"
 
 echo "[4/6] waiting for children to bind…"
-sleep 1.5
+# With `port: auto`, each node allocates its port through portalloc and
+# discovers its remotes through the registry at boot, so the gateway is ready
+# a few seconds after reconcile rather than instantly. Poll its /_describe
+# (the gateway only answers once it has opened its backend remotes) instead of
+# guessing a fixed sleep.
+for _ in $(seq 1 60); do
+    if curl -sS --max-time 2 -o /dev/null "http://127.0.0.1:$WEB/_describe" 2>/dev/null; then
+        break
+    fi
+    sleep 0.5
+done
+sleep 0.5
 
 echo "[5/6] gateway is API + auth-action only (NO HTML pages) on :${WEB}"
 rm -f tmp/cookies.txt

@@ -78,14 +78,20 @@ static struct picomesh_void_result accounts_open_names(struct rel_handle *h, str
     return rel_ensure_schema(h, hdrs, &acc(obj)->names_schema_ensured, ACCOUNTS_NAMES_DDL);
 }
 
-static int account_exists(struct rel_handle *h, struct yheaders *hdrs, uint32_t uid)
+/* Existence of the completed `users` row for `uid`, AS A RESULT. A backend/query
+ * failure PROPAGATES (it must not collapse to "not found"): callers use this as
+ * a correctness gate — registration's collision/takeover guard and login —
+ * which must fail closed on an outage, not silently treat the account as absent.
+ * COUNT(*) on the PK is always one row, so there is no found/fallback ambiguity. */
+static struct picomesh_int_result account_exists(struct rel_handle *h, struct yheaders *hdrs, uint32_t uid)
 {
     h->shard = uid;
     char *args = rel_args1i((int64_t)uid);
-    int found = 0;
-    rel_query_int(h, hdrs, "SELECT uid FROM users WHERE uid=?", args, "uid", 0, &found);
+    struct picomesh_int64_result r =
+        rel_query_int_result(h, hdrs, "SELECT COUNT(*) AS n FROM users WHERE uid=?", args, "n", 0);
     free(args);
-    return found;
+    if (PICOMESH_IS_ERR(r)) return PICOMESH_ERR(picomesh_int, "account_exists: query failed", r);
+    return PICOMESH_OK(picomesh_int, r.value > 0 ? 1 : 0);
 }
 
 /* Claim a username in the lookup cluster — the FIRST step of registration and
@@ -123,6 +129,36 @@ struct picomesh_int_result accounts_accounts_claim_username_impl(struct ctx *ctx
     /* changes==1 ⇒ we inserted the row (and its uid is ours) ⇒ we won.
      * changes==0 ⇒ the row already existed ⇒ someone else holds the name. */
     return PICOMESH_OK(picomesh_int, claimed == 1 ? 1 : 0);
+}
+
+/* Best-effort release of a username claim that THIS registration won but could
+ * not complete (a later step failed). Deletes ONLY an UNCONFIRMED claim for this
+ * uid — never a confirmed one, so a completed account's name can never be freed
+ * by a stray release. Returns 1 if a row was removed, 0 otherwise. This unstrands
+ * the name so a retry can re-claim it, turning the "permanent until reaped" DoS
+ * into a transient one; a background reaper still covers the rare case where
+ * this compensating delete itself fails. */
+PICOMESH_CLASS_ANNOTATE("override@accounts:accounts:accounts_release_username")
+struct picomesh_int_result accounts_accounts_release_username_impl(struct ctx *ctx, struct object *obj,
+                                                                   struct yheaders *hdrs,
+                                                                   uint32_t uid, const char *username)
+{
+    (void)ctx;
+    if (!username) username = "";
+    struct rel_handle nh;
+    struct picomesh_void_result on = accounts_open_names(&nh, hdrs, obj);
+    if (PICOMESH_IS_ERR(on)) return PICOMESH_ERR(picomesh_int, "accounts_release_username: open names failed", on);
+    nh.shard = picomesh_fnv1a32(username);
+    struct yjson_writer *aw = yjson_writer_new();
+    yjson_writer_begin_array(aw);
+    yjson_writer_string(aw, username);
+    yjson_writer_int(aw, (int64_t)uid);
+    char *args = rel_args_take(aw);
+    int changes = rel_exec_changes(&nh, hdrs,
+        "DELETE FROM usernames WHERE username=? AND uid=? AND confirmed=0", args);
+    free(args);
+    if (changes < 0) return PICOMESH_ERR(picomesh_int, "accounts_release_username: delete failed");
+    return PICOMESH_OK(picomesh_int, changes > 0 ? 1 : 0);
 }
 
 PICOMESH_CLASS_ANNOTATE("override@accounts:accounts:accounts_register")
@@ -193,7 +229,7 @@ struct picomesh_int_result accounts_accounts_exists_impl(struct ctx *ctx, struct
     struct rel_handle h;
     struct picomesh_void_result oh = accounts_open_uid(&h, hdrs, obj);
     if (PICOMESH_IS_ERR(oh)) return PICOMESH_ERR(picomesh_int, "accounts_exists: open failed", oh);
-    return PICOMESH_OK(picomesh_int, account_exists(&h, hdrs, uid) ? 1 : 0);
+    return account_exists(&h, hdrs, uid);
 }
 
 PICOMESH_CLASS_ANNOTATE("override@accounts:accounts:accounts_set_balance")
