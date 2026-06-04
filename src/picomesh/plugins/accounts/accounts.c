@@ -88,6 +88,43 @@ static int account_exists(struct rel_handle *h, struct yheaders *hdrs, uint32_t 
     return found;
 }
 
+/* Claim a username in the lookup cluster — the FIRST step of registration and
+ * the uniqueness authority. Returns 1 iff THIS call won a FRESH claim (the
+ * INSERT OR IGNORE actually inserted the row), 0 if the name was already claimed
+ * (by a completed account, an in-flight registration, or an abandoned one).
+ *
+ * The caller MUST NOT write or overwrite the credential unless it won the claim.
+ * That is what serializes concurrent registrations of the same name: exactly
+ * one INSERT OR IGNORE inserts (changes==1), so only one registrant is the
+ * winner, and a loser can never reach the credential to overwrite the winner's
+ * password. A `users` row (the completion marker) is still written last, after
+ * the credential, by accounts_register. */
+PICOMESH_CLASS_ANNOTATE("override@accounts:accounts:accounts_claim_username")
+struct picomesh_int_result accounts_accounts_claim_username_impl(struct ctx *ctx, struct object *obj,
+                                                                 struct yheaders *hdrs,
+                                                                 uint32_t uid, const char *username)
+{
+    (void)ctx;
+    if (!username) username = "";
+    struct rel_handle nh;
+    struct picomesh_void_result on = accounts_open_names(&nh, hdrs, obj);
+    if (PICOMESH_IS_ERR(on)) return PICOMESH_ERR(picomesh_int, "accounts_claim_username: open names failed", on);
+    nh.shard = picomesh_fnv1a32(username);
+    struct yjson_writer *cw = yjson_writer_new();
+    yjson_writer_begin_array(cw);
+    yjson_writer_string(cw, username);
+    yjson_writer_int(cw, (int64_t)uid);
+    yjson_writer_int(cw, picomesh_yplatform_time_wall_ms() / 1000);
+    char *cargs = rel_args_take(cw);
+    int claimed = rel_exec_changes(&nh, hdrs,
+        "INSERT OR IGNORE INTO usernames(username,uid,created_at) VALUES(?,?,?)", cargs);
+    free(cargs);
+    if (claimed < 0) return PICOMESH_ERR(picomesh_int, "accounts_claim_username: name claim failed");
+    /* changes==1 ⇒ we inserted the row (and its uid is ours) ⇒ we won.
+     * changes==0 ⇒ the row already existed ⇒ someone else holds the name. */
+    return PICOMESH_OK(picomesh_int, claimed == 1 ? 1 : 0);
+}
+
 PICOMESH_CLASS_ANNOTATE("override@accounts:accounts:accounts_register")
 struct picomesh_int_result accounts_accounts_register_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                     uint32_t uid, const char *username)

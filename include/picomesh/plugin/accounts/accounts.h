@@ -23,6 +23,7 @@ struct class_ptr_result accounts_accounts_class_get(void);
 struct object_ptr_result accounts_accounts_create(struct ctx *ctx);
 
 /* ---- methods ---- */
+struct picomesh_int_result accounts_accounts_claim_username(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t uid, const char * username);
 struct picomesh_int_result accounts_accounts_register(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t uid, const char * username);
 struct picomesh_int_result accounts_accounts_exists(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t uid);
 struct picomesh_int_result accounts_accounts_set_balance(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t uid, int64_t n);

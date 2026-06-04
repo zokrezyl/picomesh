@@ -6,6 +6,7 @@
 
 #include <picomesh/plugin/accounts/accounts.h>
 
+typedef struct picomesh_int_result (*accounts_accounts_claim_username_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t, const char *);
 typedef struct picomesh_int_result (*accounts_accounts_register_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t, const char *);
 typedef struct picomesh_int_result (*accounts_accounts_exists_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
 typedef struct picomesh_int_result (*accounts_accounts_set_balance_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t, int64_t);

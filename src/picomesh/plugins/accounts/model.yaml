@@ -1,4 +1,19 @@
 methods:
+  - slot: accounts_claim_username
+    domain: accounts
+    owning_class: accounts
+    return_type: struct picomesh_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: uid
+        type: uint32_t
+      - name: username
+        type: "const char *"
   - slot: accounts_register
     domain: accounts
     owning_class: accounts
@@ -130,6 +145,9 @@ classes:
     mixins: []
     data: struct accounts_accounts_data
     ops:
+      - slot: accounts_claim_username
+        slot_domain: accounts
+        impl: accounts_accounts_claim_username_impl
       - slot: accounts_register
         slot_domain: accounts
         impl: accounts_accounts_register_impl

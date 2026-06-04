@@ -969,42 +969,37 @@ static void route_register_post(struct yloop_stream *s, const char *body,
     uint32_t uid = hash_username(uname);
     int64_t  pw  = hash_password(pwtext);
 
-    /* Reject re-registration of a COMPLETED account up front — the accounts
-     * `users` row is the completion marker. This gate is also what makes the
-     * credential overwrite below SAFE: if no completed account exists for this
-     * uid, no live login depends on whatever credential might already be stored
-     * for it, so a fresh registrant may take it. A completed account's password
-     * is changed only through an authenticated change-password flow, never
-     * through register — otherwise a passer-by could overwrite an existing
-     * user's password (account takeover). */
-    SVC_OPEN(acc_chk, "accounts", accounts_accounts_create);
-    if (!acc_chk.ok) { render_register(s, "accounts service unreachable", keep_alive); return; }
-    struct picomesh_int_result exists_r = accounts_accounts_exists(&acc_chk.c, acc_chk.obj, NULL, uid);
-    SVC_CLOSE(acc_chk);
-    if (PICOMESH_IS_ERR(exists_r)) {
-        /* Could not determine whether a completed account already owns this uid.
-         * FAIL CLOSED: the credential overwrite below is only safe once we have
-         * POSITIVELY confirmed no completed account exists. Treating an error as
-         * "not registered" would let a transient accounts/rstore_uid outage turn
-         * register into a credential overwrite of an existing account. */
-        picomesh_error_destroy(exists_r.error);
+    /* Step 1 — CLAIM the username BEFORE touching any credential. The claim
+     * (INSERT OR IGNORE on the lookup cluster) elects exactly ONE winner for the
+     * name: only the request whose insert actually landed gets claim==1. This is
+     * what serializes concurrent registrations of the same name — a loser can
+     * never reach step 2 and overwrite the winner's password (the takeover the
+     * old "exists-gate then unconditional overwrite" left open). A claim already
+     * held means the name belongs to a completed account, an in-flight
+     * registration, or an abandoned one — in every case we are NOT the owner. */
+    SVC_OPEN(acc_claim, "accounts", accounts_accounts_create);
+    if (!acc_claim.ok) { render_register(s, "accounts service unreachable", keep_alive); return; }
+    struct picomesh_int_result claim_r = accounts_accounts_claim_username(&acc_claim.c, acc_claim.obj, NULL, uid, uname);
+    SVC_CLOSE(acc_claim);
+    if (PICOMESH_IS_ERR(claim_r)) {
+        /* FAIL CLOSED: cannot establish the claim → never touch credentials. */
+        picomesh_error_destroy(claim_r.error);
         render_register(s, "registration temporarily unavailable — try again", keep_alive);
         return;
     }
-    if (exists_r.value) {
+    if (claim_r.value != 1) {
         render_register(s, "username already taken", keep_alive);
         return;
     }
 
-    /* Store the credential before the accounts row, so a crash here leaves
-     * nothing half-created and the user can simply retry. register is
-     * put-if-absent; a 0 return means a credential for this uid ALREADY exists.
-     * Because the gate above proved no completed account uses this uid, that
-     * credential is an ORPHAN from an earlier registration that never finished
-     * — overwrite it with the new password so the new registrant's password is
-     * authoritative. (The old put-if-absent-and-ignore path silently kept the
-     * orphan: the new user could never log in with the password they chose, and
-     * the stale secret stayed usable — the credential-orphan hazard.) */
+    /* Step 2 — we WON the claim, so we own this registration and may write the
+     * credential. register is put-if-absent; a 0 return means a credential
+     * already exists for this uid, only possible as a LEGACY orphan (an older
+     * flow wrote the credential before the claim, then failed before
+     * completing). Overwriting it is safe precisely because we hold the fresh
+     * claim — no concurrent registrant can be here, so we are not stomping a
+     * live account's password. The credential is written before the `users`
+     * row, so a crash here leaves no half-created account. */
     SVC_OPEN(pw_sv, "password_authn", password_authn_password_authn_create);
     if (!pw_sv.ok) { render_register(s, "password_authn unreachable", keep_alive); return; }
     struct picomesh_int_result pwreg =
@@ -1027,11 +1022,11 @@ static void route_register_post(struct yloop_stream *s, const char *body,
     }
     SVC_CLOSE(pw_sv);
 
+    /* Step 3 — complete the account: accounts_register writes the `users`
+     * completion marker (after the credential) and confirms the claim. Its
+     * internal INSERT OR IGNORE re-claim is idempotent (we already hold it). */
     SVC_OPEN(acc, "accounts", accounts_accounts_create);
     if (!acc.ok) { render_register(s, "accounts service unreachable", keep_alive); return; }
-    /* The username is an account detail the accounts plugin OWNS — pass it
-     * to register so the plugin stores it (name:<uid> + roster index). The
-     * gateway no longer reaches around into accounts' storage. */
     struct picomesh_int_result reg = accounts_accounts_register(&acc.c, acc.obj, NULL, uid, uname);
     SVC_CLOSE(acc);
     int was_new = PICOMESH_IS_OK(reg) && reg.value == 1;

@@ -11,23 +11,27 @@
  * config as a global block, so a freshly spawned node can reach the
  * registry before it knows where anything else lives — including portalloc.
  *
+ * State is PROCESS-WIDE, not per-object: the RPC server allocates a fresh
+ * receiver object for every client's CREATE, so a per-object table would be
+ * invisible to the next client. The registrations therefore live in one
+ * mutex-guarded singleton — the same shape the trace collector uses for its
+ * span store. (The mutex is uncontended under the single worker the registry
+ * runs with, and correct should it ever scale out.)
+ *
  * Methods:
  *   register_service(name, instance_id, host, port) → 1
  *   deregister_service(name, instance_id)           → 1 ok / 0 unknown
  *   resolve(name)                                   → "host:port" ("" if unknown)
  *   discover_service(name)                          → JSON {service_name, instances:[…]}
  *   list_services()                                 → JSON [{service_name, instances:[…]}]
- *   count()                                         → number of live instances
- *
- * `resolve` is the framework convenience: a node opening a remote with
- * `port: auto` calls it to turn a service name into a concrete address.
- * The richer JSON methods mirror yaapp's registry for the describe surface. */
+ *   count()                                         → number of live instances */
 
 #include <picomesh/ycore/result.h>
 #include <picomesh/ycore/ytrace.h>
 #include <picomesh/yclass/class.h>
 #include <picomesh/yjson/yjson.h>
 
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,24 +50,32 @@ struct registry_entry {
     int used;
 };
 
+/* The class object carries no state — all of it is process-wide below. */
 struct PICOMESH_CLASS_ANNOTATE("class@registry:registry") registry_registry_data {
+    int placeholder;
+};
+
+struct registry_state {
+    pthread_mutex_t mu;
     struct registry_entry entries[REGISTRY_MAX_ENTRIES];
     size_t count;
 };
 
-static struct registry_registry_data *reg(struct object *obj)
+/* The one process-wide registry table, shared by every receiver object. */
+static struct registry_state *registry_state(void)
 {
-    return (struct registry_registry_data *)((char *)obj + sizeof(struct object));
+    static struct registry_state state = {.mu = PTHREAD_MUTEX_INITIALIZER};
+    return &state;
 }
 
-/* Find the slot holding (name, instance_id), or -1. */
-static int registry_find(struct registry_registry_data *data, const char *name,
+/* Find the slot holding (name, instance_id), or -1. Caller holds the lock. */
+static int registry_find(struct registry_state *state, const char *name,
                          const char *instance_id)
 {
     for (size_t i = 0; i < REGISTRY_MAX_ENTRIES; ++i) {
-        if (data->entries[i].used &&
-            strcmp(data->entries[i].name, name) == 0 &&
-            strcmp(data->entries[i].instance_id, instance_id) == 0) {
+        if (state->entries[i].used &&
+            strcmp(state->entries[i].name, name) == 0 &&
+            strcmp(state->entries[i].instance_id, instance_id) == 0) {
             return (int)i;
         }
     }
@@ -76,26 +88,31 @@ struct picomesh_int_result registry_registry_register_service_impl(struct ctx *c
                                                                    const char *name, const char *instance_id,
                                                                    const char *host, uint32_t port)
 {
-    (void)ctx; (void)hdrs;
+    (void)ctx; (void)obj; (void)hdrs;
     if (!name || !*name) return PICOMESH_ERR(picomesh_int, "registry_register: empty service name");
     if (!instance_id || !*instance_id) instance_id = name;
     if (!host || !*host) host = "127.0.0.1";
-    struct registry_registry_data *data = reg(obj);
+    struct registry_state *state = registry_state();
+    pthread_mutex_lock(&state->mu);
 
     /* Re-registering (name, instance_id) refreshes its address. */
-    int slot = registry_find(data, name, instance_id);
+    int slot = registry_find(state, name, instance_id);
     if (slot < 0) {
         for (size_t i = 0; i < REGISTRY_MAX_ENTRIES; ++i) {
-            if (!data->entries[i].used) { slot = (int)i; break; }
+            if (!state->entries[i].used) { slot = (int)i; break; }
         }
-        if (slot < 0) return PICOMESH_ERR(picomesh_int, "registry_register: table full");
-        data->entries[slot].used = 1;
-        data->count++;
+        if (slot < 0) {
+            pthread_mutex_unlock(&state->mu);
+            return PICOMESH_ERR(picomesh_int, "registry_register: table full");
+        }
+        state->entries[slot].used = 1;
+        state->count++;
     }
-    snprintf(data->entries[slot].name, sizeof(data->entries[slot].name), "%s", name);
-    snprintf(data->entries[slot].instance_id, sizeof(data->entries[slot].instance_id), "%s", instance_id);
-    snprintf(data->entries[slot].host, sizeof(data->entries[slot].host), "%s", host);
-    data->entries[slot].port = port;
+    snprintf(state->entries[slot].name, sizeof(state->entries[slot].name), "%s", name);
+    snprintf(state->entries[slot].instance_id, sizeof(state->entries[slot].instance_id), "%s", instance_id);
+    snprintf(state->entries[slot].host, sizeof(state->entries[slot].host), "%s", host);
+    state->entries[slot].port = port;
+    pthread_mutex_unlock(&state->mu);
     yinfo("registry: '%s' instance '%s' → %s:%u", name, instance_id, host, port);
     return PICOMESH_OK(picomesh_int, 1);
 }
@@ -105,14 +122,19 @@ struct picomesh_int_result registry_registry_deregister_service_impl(struct ctx 
                                                                      struct yheaders *hdrs,
                                                                      const char *name, const char *instance_id)
 {
-    (void)ctx; (void)hdrs;
+    (void)ctx; (void)obj; (void)hdrs;
     if (!name || !*name) return PICOMESH_OK(picomesh_int, 0);
     if (!instance_id || !*instance_id) instance_id = name;
-    struct registry_registry_data *data = reg(obj);
-    int slot = registry_find(data, name, instance_id);
-    if (slot < 0) return PICOMESH_OK(picomesh_int, 0);
-    data->entries[slot].used = 0;
-    data->count--;
+    struct registry_state *state = registry_state();
+    pthread_mutex_lock(&state->mu);
+    int slot = registry_find(state, name, instance_id);
+    if (slot < 0) {
+        pthread_mutex_unlock(&state->mu);
+        return PICOMESH_OK(picomesh_int, 0);
+    }
+    state->entries[slot].used = 0;
+    state->count--;
+    pthread_mutex_unlock(&state->mu);
     yinfo("registry: deregistered '%s' instance '%s'", name, instance_id);
     return PICOMESH_OK(picomesh_int, 1);
 }
@@ -125,35 +147,37 @@ PICOMESH_CLASS_ANNOTATE("override@registry:registry:registry_resolve")
 struct picomesh_string_result registry_registry_resolve_impl(struct ctx *ctx, struct object *obj,
                                                              struct yheaders *hdrs, const char *name)
 {
-    (void)ctx; (void)hdrs;
-    struct registry_registry_data *data = reg(obj);
-    const struct registry_entry *hit = NULL;
+    (void)ctx; (void)obj; (void)hdrs;
+    struct registry_state *state = registry_state();
+    char buf[REGISTRY_HOST_MAX + 16];
+    buf[0] = 0;
+    pthread_mutex_lock(&state->mu);
     if (name && *name) {
         for (size_t i = 0; i < REGISTRY_MAX_ENTRIES; ++i) {
-            if (data->entries[i].used && strcmp(data->entries[i].name, name) == 0) {
-                hit = &data->entries[i]; /* keep scanning: last write wins */
+            if (state->entries[i].used && strcmp(state->entries[i].name, name) == 0) {
+                snprintf(buf, sizeof(buf), "%s:%u", state->entries[i].host, state->entries[i].port);
+                /* keep scanning: last write wins */
             }
         }
     }
-    char buf[REGISTRY_HOST_MAX + 16];
-    if (hit) snprintf(buf, sizeof(buf), "%s:%u", hit->host, hit->port);
-    else buf[0] = 0;
+    pthread_mutex_unlock(&state->mu);
     char *out = strdup(buf);
     if (!out) return PICOMESH_ERR(picomesh_string, "registry_resolve: out of memory");
     return PICOMESH_OK(picomesh_string, out);
 }
 
-/* Emit the instances of `name` as a JSON array onto an open writer. */
+/* Emit the instances of `name` as a JSON array onto an open writer. Caller
+ * holds the lock. */
 static void registry_write_instances(struct yjson_writer *writer,
-                                     struct registry_registry_data *data, const char *name)
+                                     struct registry_state *state, const char *name)
 {
     yjson_writer_begin_array(writer);
     for (size_t i = 0; i < REGISTRY_MAX_ENTRIES; ++i) {
-        if (!data->entries[i].used || strcmp(data->entries[i].name, name) != 0) continue;
+        if (!state->entries[i].used || strcmp(state->entries[i].name, name) != 0) continue;
         yjson_writer_begin_object(writer);
-        yjson_writer_key(writer, "instance_id"); yjson_writer_string(writer, data->entries[i].instance_id);
-        yjson_writer_key(writer, "host");        yjson_writer_string(writer, data->entries[i].host);
-        yjson_writer_key(writer, "port");        yjson_writer_int(writer, (int64_t)data->entries[i].port);
+        yjson_writer_key(writer, "instance_id"); yjson_writer_string(writer, state->entries[i].instance_id);
+        yjson_writer_key(writer, "host");        yjson_writer_string(writer, state->entries[i].host);
+        yjson_writer_key(writer, "port");        yjson_writer_int(writer, (int64_t)state->entries[i].port);
         yjson_writer_end_object(writer);
     }
     yjson_writer_end_array(writer);
@@ -163,20 +187,22 @@ PICOMESH_CLASS_ANNOTATE("override@registry:registry:registry_discover_service")
 struct picomesh_json_result registry_registry_discover_service_impl(struct ctx *ctx, struct object *obj,
                                                                     struct yheaders *hdrs, const char *name)
 {
-    (void)ctx; (void)hdrs;
+    (void)ctx; (void)obj; (void)hdrs;
     if (!name) name = "";
-    struct registry_registry_data *data = reg(obj);
-    size_t total = 0;
-    for (size_t i = 0; i < REGISTRY_MAX_ENTRIES; ++i) {
-        if (data->entries[i].used && strcmp(data->entries[i].name, name) == 0) total++;
-    }
+    struct registry_state *state = registry_state();
     struct yjson_writer *writer = yjson_writer_new();
     if (!writer) return PICOMESH_ERR(picomesh_json, "registry_discover: writer alloc failed");
+    pthread_mutex_lock(&state->mu);
+    size_t total = 0;
+    for (size_t i = 0; i < REGISTRY_MAX_ENTRIES; ++i) {
+        if (state->entries[i].used && strcmp(state->entries[i].name, name) == 0) total++;
+    }
     yjson_writer_begin_object(writer);
     yjson_writer_key(writer, "service_name"); yjson_writer_string(writer, name);
-    yjson_writer_key(writer, "instances");    registry_write_instances(writer, data, name);
+    yjson_writer_key(writer, "instances");    registry_write_instances(writer, state, name);
     yjson_writer_key(writer, "total_instances"); yjson_writer_int(writer, (int64_t)total);
     yjson_writer_end_object(writer);
+    pthread_mutex_unlock(&state->mu);
     size_t len = 0;
     const char *jdata = yjson_writer_data(writer, &len);
     char *out = strdup(jdata ? jdata : "{}");
@@ -189,28 +215,30 @@ PICOMESH_CLASS_ANNOTATE("override@registry:registry:registry_list_services")
 struct picomesh_json_result registry_registry_list_services_impl(struct ctx *ctx, struct object *obj,
                                                                  struct yheaders *hdrs)
 {
-    (void)ctx; (void)hdrs;
-    struct registry_registry_data *data = reg(obj);
+    (void)ctx; (void)obj; (void)hdrs;
+    struct registry_state *state = registry_state();
     struct yjson_writer *writer = yjson_writer_new();
     if (!writer) return PICOMESH_ERR(picomesh_json, "registry_list: writer alloc failed");
+    pthread_mutex_lock(&state->mu);
     yjson_writer_begin_array(writer);
-    /* One object per distinct service name. A name is "first seen" at the
-     * lowest slot that carries it; emit there so each name appears once. */
+    /* One object per distinct service name: emit at the lowest slot carrying
+     * that name so each name appears once. */
     for (size_t i = 0; i < REGISTRY_MAX_ENTRIES; ++i) {
-        if (!data->entries[i].used) continue;
+        if (!state->entries[i].used) continue;
         int first = 1;
         for (size_t j = 0; j < i; ++j) {
-            if (data->entries[j].used && strcmp(data->entries[j].name, data->entries[i].name) == 0) {
+            if (state->entries[j].used && strcmp(state->entries[j].name, state->entries[i].name) == 0) {
                 first = 0; break;
             }
         }
         if (!first) continue;
         yjson_writer_begin_object(writer);
-        yjson_writer_key(writer, "service_name"); yjson_writer_string(writer, data->entries[i].name);
-        yjson_writer_key(writer, "instances");    registry_write_instances(writer, data, data->entries[i].name);
+        yjson_writer_key(writer, "service_name"); yjson_writer_string(writer, state->entries[i].name);
+        yjson_writer_key(writer, "instances");    registry_write_instances(writer, state, state->entries[i].name);
         yjson_writer_end_object(writer);
     }
     yjson_writer_end_array(writer);
+    pthread_mutex_unlock(&state->mu);
     size_t len = 0;
     const char *jdata = yjson_writer_data(writer, &len);
     char *out = strdup(jdata ? jdata : "[]");
@@ -223,8 +251,12 @@ PICOMESH_CLASS_ANNOTATE("override@registry:registry:registry_count")
 struct picomesh_size_result registry_registry_count_impl(struct ctx *ctx, struct object *obj,
                                                          struct yheaders *hdrs)
 {
-    (void)ctx; (void)hdrs;
-    return PICOMESH_OK(picomesh_size, reg(obj)->count);
+    (void)ctx; (void)obj; (void)hdrs;
+    struct registry_state *state = registry_state();
+    pthread_mutex_lock(&state->mu);
+    size_t count = state->count;
+    pthread_mutex_unlock(&state->mu);
+    return PICOMESH_OK(picomesh_size, count);
 }
 
 #include "registry.gen.c"
