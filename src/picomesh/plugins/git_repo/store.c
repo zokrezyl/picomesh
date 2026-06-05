@@ -36,11 +36,15 @@
 #include <picomesh/yengine/engine.h>
 #include <picomesh/yconfig/yconfig.h>
 #include <picomesh/yloop/yloop.h>
+#include <picomesh/yloop/yexec.h>
+#include <picomesh/ycore/idkey.h>
 #include <picomesh/ysecurity/jwt.h>
 #include <picomesh/ysecurity/secret.h>
 #include <picomesh/plugin/sharded_storage/sharded_storage.h>
 
 #include <git2.h>
+#include <pthread.h>
+#include <uthash.h>
 
 #include <errno.h>
 #include <ftw.h>
@@ -421,8 +425,9 @@ struct git_init_work {
     char git_errmsg[256];/* libgit2 error snapshot (same pool thread) */
 };
 
-static void git_init_work_fn(void *arg)
+static void git_init_work_fn(void *shard_state, void *arg)
 {
+    (void)shard_state;   /* make creates a fresh repo; nothing to cache here */
     struct git_init_work *w = arg;
     if (mkdir_p(w->parent) != 0) {
         w->mkdir_errno = errno ? errno : -1;
@@ -450,26 +455,126 @@ static void git_init_work_fn(void *arg)
  * handed back in `out` are malloc'd; ownership transfers to the Result
  * the impl returns (picomesh_string contract).                          */
 
-/* Offload `fn(work)` to the worker pool and park this coroutine until it
- * finishes; fall back to inline (degraded, blocking) when there's no
- * serve loop or dispatch fails. Mirrors store_make's pattern. */
-static void run_blocking_or_inline(void (*fn)(void *), void *work)
+/* ---- per-shard repository handle cache + affine executor -----------------
+ *
+ * libgit2 work (open repo → commit/read) is offloaded off the loop thread, but
+ * NOT to the generic libuv pool: it runs on a KEY-AFFINE executor (yexec) keyed
+ * by repo path, so every op for a repo lands on ONE owning thread. That thread
+ * keeps the repo's git_repository handle in its OWN cache and reuses it across
+ * calls — killing the ~12% per-commit git_repository_open (profiled) — with NO
+ * locking, because affinity guarantees a repo is never touched by two threads
+ * at once. Same-repo ops serialize on their owner thread, which is correct
+ * anyway (commits to one branch share the ref). */
+
+struct gr_cached {
+    char path[1024];           /* key */
+    git_repository *repo;
+    UT_hash_handle hh;
+};
+struct gr_repo_cache {
+    struct gr_cached *by_path;  /* uthash root; head = oldest (FIFO eviction) */
+    int count;
+    int max;                    /* open-fd budget per shard */
+};
+
+/* One per shard, built on the shard's own thread. */
+static void *gr_cache_init(void *ud)
+{
+    (void)ud;
+    ensure_libgit2();           /* this thread runs libgit2; init is ref-counted */
+    struct gr_repo_cache *c = calloc(1, sizeof(*c));
+    if (c) c->max = 64;
+    return c;
+}
+
+static void gr_cache_free(void *state)
+{
+    struct gr_repo_cache *c = state;
+    if (!c) return;
+    struct gr_cached *e, *tmp;
+    HASH_ITER(hh, c->by_path, e, tmp) {
+        HASH_DEL(c->by_path, e);
+        git_repository_free(e->repo);
+        free(e);
+    }
+    free(c);
+}
+
+/* Open-or-reuse the handle for `path`. Cache-OWNED — never freed by callers
+ * (use gr_repo_release, a no-op). Single shard thread ⇒ no lock, and no
+ * in-use eviction race (only one work fn runs per shard at a time). */
+static int gr_repo_acquire(struct gr_repo_cache *c, const char *path, git_repository **out)
+{
+    *out = NULL;
+    struct gr_cached *e = NULL;
+    if (c) HASH_FIND_STR(c->by_path, path, e);
+    if (e) { *out = e->repo; return 0; }
+
+    git_repository *repo = NULL;
+    if (git_repository_open(&repo, path) != 0) return -1;
+    *out = repo;
+    if (!c) return 0;           /* defensive: no cache ⇒ uncached (shouldn't happen) */
+
+    e = calloc(1, sizeof(*e));
+    if (e) {
+        snprintf(e->path, sizeof(e->path), "%s", path);
+        e->repo = repo;
+        HASH_ADD_STR(c->by_path, path, e);
+        c->count++;
+        if (c->max && c->count > c->max) {   /* over budget → evict the oldest */
+            struct gr_cached *old = c->by_path;
+            if (old && old != e) {
+                HASH_DEL(c->by_path, old);
+                git_repository_free(old->repo);
+                free(old);
+                c->count--;
+            }
+        }
+    }
+    return 0;
+}
+
+/* The cache owns the handle; releasing is a no-op (freed on eviction/teardown).
+ * Kept for 1:1 symmetry with the old open/free shape so the work fns read
+ * cleanly and can never accidentally free a cached handle. */
+static void gr_repo_release(struct gr_repo_cache *c, git_repository *repo)
+{
+    (void)c; (void)repo;
+}
+
+/* Process-wide affine git executor (one per process, like sharded_storage's
+ * shard set). `git_repo.commit_shards` (default 8) is the commit-parallelism
+ * knob: N worker threads, each owning a disjoint set of repos. */
+static struct yexec *git_exec(void)
+{
+    static struct yexec *exec = NULL;
+    static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&mu);
+    if (!exec) {
+        int n = 8;
+        struct picomesh_engine *e = picomesh_active_engine();
+        const struct yconfig *cfg = e ? picomesh_engine_config(e) : NULL;
+        if (cfg) {
+            struct yconfig_node_ptr_result r = yconfig_get(cfg, "git_repo.commit_shards");
+            if (PICOMESH_IS_OK(r) && r.value) n = (int)yconfig_node_as_int(r.value, 8);
+            else if (PICOMESH_IS_ERR(r)) picomesh_error_destroy(r.error);
+        }
+        if (n < 1) n = 1;
+        exec = yexec_create(n, gr_cache_init, gr_cache_free, NULL);
+    }
+    pthread_mutex_unlock(&mu);
+    return exec;
+}
+
+/* Route a libgit2 work fn to the shard owning `key_path` (its on-disk repo
+ * dir), suspending this coroutine until it completes. Replaces the old generic
+ * libuv-pool offload so the per-shard handle cache can stay lock-free. Outside
+ * a coroutine, yexec_submit runs the fn inline on a throwaway cache. */
+static void gr_run(const char *key_path, void (*fn)(void *shard_state, void *arg), void *work)
 {
     struct picomesh_engine *e = picomesh_active_engine();
     struct yloop *loop = e ? picomesh_engine_loop(e) : NULL;
-    if (loop) {
-        struct picomesh_void_result br = yloop_run_blocking(loop, fn, work);
-        if (PICOMESH_IS_ERR(br)) {
-            /* Offload failed — run inline so the libgit2 op still completes,
-             * but log it: it can signal a degraded event loop / worker pool. */
-            ywarn("git_repo: worker-pool offload failed (%s) — running inline",
-                  br.error.msg ? br.error.msg : "?");
-            picomesh_error_destroy(br.error);
-            fn(work);
-        }
-    } else {
-        fn(work);
-    }
+    yexec_submit(git_exec(), loop, picomesh_fnv1a32(key_path), fn, work);
 }
 
 struct git_read_work {
@@ -497,18 +602,19 @@ static int resolve_tree(git_repository *repo, const char *ref, git_tree **out_tr
     return 0;
 }
 
-static void git_read_tree_work_fn(void *ud)
+static void git_read_tree_work_fn(void *shard_state, void *ud)
 {
+    struct gr_repo_cache *cache = shard_state;
     struct git_read_work *w = ud;
     w->out = NULL; w->out_len = 0; w->rc = 0;
 
     git_repository *repo = NULL;
-    if (git_repository_open(&repo, w->repo_path) != 0) { w->rc = -1; return; }
+    if (gr_repo_acquire(cache, w->repo_path, &repo) != 0) { w->rc = -1; return; }
 
     git_tree *tree = NULL;
     if (resolve_tree(repo, w->ref, &tree) != 0) {
         /* Empty/unborn repo → empty listing, not an error. */
-        git_repository_free(repo);
+        gr_repo_release(cache, repo);
         w->out = strdup("");
         w->rc = w->out ? 0 : -1;
         return;
@@ -522,13 +628,13 @@ static void git_read_tree_work_fn(void *ud)
         if (git_tree_entry_bypath(&te, tree, w->path) != 0 ||
             git_tree_entry_type(te) != GIT_OBJECT_TREE) {
             if (te) git_tree_entry_free(te);
-            git_tree_free(tree); git_repository_free(repo);
+            git_tree_free(tree); gr_repo_release(cache, repo);
             w->rc = -2; /* path is not a directory */
             return;
         }
         int lr = git_tree_lookup(&subtree, repo, git_tree_entry_id(te));
         git_tree_entry_free(te);
-        if (lr != 0) { git_tree_free(tree); git_repository_free(repo); w->rc = -3; return; }
+        if (lr != 0) { git_tree_free(tree); gr_repo_release(cache, repo); w->rc = -3; return; }
         cur = subtree;
     }
 
@@ -558,32 +664,33 @@ static void git_read_tree_work_fn(void *ud)
 
     if (subtree) git_tree_free(subtree);
     git_tree_free(tree);
-    git_repository_free(repo);
+    gr_repo_release(cache, repo);
 }
 
-static void git_read_file_work_fn(void *ud)
+static void git_read_file_work_fn(void *shard_state, void *ud)
 {
+    struct gr_repo_cache *cache = shard_state;
     struct git_read_work *w = ud;
     w->out = NULL; w->out_len = 0; w->rc = 0;
 
     git_repository *repo = NULL;
-    if (git_repository_open(&repo, w->repo_path) != 0) { w->rc = -1; return; }
+    if (gr_repo_acquire(cache, w->repo_path, &repo) != 0) { w->rc = -1; return; }
 
     git_tree *tree = NULL;
-    if (resolve_tree(repo, w->ref, &tree) != 0) { git_repository_free(repo); w->rc = -2; return; }
+    if (resolve_tree(repo, w->ref, &tree) != 0) { gr_repo_release(cache, repo); w->rc = -2; return; }
 
     git_tree_entry *te = NULL;
     if (git_tree_entry_bypath(&te, tree, w->path) != 0 ||
         git_tree_entry_type(te) != GIT_OBJECT_BLOB) {
         if (te) git_tree_entry_free(te);
-        git_tree_free(tree); git_repository_free(repo);
+        git_tree_free(tree); gr_repo_release(cache, repo);
         w->rc = -3; /* not a file */
         return;
     }
     git_blob *blob = NULL;
     int lr = git_blob_lookup(&blob, repo, git_tree_entry_id(te));
     git_tree_entry_free(te);
-    if (lr != 0) { git_tree_free(tree); git_repository_free(repo); w->rc = -4; return; }
+    if (lr != 0) { git_tree_free(tree); gr_repo_release(cache, repo); w->rc = -4; return; }
 
     size_t sz = (size_t)git_blob_rawsize(blob);
     const void *raw = git_blob_rawcontent(blob);
@@ -593,7 +700,7 @@ static void git_read_file_work_fn(void *ud)
 
     git_blob_free(blob);
     git_tree_free(tree);
-    git_repository_free(repo);
+    gr_repo_release(cache, repo);
 }
 
 struct git_put_work {
@@ -639,18 +746,19 @@ static int put_insert(git_repository *repo, const git_tree *base,
     return rc;
 }
 
-static void git_put_file_work_fn(void *ud)
+static void git_put_file_work_fn(void *shard_state, void *ud)
 {
+    struct gr_repo_cache *cache = shard_state;
     struct git_put_work *w = ud;
     w->rc = 0; w->out_oid[0] = 0;
 
     git_repository *repo = NULL;
-    if (git_repository_open(&repo, w->repo_path) != 0) { w->rc = -1; return; }
+    if (gr_repo_acquire(cache, w->repo_path, &repo) != 0) { w->rc = -1; return; }
 
     /* 1) content → blob */
     git_oid blob_oid;
     if (git_blob_create_from_buffer(&blob_oid, repo, w->content, w->content_len) != 0) {
-        git_repository_free(repo); w->rc = -2; return;
+        gr_repo_release(cache, repo); w->rc = -2; return;
     }
 
     /* 2) the branch HEAD points at + its tip commit + that commit's tree */
@@ -682,7 +790,7 @@ static void git_put_file_work_fn(void *ud)
     if (n == 0) {
         if (base) git_tree_free(base);
         if (parent) git_commit_free(parent);
-        git_repository_free(repo);
+        gr_repo_release(cache, repo);
         w->rc = -3; return;
     }
 
@@ -691,14 +799,14 @@ static void git_put_file_work_fn(void *ud)
     if (base) git_tree_free(base);
     if (rc != 0) {
         if (parent) git_commit_free(parent);
-        git_repository_free(repo);
+        gr_repo_release(cache, repo);
         w->rc = -4; return;
     }
 
     git_tree *new_tree = NULL;
     if (git_tree_lookup(&new_tree, repo, &tree_oid) != 0) {
         if (parent) git_commit_free(parent);
-        git_repository_free(repo);
+        gr_repo_release(cache, repo);
         w->rc = -5; return;
     }
 
@@ -709,7 +817,7 @@ static void git_put_file_work_fn(void *ud)
     if (git_signature_now(&sig, an, ae) != 0) {
         git_tree_free(new_tree);
         if (parent) git_commit_free(parent);
-        git_repository_free(repo);
+        gr_repo_release(cache, repo);
         w->rc = -6; return;
     }
 
@@ -724,7 +832,7 @@ static void git_put_file_work_fn(void *ud)
     git_signature_free(sig);
     git_tree_free(new_tree);
     if (parent) git_commit_free(parent);
-    git_repository_free(repo);
+    gr_repo_release(cache, repo);
 }
 
 PICOMESH_CLASS_ANNOTATE("override@git_repo:git_repo:git_repo_make")
@@ -771,7 +879,7 @@ struct picomesh_uint32_result git_repo_git_repo_make_impl(struct ctx *ctx, struc
         int pn = snprintf(work.parent, sizeof(work.parent), "%s/%s", root, owner_name);
         if (pn <= 0 || (size_t)pn >= sizeof(work.parent))
             return PICOMESH_ERR(picomesh_uint32, "git_repo_make: path too long");
-        run_blocking_or_inline(git_init_work_fn, &work);
+        gr_run(work.path, git_init_work_fn, &work);
         if (work.mkdir_errno != 0) {
             ywarn("git_repo: cannot create per-user parent %s: %s",
                   work.parent, strerror(work.mkdir_errno));
@@ -952,7 +1060,7 @@ struct picomesh_string_result git_repo_git_repo_read_tree_impl(struct ctx *ctx, 
     snprintf(w.ref, sizeof(w.ref), "%s", ref ? ref : "");
     snprintf(w.path, sizeof(w.path), "%s", path ? path : "");
 
-    run_blocking_or_inline(git_read_tree_work_fn, &w);
+    gr_run(w.repo_path, git_read_tree_work_fn, &w);
     if (w.rc != 0 || !w.out) { free(w.out); return PICOMESH_ERR(picomesh_string, "git_repo_read_tree: not a directory or git error"); }
     return PICOMESH_OK(picomesh_string, w.out);
 }
@@ -986,7 +1094,7 @@ struct picomesh_string_result git_repo_git_repo_read_file_impl(struct ctx *ctx, 
     snprintf(w.ref, sizeof(w.ref), "%s", ref ? ref : "");
     snprintf(w.path, sizeof(w.path), "%s", path);
 
-    run_blocking_or_inline(git_read_file_work_fn, &w);
+    gr_run(w.repo_path, git_read_file_work_fn, &w);
     if (w.rc != 0 || !w.out) { free(w.out); return PICOMESH_ERR(picomesh_string, "git_repo_read_file: not a file or git error"); }
     return PICOMESH_OK(picomesh_string, w.out);
 }
@@ -1019,14 +1127,8 @@ struct picomesh_string_result git_repo_git_repo_put_file_impl(struct ctx *ctx, s
     picomesh_authctx_from_headers(hdrs, picomesh_active_engine(), &caller);
     int site_admin = caller.authenticated &&
         picomesh_groups_max_role(caller.groups_csv, "site") >= picomesh_role_rank("maintainer");
-    if (caller.uid == 0 || (caller.uid != rec.owner_id && !site_admin)) {
-        const char *jwt_hdr = hdrs ? yheaders_get(hdrs, "jwt") : NULL;
-        uint32_t pfx_uid = hdrs ? yheaders_get_u32(hdrs, "uid", 0) : 0;
-        ywarn("DBG put_file forbidden: repo=%u owner=%u caller.uid=%u authed=%d pfx_uid=%u jwt=%s",
-              repo_id, rec.owner_id, caller.uid, caller.authenticated, pfx_uid,
-              jwt_hdr ? (jwt_hdr[0] ? "present" : "empty") : "absent");
+    if (caller.uid == 0 || (caller.uid != rec.owner_id && !site_admin))
         return PICOMESH_ERR(picomesh_string, "git_repo_put_file: forbidden (not repo owner)");
-    }
     if (!ensure_libgit2()) return PICOMESH_ERR(picomesh_string, "git_repo_put_file: libgit2 init failed");
 
     struct git_put_work w;
@@ -1040,7 +1142,7 @@ struct picomesh_string_result git_repo_git_repo_put_file_impl(struct ctx *ctx, s
     snprintf(w.author_name, sizeof(w.author_name), "%s", author_name ? author_name : "");
     snprintf(w.author_email, sizeof(w.author_email), "%s", author_email ? author_email : "");
 
-    run_blocking_or_inline(git_put_file_work_fn, &w);
+    gr_run(w.repo_path, git_put_file_work_fn, &w);
     if (w.rc != 0 || !w.out_oid[0]) return PICOMESH_ERR(picomesh_string, "git_repo_put_file: git error");
     char *oid = strdup(w.out_oid);
     if (!oid) return PICOMESH_ERR(picomesh_string, "git_repo_put_file: out of memory");

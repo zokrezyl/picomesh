@@ -43,10 +43,22 @@ struct coro_zombie {
     struct coro_zombie *next;
 };
 
+/* Cross-thread coroutine resume: another thread (e.g. a yexec worker) appends a
+ * parked coro here and uv_async_sends; the loop thread drains and resumes them.
+ * Each node is malloc'd by the poster and freed by the drain. */
+struct resume_node {
+    struct picomesh_coro *coro;
+    struct resume_node *next;
+};
+
 struct yloop {
     uv_loop_t loop;
     uv_check_t reaper;
     struct coro_zombie *zombies;
+    uv_async_t resume_async;
+    uv_mutex_t resume_mu;
+    struct resume_node *resume_head, *resume_tail;
+    int resume_ready;
 };
 
 struct yloop_listener {
@@ -344,6 +356,41 @@ static void on_connection(uv_stream_t *server, int status)
     picomesh_coro_resume(s->coro);
 }
 
+/* Runs on the loop thread when another thread posts a resume. Drain the queue
+ * under the lock, then resume each coro OUTSIDE the lock (resume can run
+ * arbitrary coroutine code, including another yloop_post_resume). */
+static void on_resume_async(uv_async_t *h)
+{
+    struct yloop *l = h->data;
+    uv_mutex_lock(&l->resume_mu);
+    struct resume_node *n = l->resume_head;
+    l->resume_head = l->resume_tail = NULL;
+    uv_mutex_unlock(&l->resume_mu);
+    while (n) {
+        struct resume_node *next = n->next;
+        struct picomesh_coro *coro = n->coro;
+        free(n);
+        picomesh_coro_resume(coro);
+        n = next;
+    }
+}
+
+void yloop_post_resume(struct yloop *l, struct picomesh_coro *coro)
+{
+    if (!l || !l->resume_ready || !coro) return;
+    struct resume_node *n = calloc(1, sizeof(*n));
+    if (!n) return; /* OOM: the coro will not be resumed — fatal-ish, but we
+                     * cannot recover here; the offloading path treats a
+                     * never-resumed coro as a hung request. */
+    n->coro = coro;
+    uv_mutex_lock(&l->resume_mu);
+    if (l->resume_tail) l->resume_tail->next = n;
+    else l->resume_head = n;
+    l->resume_tail = n;
+    uv_mutex_unlock(&l->resume_mu);
+    uv_async_send(&l->resume_async);
+}
+
 struct yloop_ptr_result yloop_create(void)
 {
     struct yloop *l = calloc(1, sizeof(*l));
@@ -359,6 +406,14 @@ struct yloop_ptr_result yloop_create(void)
     l->reaper.data = l;
     uv_check_start(&l->reaper, on_reaper_check);
     uv_unref((uv_handle_t *)&l->reaper);
+    /* Cross-thread resume channel (unref'd: it never keeps the loop alive on
+     * its own, but uv_async_send still wakes it to deliver a resume). */
+    if (uv_async_init(&l->loop, &l->resume_async, on_resume_async) == 0) {
+        l->resume_async.data = l;
+        uv_unref((uv_handle_t *)&l->resume_async);
+        uv_mutex_init(&l->resume_mu);
+        l->resume_ready = 1;
+    }
     return PICOMESH_OK(yloop_ptr, l);
 }
 
@@ -374,6 +429,12 @@ void yloop_destroy(struct yloop *l)
         z = next;
     }
     uv_check_stop(&l->reaper);
+    if (l->resume_ready) {
+        uv_close((uv_handle_t *)&l->resume_async, NULL);
+        struct resume_node *n = l->resume_head;
+        while (n) { struct resume_node *next = n->next; free(n); n = next; }
+        uv_mutex_destroy(&l->resume_mu);
+    }
     uv_loop_close(&l->loop);
     free(l);
 }

@@ -17,6 +17,8 @@
 #include <picomesh/yengine/resolve.h>
 #include <picomesh/yconfig/yconfig.h>
 #include <picomesh/ysecurity/jwt_verifier.h>
+#include <picomesh/ysecurity/jwt.h>      /* picomesh_security_now */
+#include <uthash.h>                       /* the project's standard hash map */
 
 #include "../http_util.h"
 #include "../jwt_util.h"
@@ -25,12 +27,40 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Per-worker sid -> JWT cache. WITHOUT it the gateway re-runs the `lookup` RPC
+ * (a relational SELECT on the session store) on EVERY request — the dominant
+ * per-request cost on the read hot path. The cache returns a recently-resolved
+ * JWT for up to `cache_ttl` seconds with no round-trip and no re-verify (the
+ * JWT was verified when cached; the backend re-checks its signature + exp
+ * regardless). It is per-worker (the authn chain is built once per worker) and
+ * touched only by that worker's cooperative coroutines — map ops never yield,
+ * and we never hold an entry pointer across the lookup RPC — so no locking.
+ * Bounded staleness: a logout/refresh is not observed until the entry ages out,
+ * so keep `cache_ttl` small. `cache_max` is a FIFO memory backstop. Set
+ * `cache_ttl_seconds: 0` to disable.
+ *
+ * uthash (string-keyed by sid) is used rather than a hand-rolled table: it is
+ * the project's standard map (class.c / engine.c / rpc.c), and chaining means a
+ * hash collision keeps both entries instead of evicting one — no hit-rate
+ * thrash between two sids that happen to collide. */
+#define SESSION_CACHE_MAX_DEFAULT 8192
+
+struct sid_cache_entry {
+    char    sid[64];     /* key (an sid is 32 hex chars; 64 is ample) */
+    char   *jwt;         /* malloc'd resolved JWT */
+    int64_t inserted;    /* unix seconds (picomesh_security_now) */
+    UT_hash_handle hh;
+};
+
 struct session_cookie_state {
     struct picomesh_engine *engine;
     const char *cookie;            /* cookie name (points into config) */
     const char *header;            /* alt header name */
     const char *lookup;            /* sid -> JWT RPC path */
     struct picomesh_jwt_verifier *verifier;
+    int64_t cache_ttl;             /* seconds; <= 0 disables the cache */
+    size_t  cache_max;             /* entry cap; oldest evicted (FIFO) over it */
+    struct sid_cache_entry *cache; /* uthash root, keyed by sid; NULL when empty */
 };
 
 static struct picomesh_void_ptr_result session_cookie_create(struct picomesh_engine *engine,
@@ -49,6 +79,9 @@ static struct picomesh_void_ptr_result session_cookie_create(struct picomesh_eng
     state->cookie = cookie;
     state->header = header;
     state->lookup = lookup;
+    state->cache_ttl = (int64_t)yconfig_node_as_int(yconfig_node_get(config, "cache_ttl_seconds"), 5);
+    state->cache_max = (size_t)yconfig_node_as_int(yconfig_node_get(config, "cache_max"), SESSION_CACHE_MAX_DEFAULT);
+    state->cache = NULL;   /* uthash root; grows lazily on first insert */
     struct picomesh_void_ptr_result verifier = picomesh_jwt_verifier_create(engine);
     if (PICOMESH_IS_ERR(verifier)) { free(state); return PICOMESH_ERR(picomesh_void_ptr, "session_cookie: verifier create failed", verifier); }
     state->verifier = verifier.value;
@@ -75,6 +108,25 @@ static struct picomesh_authn_outcome session_cookie_authenticate(void *state_ptr
             return outcome; /* no cookie/header → no match, try next */
     }
 
+    /* Cache fast path: a recently-resolved JWT for this sid → no RPC, no verify.
+     * HASH_FIND + strdup are non-yielding, so they can't interleave with another
+     * coroutine's mutation on this (single-threaded) worker. */
+    int64_t now = picomesh_security_now();
+    if (state->cache_ttl > 0) {
+        struct sid_cache_entry *e = NULL;
+        HASH_FIND_STR(state->cache, sid, e);
+        if (e) {
+            if ((now - e->inserted) < state->cache_ttl) {
+                char *hit = strdup(e->jwt);
+                if (hit) { outcome.jwt = hit; outcome.source = "session_cookie"; return outcome; }
+                /* strdup OOM → fall through to the slow path */
+            } else {
+                /* stale → drop it; the slow path re-resolves and re-inserts */
+                HASH_DEL(state->cache, e); free(e->jwt); free(e);
+            }
+        }
+    }
+
     char args[256];
     if (!authn_build_string_args(args, sizeof(args), sid)) return fail("session id too long");
     struct picomesh_string_result lookup = picomesh_engine_invoke_json(state->engine, state->lookup, args, NULL);
@@ -88,6 +140,31 @@ static struct picomesh_authn_outcome session_cookie_authenticate(void *state_ptr
     if (PICOMESH_IS_ERR(claims)) { picomesh_error_destroy(claims.error); free(jwt); return fail("session JWT failed verification"); }
     free(claims.value);
 
+    /* Populate the cache for subsequent requests on this worker. Re-find rather
+     * than reuse any pre-RPC pointer: a concurrent coroutine may have inserted
+     * this sid while we were parked on the lookup RPC. */
+    if (state->cache_ttl > 0 && strlen(sid) < sizeof(((struct sid_cache_entry *)0)->sid)) {
+        struct sid_cache_entry *e = NULL;
+        HASH_FIND_STR(state->cache, sid, e);
+        if (e) {
+            char *dup = strdup(jwt);
+            if (dup) { free(e->jwt); e->jwt = dup; e->inserted = now; }
+        } else {
+            e = calloc(1, sizeof(*e));
+            char *dup = e ? strdup(jwt) : NULL;
+            if (e && dup) {
+                snprintf(e->sid, sizeof(e->sid), "%s", sid);
+                e->jwt = dup; e->inserted = now;
+                HASH_ADD_STR(state->cache, sid, e);
+                /* FIFO memory backstop: over the cap, evict the oldest (head). */
+                if (state->cache_max && HASH_COUNT(state->cache) > state->cache_max) {
+                    struct sid_cache_entry *oldest = state->cache;
+                    HASH_DEL(state->cache, oldest); free(oldest->jwt); free(oldest);
+                }
+            } else { free(dup); free(e); }
+        }
+    }
+
     outcome.jwt = jwt;
     outcome.source = "session_cookie";
     return outcome;
@@ -97,6 +174,10 @@ static void session_cookie_destroy(void *state_ptr)
 {
     struct session_cookie_state *state = state_ptr;
     if (!state) return;
+    struct sid_cache_entry *e, *tmp;
+    HASH_ITER(hh, state->cache, e, tmp) {
+        HASH_DEL(state->cache, e); free(e->jwt); free(e);
+    }
     picomesh_jwt_verifier_destroy(state->verifier);
     free(state);
 }

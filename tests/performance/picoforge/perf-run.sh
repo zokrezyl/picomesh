@@ -10,8 +10,15 @@
 #            random stream of real actions (read / KV write / file commit /
 #            issue / pipeline run / repo create / re-login) for DURATION secs
 #
-# The mesh is torn down through its control parent (SIGTERM → the parent's
-# reaper takes the backends down — never pkill / never kill a child directly).
+# The browser-facing webapp is also started (pointed at the perf gateway) so the
+# UI can be tested visually IN PARALLEL with the load — see :$SIDE below. It is a
+# sidecar, NOT a mesh service, so this script owns and stops it directly.
+#
+# Teardown: the mesh comes down through its control parent (SIGTERM → the
+# parent's reaper takes the spawned backends down — never pkill / never kill a
+# mesh child directly); the webapp sidecar (which the mesh did NOT spawn) is
+# SIGTERM'd by this script. Both happen when the load finishes, so raise
+# DURATION if you want a longer window to click around.
 #
 # Tunables (env or `make` vars): SEED_USERS CONNECTIONS DURATION REPOS_PER_WORKER
 set -uo pipefail
@@ -19,11 +26,13 @@ cd "$(dirname "$0")/../../.."          # repo root
 
 PICOMESH=./build-desktop-release/picomesh
 PERF=./build-desktop-release/picoforge-perf
+WEBAPP=./build-desktop-release/picoforge-webapp
 SRC_CONFIG=assets/picoforge/config/picoforge.yaml
 CONFIG=/tmp/picoforge-perf.yaml
 DATADIR=/tmp/picoforge-perf
 CTRL=9800
 GW=9090
+SIDE=9080   # browser-facing webapp (port-shifted 8080→9080)
 
 SEED_USERS=${SEED_USERS:-50000}
 CONNECTIONS=${CONNECTIONS:-32}
@@ -48,8 +57,21 @@ rm -rf "$DATADIR"; mkdir -p "$DATADIR" tmp
 # must carry it so the spawned backends inherit it — mirror mesh-up.sh's default.
 export PICOMESH_JWT_SECRET="${PICOMESH_JWT_SECRET:-picoforge-dev-mesh-secret-change-me}"
 
+# Per-span trace shipping to trace_collector is pure overhead for a THROUGHPUT
+# run (it alone caps read throughput ~3×). Default it OFF so each run measures
+# real service cost; `PICOMESH_TELEMETRY=on make perf-picoforge` measures the
+# tracing cost itself. The bottleneck report flags trace_collector if left on.
+export PICOMESH_TELEMETRY="${PICOMESH_TELEMETRY:-off}"
+
 PARENT=
-cleanup() { [ -n "$PARENT" ] && kill -TERM "$PARENT" 2>/dev/null || true; }
+WEBAPP_PID=
+# The webapp is a SIDECAR this script owns (not a mesh service), so the script
+# stops it directly — same as mesh-up.sh. The mesh parent (and only it) reaps
+# the backends it spawned. Kill the webapp first (front tier), then the parent.
+cleanup() {
+    [ -n "$WEBAPP_PID" ] && kill -TERM "$WEBAPP_PID" 2>/dev/null || true
+    [ -n "$PARENT" ] && kill -TERM "$PARENT" 2>/dev/null || true
+}
 trap cleanup EXIT INT TERM
 
 echo "bringing up independent perf mesh (control :$CTRL, gateway :$GW, data $DATADIR)…"
@@ -69,7 +91,51 @@ for i in $(seq 1 60); do ss -ltn 2>/dev/null | grep -qE ":$GW\b" && break; sleep
 ss -ltn 2>/dev/null | grep -qE ":$GW\b" || { echo "gateway did not bind on :$GW (see tmp/perf-mesh.log)"; exit 1; }
 sleep 2   # let every backend finish binding before the load starts
 
+# Bring up the browser-facing webapp pointed at THIS perf gateway so the UI can
+# be exercised visually IN PARALLEL with the load. The webapp uses SO_REUSEPORT;
+# if :$SIDE is already held (a stale perf webapp), step to the next free port
+# rather than silently share the listener.
+if [ -x "$WEBAPP" ]; then
+    while ss -ltn 2>/dev/null | grep -qE ":$SIDE\b" && [ "$SIDE" -lt "$GW" ]; do SIDE=$((SIDE + 1)); done
+    "$WEBAPP" --gateway-url "http://127.0.0.1:$GW" \
+        --host 127.0.0.1 --port "$SIDE" \
+        --static assets/picoforge/static > tmp/perf-webapp.log 2>&1 &
+    WEBAPP_PID=$!
+    for i in $(seq 1 40); do ss -ltn 2>/dev/null | grep -qE ":$SIDE\b" && break; sleep 0.25; done
+    echo "webapp up → http://127.0.0.1:$SIDE  (open it to test the UI while the load runs;"
+    echo "            register/login there — it talks to the perf gateway on :$GW)"
+else
+    echo "note: $WEBAPP not built — skipping webapp (it ships with build-desktop-release)"
+fi
+
+# Per-node CPU snapshot from /proc (whole process, all threads incl the libuv
+# pool) — no `perf` tool or privileges needed. comm is "picomesh" (no spaces),
+# so /proc/<pid>/stat fields 14+15 (utime+stime jiffies) parse cleanly; ctxsw
+# from /proc/<pid>/status. Only the mesh's own spawned nodes (children of the
+# control parent) are sampled.
+snap_cpu() {
+    for pid in $(pgrep -P "$PARENT" 2>/dev/null); do
+        svc=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -oE -- '--name [^ ]+' | awk '{print $2}')
+        jif=$(awk '{print $14+$15}' "/proc/$pid/stat" 2>/dev/null)
+        csw=$(awk '/_ctxt_switches/{s+=$2} END{print s+0}' "/proc/$pid/status" 2>/dev/null)
+        echo "$pid ${svc:-pid$pid} ${jif:-0} ${csw:-0}"
+    done
+}
+
+curl -s "http://127.0.0.1:$GW/_perf?reset" >/dev/null 2>&1   # fresh op-latency window
+
 echo "== picoforge mixed load: seed=$SEED_USERS connections=$CONNECTIONS duration=${DURATION}s =="
+snap_cpu > tmp/perf-cpu-before.txt
+T0=$SECONDS
 "$PERF" --host 127.0.0.1 --port "$GW" --scenario mixed \
     --seed-users "$SEED_USERS" --connections "$CONNECTIONS" \
-    --duration "$DURATION" --repos-per-worker "$REPOS_PER_WORKER"
+    --duration "$DURATION" --repos-per-worker "$REPOS_PER_WORKER" > tmp/perf-load.txt 2>&1
+WINDOW=$((SECONDS - T0)); [ "$WINDOW" -lt 1 ] && WINDOW=1
+snap_cpu > tmp/perf-cpu-after.txt
+curl -s "http://127.0.0.1:$GW/_perf" > tmp/perf-ops.txt 2>&1
+
+cat tmp/perf-load.txt
+python3 tests/performance/picoforge/perf-report.py \
+    --load tmp/perf-load.txt --perf tmp/perf-ops.txt \
+    --before tmp/perf-cpu-before.txt --after tmp/perf-cpu-after.txt \
+    --window "$WINDOW" --ncpu "$(nproc 2>/dev/null || echo 0)"

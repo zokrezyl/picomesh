@@ -24,6 +24,7 @@ set -uo pipefail
 # Defaults — override with the options below.
 CONFIG=assets/picoforge/config/picoforge.yaml
 PORT_RANGE=8800-8999
+NAME=
 
 usage() {
     cat <<EOF
@@ -36,6 +37,9 @@ allocate the backend ports themselves). Allocating instead of hardcoding means a
 re-run, or a second co-resident instance, never fights over a busy port.
 
 Options:
+  -n, --name NAME      instance name → isolates ALL on-disk state under
+                       /tmp/picoforge-NAME so parallel meshes never clobber
+                       each other's data (default: unnamed → /tmp/picoforge)
   -r, --range LO-HI    range to allocate the 4 fixed ports from   [$PORT_RANGE]
   -c, --config FILE    mesh config file                           [$CONFIG]
   -h, --help           show this help and exit
@@ -45,12 +49,19 @@ Env:
 
 The 4 fixed ports are: control (the parent this script drives), registry (the
 discovery address injected into every node), gateway (the mesh HTTP API the
-webapp talks to), and webapp (the browser-facing page tier).
+webapp talks to), and webapp (the browser-facing page tier). They are picked
+from FREE ports in --range, so two instances do not fight over a port.
+
+To run a SECOND co-resident mesh, give it a distinct --name (separate data
+root) — the ports are already auto-picked, so a different name is enough:
+    ./tools/picoforge/mesh-up.sh --name a
+    ./tools/picoforge/mesh-up.sh --name b
 EOF
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
+        -n|--name)      NAME=${2:?--name needs a value};       shift 2 ;;
         -r|--range)     PORT_RANGE=${2:?--range needs LO-HI};  shift 2 ;;
         -c|--config)    CONFIG=${2:?--config needs a path};    shift 2 ;;
         -h|--help|help) usage; exit 0 ;;
@@ -58,45 +69,105 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# Every byte of on-disk state lives under this root. A distinct --name gives a
+# distinct root, so a second mesh on this host can't wipe or corrupt the first
+# (the script `rm -rf`s its OWN root on bring-up — never a shared tree). The
+# per-service paths in the config (sharded, rel/*, repos, nodes, mesh-state.db)
+# all hang off /tmp/picoforge by default; we override each onto $ROOT below.
+ROOT=/tmp/picoforge${NAME:+-$NAME}
+
+# The script's OWN artifacts (parent/sidecar/runner logs and the curl cookie
+# jars) live with the instance too, under $ROOT/logs — not a shared repo-local
+# tmp/ that two named meshes would trample. Everything this run writes is
+# therefore self-contained in $ROOT.
+LOG_DIR=$ROOT/logs
+PARENT_LOG=$LOG_DIR/mesh-parent.log
+SIDECAR_LOG=$LOG_DIR/sidecar.log
+RUNNER_LOG=$LOG_DIR/runner-agent.log
+COOKIES=$LOG_DIR/cookies.txt
+SIDE_COOKIES=$LOG_DIR/side-cookies.txt
+ROOT_COOKIES=$LOG_DIR/root-cookies.txt
+
 PORT_LO=${PORT_RANGE%-*}
 PORT_HI=${PORT_RANGE#*-}
 
 PICOMESH=./build-desktop-release/picomesh
 WEBAPP=./build-desktop-release/picoforge-webapp
 
-# Pick distinct FREE ports for the handful of services whose address can't be
-# auto: the webapp plus the mesh's bootstrap/front-door ports.
-mapfile -t _ports < <(python3 - "$PORT_LO" "$PORT_HI" <<'PY'
+# Six services can't use 'port: auto' — control, registry, gateway, webapp, the
+# internal bridge and the service console — so the script finds their ports
+# itself, plus a dynamic range to start portalloc with. ALL of it is discovered
+# by probing for FREE ports, so a plain `mesh-up.sh` with no flags just works,
+# and a second mesh (started after the first has bound its ports) lands on
+# different free ones automatically — no --range, no per-instance bookkeeping.
+#
+#   * 6 free ports anywhere in --range (8800-8999) → the fixed services.
+#   * a free CONTIGUOUS block of 60 ports in 8300-8799 → portalloc's dynamic
+#     range (the ports it then hands the ~22 'port: auto' backends). A block
+#     instead of the shared 8300-8799 means two meshes' backends don't contend
+#     on one range during concurrent bring-up.
+#
+# The probe binds each candidate to confirm it's free, holds it so the same port
+# isn't picked twice in this pass, then releases everything before the mesh binds
+# for real.
+PA_LO=8300; PA_HI=8799; PA_BLOCK=60
+mapfile -t _alloc < <(python3 - "$PORT_LO" "$PORT_HI" "$PA_LO" "$PA_HI" "$PA_BLOCK" <<'PY'
 import socket, sys
-lo, hi = int(sys.argv[1]), int(sys.argv[2])
-held, out, p = [], [], lo
-while len(out) < 4 and p <= hi:
+lo, hi, pa_lo, pa_hi, block = (int(a) for a in sys.argv[1:6])
+held = []
+def grab(port):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        s.bind(("127.0.0.1", p)); held.append(s); out.append(p)
+        s.bind(("127.0.0.1", port)); held.append(s); return True
     except OSError:
-        s.close()
+        s.close(); return False
+# 6 free fixed ports, scanning the whole range.
+fixed, p = [], lo
+while len(fixed) < 6 and p <= hi:
+    if grab(p): fixed.append(p)
     p += 1
+# First aligned block of `block` consecutive free ports for portalloc.
+pa = None
+for start in range(pa_lo, pa_hi - block + 2, block):
+    tmp = []
+    def grab_tmp(port):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.bind(("127.0.0.1", port)); tmp.append(s); return True
+        except OSError:
+            s.close(); return False
+    if all(grab_tmp(start + i) for i in range(block)):
+        pa = (start, start + block - 1); held += tmp; break
+    for s in tmp:
+        s.close()
 for s in held:
     s.close()
-print(*out, sep="\n") if len(out) == 4 else sys.exit(1)
+if len(fixed) == 6 and pa:
+    for v in fixed: print(v)
+    print(pa[0]); print(pa[1])
+else:
+    sys.exit(1)
 PY
 )
-[ "${#_ports[@]}" -eq 4 ] || { echo "mesh-up: could not allocate 4 free ports in $PORT_RANGE" >&2; exit 1; }
-CTRL=${_ports[0]}; REG=${_ports[1]}; WEB=${_ports[2]}; SIDE=${_ports[3]}
-DB=/tmp/picoforge/central.db
-echo "mesh-up: allocated ports — control=$CTRL registry=$REG gateway=$WEB webapp=$SIDE (range $PORT_RANGE)"
+[ "${#_alloc[@]}" -eq 8 ] || { echo "mesh-up: could not find 6 free ports in $PORT_RANGE plus a free portalloc block in $PA_LO-$PA_HI" >&2; exit 1; }
+CTRL=${_alloc[0]}; REG=${_alloc[1]}; WEB=${_alloc[2]}; SIDE=${_alloc[3]}; BRIDGE=${_alloc[4]}; CONSOLE=${_alloc[5]}
+PA_RANGE_LO=${_alloc[6]}; PA_RANGE_HI=${_alloc[7]}
+DB=$ROOT/central.db
+echo "mesh-up: instance '${NAME:-<unnamed>}' — data root $ROOT (logs $LOG_DIR)"
+echo "mesh-up: ports — control=$CTRL registry=$REG gateway=$WEB webapp=$SIDE bridge=$BRIDGE console=$CONSOLE (free in $PORT_RANGE)"
+echo "mesh-up: portalloc dynamic range — $PA_RANGE_LO-$PA_RANGE_HI (free block in $PA_LO-$PA_HI)"
 
-# Start from a clean slate. Wipe the ENTIRE /tmp/picoforge tree, not just
-# central.db — the backends persist accounts/sessions in the sharded mdbx
-# store at /tmp/picoforge/sharded/, so leaving it behind makes a re-run
-# fail: `alice`/`bob` from the previous run still exist, so POST /register
+# Start from a clean slate. Wipe THIS instance's ENTIRE state root ($ROOT), not
+# just central.db — the backends persist accounts/sessions in the sharded mdbx
+# store and the relational shards under $ROOT, so leaving it behind makes a
+# re-run fail: `alice`/`bob` from the previous run still exist, so POST /register
 # returns "username already taken" (HTTP 200) instead of 303, and the
 # login/cookie assertions cascade. Removing the whole tree makes every
-# run reproducible.
-rm -rf /tmp/picoforge
-mkdir -p tmp /tmp/picoforge
-rm -f "$DB" tmp/mesh-parent.log
+# run reproducible. We only ever wipe $ROOT — a differently-named instance has
+# its own root and is untouched.
+rm -rf "$ROOT"
+mkdir -p "$ROOT" "$LOG_DIR"
+rm -f "$DB"
 
 PASS=0
 FAIL=0
@@ -110,18 +181,33 @@ note_fail() { FAIL=$((FAIL+1)); echo "  FAIL: $1" >&2; }
 export PICOMESH_JWT_SECRET="${PICOMESH_JWT_SECRET:-picoforge-dev-mesh-secret-change-me}"
 
 echo "[1/6] starting parent picomesh (yhttp control) on :${CTRL} (registry :${REG}, gateway :${WEB})"
+# Pin every on-disk path onto $ROOT. The config ships with /tmp/picoforge
+# defaults (so a bare `picomesh` run still works); these overrides move ALL of
+# this instance's state under its own root. The mesh's service-projection step
+# merges `mesh.services.<svc>.config` onto each child, so overriding the nested
+# `…config.<plugin>.path` here reaches the child plugin at its natural path.
 "$PICOMESH" --config-file "$CONFIG" --frontend yhttp --host 127.0.0.1 --port "$CTRL" \
     --config "mesh.services.registry.port=$REG" \
     --config "mesh.services.gateway.port=$WEB" \
-    serve > tmp/mesh-parent.log 2>&1 &
+    --config "storage.db_path=$ROOT/mesh-state.db" \
+    --config "mesh.nodes_dir=$ROOT/nodes" \
+    --config "mesh.services.sharded_storage.config.sharded_storage.path=$ROOT/sharded" \
+    --config "mesh.services.rstore_uid.config.relational_storage.path=$ROOT/rel/uid" \
+    --config "mesh.services.rstore_username.config.relational_storage.path=$ROOT/rel/username" \
+    --config "mesh.services.rstore_session.config.relational_storage.path=$ROOT/rel/session" \
+    --config "mesh.services.rstore_token.config.relational_storage.path=$ROOT/rel/token" \
+    --config "mesh.services.git_repo.config.git_repo.repos_dir=$ROOT/repos" \
+    --config "mesh.services.internal_yhttp_bridge.port=$BRIDGE" \
+    --config "mesh.services.service_console.port=$CONSOLE" \
+    --config "mesh.services.service_console.config.alpine.upstream.port=$BRIDGE" \
+    --config "mesh.services.portalloc.config.portalloc.port_range=$PA_RANGE_LO-$PA_RANGE_HI" \
+    serve > $PARENT_LOG 2>&1 &
 PARENT=$!
 cleanup() {
     # The mesh owns its children: SIGTERM the control parent and its reaper
-    # takes the spawned backends down. The webapp sidecar is started by THIS
-    # script (a pid we own), so signal that one too. Never pkill, never kill
+    # takes the spawned backends and core webapps down. Never pkill, never kill
     # a backend child directly — see CLAUDE.md "Process lifecycle & teardown".
     [ -n "${SIDECAR:-}" ] && kill -TERM "$SIDECAR" 2>/dev/null || true
-    [ -n "${PICOTRACE_PID:-}" ] && kill -TERM "$PICOTRACE_PID" 2>/dev/null || true
     kill -TERM "$PARENT" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
@@ -134,12 +220,12 @@ http_post() {
 }
 http_form() {
     local port=$1 path=$2; shift 2
-    curl -sS --max-time 10 -b tmp/cookies.txt -c tmp/cookies.txt -XPOST \
+    curl -sS --max-time 10 -b $COOKIES -c $COOKIES -XPOST \
          "http://127.0.0.1:$port$path" "$@"
 }
 http_get() {
     local port=$1 path=$2
-    curl -sS --max-time 10 -b tmp/cookies.txt -c tmp/cookies.txt \
+    curl -sS --max-time 10 -b $COOKIES -c $COOKIES \
          "http://127.0.0.1:$port$path"
 }
 expect_contains() {
@@ -177,8 +263,8 @@ done
 sleep 0.5
 
 echo "[5/6] gateway is API + auth-action only (NO HTML pages) on :${WEB}"
-rm -f tmp/cookies.txt
-touch tmp/cookies.txt
+rm -f $COOKIES
+touch $COOKIES
 
 # The gateway serves NO HTML pages — every GET page now belongs to the
 # picoforge webapp (tested in [5b] below). The gateway must REFUSE
@@ -215,7 +301,7 @@ expect_contains 'POST /register (root) → 303 (site-owner bootstrap)' "$hdrs" '
 # Register alice — the SECOND user, so a regular (non-owner) account.
 # Creates the account, mints a session, redirects to /alice (GitHub-style
 # namespace landing, mirroring yaapp's _landing_url).
-hdrs=$(curl -sS --max-time 10 -D - -o /dev/null -c tmp/cookies.txt \
+hdrs=$(curl -sS --max-time 10 -D - -o /dev/null -c $COOKIES \
             -XPOST http://127.0.0.1:$WEB/register \
             --data-urlencode 'username=alice' --data-urlencode 'password=hunter2')
 expect_contains 'POST /register → 303 /alice'   "$hdrs" '303 See Other.*[Ll]ocation: /alice|[Ll]ocation: /alice.*303'
@@ -228,14 +314,14 @@ out=$(curl -sS --max-time 10 -XPOST http://127.0.0.1:$WEB/register \
 expect_contains 'POST /register rejects duplicate' "$out" 'already taken'
 
 # Sign-out invalidates the session server-side AND wipes cookies.
-hdrs=$(curl -sS --max-time 10 -D - -o /dev/null -b tmp/cookies.txt -c tmp/cookies.txt \
+hdrs=$(curl -sS --max-time 10 -D - -o /dev/null -b $COOKIES -c $COOKIES \
             -XPOST http://127.0.0.1:$WEB/logout)
 expect_contains 'POST /logout → 303 /login'        "$hdrs" '303 See Other'
 expect_contains 'POST /logout clears sid cookie'   "$hdrs" 'picomesh-sid=;'
 expect_contains 'POST /logout clears uname cookie' "$hdrs" 'picomesh-uname=;'
 
 # Re-login (now that the account exists from /register).
-hdrs=$(curl -sS --max-time 10 -D - -o /dev/null -c tmp/cookies.txt \
+hdrs=$(curl -sS --max-time 10 -D - -o /dev/null -c $COOKIES \
             -XPOST http://127.0.0.1:$WEB/login \
             --data-urlencode 'username=alice' --data-urlencode 'password=hunter2')
 expect_contains 'POST /login → 303 /alice'   "$hdrs" '303 See Other.*[Ll]ocation: /alice|[Ll]ocation: /alice.*303'
@@ -243,7 +329,7 @@ expect_contains 'POST /login sets sid cookie' "$hdrs" 'Set-Cookie: picomesh-sid=
 
 # Create a repo under /alice/website via /repos/new (POST `name`) — an
 # authenticated action POST the gateway forwards to the git_repo backend.
-hdrs=$(curl -sS --max-time 10 -D - -o /dev/null -b tmp/cookies.txt \
+hdrs=$(curl -sS --max-time 10 -D - -o /dev/null -b $COOKIES \
             -XPOST http://127.0.0.1:$WEB/repos/new \
             --data-urlencode 'name=website')
 expect_contains 'POST /repos/new → 303 /alice/website' "$hdrs" '303 See Other.*/alice/website|/alice/website.*303'
@@ -252,7 +338,7 @@ expect_contains 'POST /repos/new → 303 /alice/website' "$hdrs" '303 See Other.
 # the webapp sources the page the gateway no longer renders. The gateway is
 # now an auth boundary (issue #19): this read requires a signed-in session, so
 # we send alice's cookie (captured at /login above).
-out=$(curl -sS --max-time 10 -b tmp/cookies.txt -XPOST http://127.0.0.1:$WEB/_rpc \
+out=$(curl -sS --max-time 10 -b $COOKIES -XPOST http://127.0.0.1:$WEB/_rpc \
            -H 'Content-Type: application/json' \
            -d '{"path":"git_repo.git_repo.count_total","args":[]}')
 expect_contains 'gateway /_rpc git_repo.count_total (authed, repo data via API)' "$out" '"result":[1-9][0-9]*'
@@ -260,7 +346,7 @@ expect_contains 'gateway /_rpc git_repo.count_total (authed, repo data via API)'
 # ---- [5a] security pipeline (issue #19): authn chain + policy authorizer ----
 # The browser only ever holds an OPAQUE sid — the cookie value must NOT be a
 # JWT (no dot-separated base64url segments). The JWT lives server-side only.
-SID_VAL=$(awk '/picomesh-sid/ {print $NF}' tmp/cookies.txt 2>/dev/null | tail -1)
+SID_VAL=$(awk '/picomesh-sid/ {print $NF}' $COOKIES 2>/dev/null | tail -1)
 if [[ -n "$SID_VAL" && "$SID_VAL" != *.* ]]; then
     note_pass "login sets an opaque sid cookie (not a JWT)"
 else
@@ -308,14 +394,14 @@ fi
 
 # A method ABSENT from the policy is denied by default → 403, even for a
 # signed-in user (accounts.exists is not in the gateway policy).
-code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b tmp/cookies.txt -XPOST http://127.0.0.1:$WEB/_rpc \
+code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b $COOKIES -XPOST http://127.0.0.1:$WEB/_rpc \
             -H 'Content-Type: application/json' \
             -d '{"path":"accounts.accounts.exists","args":[1]}')
 [ "$code" = "403" ] && note_pass "policy default-deny: unlisted method → 403" \
                      || note_fail "unlisted method returned $code (want 403)"
 
 # Credential-exchange methods are never callable via public /_rpc → 403.
-code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b tmp/cookies.txt -XPOST http://127.0.0.1:$WEB/_rpc \
+code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b $COOKIES -XPOST http://127.0.0.1:$WEB/_rpc \
             -H 'Content-Type: application/json' \
             -d "{\"path\":\"session.session.lookup\",\"args\":[\"${SID_VAL:-x}\"]}")
 [ "$code" = "403" ] && note_pass "credential-exchange session.lookup blocked → 403" \
@@ -323,14 +409,14 @@ code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b tmp/cookies.txt 
 
 # A regular user (alice) is NOT site-owner → an owner/site-gated admin method
 # returns 403 (role insufficient), proving role-gating through the policy.
-code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b tmp/cookies.txt -XPOST http://127.0.0.1:$WEB/_rpc \
+code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b $COOKIES -XPOST http://127.0.0.1:$WEB/_rpc \
             -H 'Content-Type: application/json' \
             -d '{"path":"accounts.accounts.count","args":[]}')
 [ "$code" = "403" ] && note_pass "role-gate: non-owner alice → accounts.count 403" \
                      || note_fail "non-owner accounts.count returned $code (want 403)"
 
 # /_whoami exposes only non-sensitive claims — never the JWT or a secret.
-who=$(curl -sS --max-time 10 -b tmp/cookies.txt http://127.0.0.1:$WEB/_whoami)
+who=$(curl -sS --max-time 10 -b $COOKIES http://127.0.0.1:$WEB/_whoami)
 expect_contains '/_whoami returns alice uid' "$who" '"username":"alice"'
 if [[ "$who" != *jwt* && "$who" != *access_jwt* ]]; then
     note_pass "/_whoami leaks no JWT"
@@ -373,7 +459,7 @@ echo "[5b] standalone picoforge-webapp → gateway /_rpc on :${SIDE}"
 "$WEBAPP" --gateway-url "http://127.0.0.1:${WEB}" \
     --host 127.0.0.1 --port "$SIDE" \
     --static assets/picoforge/static \
-    > tmp/sidecar.log 2>&1 &
+    > $SIDECAR_LOG 2>&1 &
 SIDECAR=$!
 sleep 0.7
 
@@ -383,7 +469,7 @@ holders=$(ss -ltnp 2>/dev/null | grep ":${SIDE} " | grep -oE 'pid=[0-9]+' \
             | cut -d= -f2 | sort -un | paste -sd' ' -)
 if [ "$holders" != "$SIDECAR" ]; then
     note_fail "picoforge-webapp is not the sole listener on :${SIDE} (holders: [${holders:-none}], ours: ${SIDECAR})."
-    tail -3 tmp/sidecar.log >&2
+    tail -3 $SIDECAR_LOG >&2
 fi
 
 # GET sidecar /login renders its own sign-in form (not the gateway's).
@@ -404,8 +490,8 @@ expect_contains 'webapp POST /register relays sid cookie' "$hdrs" 'Set-Cookie: p
 # POST sidecar /login forwards the form to the gateway's composite
 # login; the gateway authenticates alice (registered above), mints a
 # session and answers 303 + Set-Cookie, which the sidecar relays.
-rm -f tmp/side-cookies.txt
-hdrs=$(curl -sS --max-time 10 -D - -o /dev/null -c tmp/side-cookies.txt \
+rm -f $SIDE_COOKIES
+hdrs=$(curl -sS --max-time 10 -D - -o /dev/null -c $SIDE_COOKIES \
             -XPOST "http://127.0.0.1:${SIDE}/login" \
             --data-urlencode 'username=alice' --data-urlencode 'password=hunter2')
 expect_contains 'sidecar POST /login → 303 /repos' "$hdrs" '303 See Other.*[Ll]ocation: /repos|[Ll]ocation: /repos.*303'
@@ -413,7 +499,7 @@ expect_contains 'sidecar relays gateway sid cookie' "$hdrs" 'Set-Cookie: picomes
 
 # GET sidecar /repos renders a data page sourced from the gateway via
 # /_rpc (git_repo.git_repo.count_total) — the sidecar holds no plugins.
-out=$(curl -sS --max-time 10 -b tmp/side-cookies.txt "http://127.0.0.1:${SIDE}/repos")
+out=$(curl -sS --max-time 10 -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/repos")
 expect_contains 'sidecar GET /repos renders'           "$out" '<h1>Repositories</h1>'
 expect_contains 'sidecar /repos sourced via gateway /_rpc' "$out" 'via the gateway'
 
@@ -421,14 +507,14 @@ expect_contains 'sidecar /repos sourced via gateway /_rpc' "$out" 'via the gatew
 # each driven by a live service discovered from the gateway's /_describe and
 # sourced via /_rpc. These are the M4 pages: account landing, issues,
 # pipeline runs, admin users.
-out=$(curl -sS --max-time 10 -b tmp/side-cookies.txt "http://127.0.0.1:${SIDE}/alice")
+out=$(curl -sS --max-time 10 -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/alice")
 expect_contains 'webapp GET /<account> (account landing)' "$out" '<h1>alice</h1>'
 # Repo-scoped pages carry the repo name as <h1> (project header) and the
 # section name in the panel header + the active project tab.
-out=$(curl -sS --max-time 10 -b tmp/side-cookies.txt "http://127.0.0.1:${SIDE}/alice/website/issues")
+out=$(curl -sS --max-time 10 -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/alice/website/issues")
 expect_contains 'webapp GET /<acct>/<repo>/issues'        "$out" '<strong>Issues</strong>'
 expect_contains 'webapp issues page active tab'           "$out" 'class="active" href="/alice/website/issues"'
-out=$(curl -sS --max-time 10 -b tmp/side-cookies.txt "http://127.0.0.1:${SIDE}/alice/website/runs")
+out=$(curl -sS --max-time 10 -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/alice/website/runs")
 expect_contains 'webapp GET /<acct>/<repo>/runs'          "$out" '<strong>Pipeline runs</strong>'
 # Admin space is gated on a signed-in SITE ADMIN, enforced BEFORE any
 # admin content renders. alice is a regular user → 403; an anonymous
@@ -439,46 +525,46 @@ code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
 [ "$code" = "303" ] && note_pass "anonymous /admin → 303 (redirect to login)" \
                     || note_fail "anonymous /admin returned $code (want 303)"
 code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
-            -b tmp/side-cookies.txt "http://127.0.0.1:${SIDE}/admin")
+            -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/admin")
 [ "$code" = "403" ] && note_pass "non-admin alice /admin → 403 (forbidden before render)" \
                     || note_fail "non-admin alice /admin returned $code (want 403)"
 
 # Sign in as root (the site owner) to view the admin area.
-rm -f tmp/root-cookies.txt
-curl -sS --max-time 10 -c tmp/root-cookies.txt -o /dev/null -XPOST \
+rm -f $ROOT_COOKIES
+curl -sS --max-time 10 -c $ROOT_COOKIES -o /dev/null -XPOST \
      "http://127.0.0.1:${SIDE}/login" \
      --data-urlencode 'username=root' --data-urlencode 'password=rootpw'
 
 # The Admin area is its OWN section with its OWN left menu (distinct from
 # the project nav). /admin is the overview; each aspect is a page; every
 # admin page shows the "Admin area" sidebar, not the project sidebar.
-out=$(curl -sS --max-time 10 -b tmp/root-cookies.txt "http://127.0.0.1:${SIDE}/admin")
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/admin")
 expect_contains 'webapp GET /admin (overview, as admin)'  "$out" '<h1>Admin</h1>'
 expect_contains 'admin area has its own sidebar'          "$out" 'Admin area'
 expect_contains 'admin overview links to Repositories'    "$out" 'href="/admin/repos"'
-out=$(curl -sS --max-time 10 -b tmp/root-cookies.txt "http://127.0.0.1:${SIDE}/admin/users")
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/admin/users")
 expect_contains 'webapp GET /admin/users'                 "$out" '<h1>Users</h1>'
 expect_contains 'admin/users uses admin sidebar'          "$out" 'class="active" href="/admin/users"'
 expect_contains 'admin/users lists real registered users' "$out" 'alice'
 expect_contains 'admin sidebar excludes Projects nav'     "$out" 'href="/admin/services"'
-out=$(curl -sS --max-time 10 -b tmp/root-cookies.txt "http://127.0.0.1:${SIDE}/admin/repos")
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/admin/repos")
 expect_contains 'webapp GET /admin/repos'                 "$out" '<h1>Repositories</h1>'
-out=$(curl -sS --max-time 10 -b tmp/root-cookies.txt "http://127.0.0.1:${SIDE}/admin/tokens")
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/admin/tokens")
 expect_contains 'webapp GET /admin/tokens'                "$out" '<h1>Tokens</h1>'
 
 # New GitLab-like shell additions (gh#10): repo settings tab, services
 # health page, cross-repo dashboards, and the dedicated new-repo form —
 # all sourced from the gateway, all inside the same shell.
-out=$(curl -sS --max-time 10 -b tmp/side-cookies.txt "http://127.0.0.1:${SIDE}/alice/website/settings")
+out=$(curl -sS --max-time 10 -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/alice/website/settings")
 expect_contains 'webapp GET /<acct>/<repo>/settings'      "$out" 'class="active" href="/alice/website/settings"'
-out=$(curl -sS --max-time 10 -b tmp/root-cookies.txt "http://127.0.0.1:${SIDE}/admin/services")
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/admin/services")
 expect_contains 'webapp GET /admin/services lists services' "$out" 'service-table'
 expect_contains 'webapp /admin/services shows git_repo'   "$out" 'git_repo'
-out=$(curl -sS --max-time 10 -b tmp/side-cookies.txt "http://127.0.0.1:${SIDE}/dashboard/issues")
+out=$(curl -sS --max-time 10 -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/dashboard/issues")
 expect_contains 'webapp GET /dashboard/issues'            "$out" 'Open issues across your repositories'
-out=$(curl -sS --max-time 10 -b tmp/side-cookies.txt "http://127.0.0.1:${SIDE}/dashboard/runs")
+out=$(curl -sS --max-time 10 -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/dashboard/runs")
 expect_contains 'webapp GET /dashboard/runs'              "$out" 'pipeline-table'
-out=$(curl -sS --max-time 10 -b tmp/side-cookies.txt "http://127.0.0.1:${SIDE}/repos/new")
+out=$(curl -sS --max-time 10 -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/repos/new")
 expect_contains 'webapp GET /repos/new (form)'            "$out" '<h1>New repository</h1>'
 # Every signed-in page wears the same shell (topbar + sidebar).
 expect_contains 'webapp pages share the shell'            "$out" 'class="sidebar-nav"'
@@ -491,7 +577,7 @@ code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$
 # Direct gateway-API checks: yaapp-style surface present, legacy gone.
 # The gateway gates /_rpc (issue #19), so this read carries alice's session
 # cookie (captured by the sidecar login above).
-out=$(curl -sS --max-time 10 -b tmp/side-cookies.txt -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+out=$(curl -sS --max-time 10 -b $SIDE_COOKIES -XPOST "http://127.0.0.1:${WEB}/_rpc" \
            -H 'Content-Type: application/json' \
            -d '{"path":"git_repo.git_repo.count_total","args":[]}')
 expect_contains 'gateway POST /_rpc {path,args} (authed)' "$out" '"result":'
@@ -501,7 +587,7 @@ expect_contains 'gateway POST /_rpc {path,args} (authed)' "$out" '"result":'
 # authenticated forward + remote round-trip end to end. (session.lookup is no
 # longer a public method — it is an authenticator-internal credential
 # exchange, exercised via the 403 check in [5a].)
-out=$(curl -sS --max-time 10 -b tmp/side-cookies.txt -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+out=$(curl -sS --max-time 10 -b $SIDE_COOKIES -XPOST "http://127.0.0.1:${WEB}/_rpc" \
            -H 'Content-Type: application/json' \
            -d '{"path":"git_repo.git_repo.count_total","args":[]}')
 expect_contains 'gateway /_rpc authed round-trip (non-zero result)' "$out" '"result":[1-9][0-9]*'
@@ -523,14 +609,14 @@ out=$(curl -sS --max-time 10 "http://127.0.0.1:${WEB}/git_repo.git_repo/_describ
 expect_contains 'gateway /<class>/_describe lists methods' "$out" 'git_repo_git_repo_count_total'
 
 # gh#15: generic service-console tooling. Two SEPARATE, app-agnostic nodes
-# (no picoforge routes): a yrpc->yhttp transport bridge on :8230 (NOT the
-# gateway — it does not front `session`, so it is not the auth boundary)
-# and the standalone /_alpine console frontend on :8231 that proxies to it.
+# (no picoforge routes): a yrpc->yhttp transport bridge (NOT the gateway — it
+# does not front `session`, so it is not the auth boundary) and the standalone
+# /_alpine console frontend that proxies to it. Both used to be hardcoded to
+# :8230/:8231 — now they get per-instance ports from this run's window (set on
+# the parent via --config above) so two meshes don't collide on them.
 # The bridge fronts its configured remotes over the generic JSON API; the
 # console builds its UI from /_describe and invokes through JSON /_rpc.
 # See docs/service-console.md.
-BRIDGE=8230
-CONSOLE=8231
 
 out=$(curl -sS --max-time 10 "http://127.0.0.1:${BRIDGE}/_describe")
 expect_contains 'bridge GET /_describe lists active services' "$out" '"services":\['
@@ -554,22 +640,10 @@ out=$(curl -sS --max-time 10 -XPOST "http://127.0.0.1:${CONSOLE}/_rpc" \
            -H 'Content-Type: application/json' -d '{"path":"git_repo.git_repo.count_total","args":[]}')
 expect_contains 'console proxies POST /_rpc to the upstream bridge' "$out" '"result":'
 
-# picotrace is an internal operator app, not a Picoforge route and not the
-# public gateway. It binds loopback and talks to the internal yhttp bridge.
-if ss -ltn 2>/dev/null | grep -q ":${TRACEUI} "; then
-    trace_alt=""
-    for cand in $(seq $((TRACEUI+1)) $((TRACEUI+20))); do
-        ss -ltn 2>/dev/null | grep -q ":${cand} " || { trace_alt=$cand; break; }
-    done
-    [ -n "$trace_alt" ] && TRACEUI=$trace_alt
-fi
-"$PICOTRACE" --upstream-url "http://127.0.0.1:${BRIDGE}" \
-    --host 127.0.0.1 --port "$TRACEUI" \
-    > tmp/picotrace.log 2>&1 &
-PICOTRACE_PID=$!
-sleep 0.4
-out=$(curl -sS --max-time 10 "http://127.0.0.1:${TRACEUI}/")
-expect_contains 'picotrace serves internal trace browser' "$out" '<strong>picotrace</strong>'
+# picotrace is a mesh-managed loopback webapp under mesh.webapps. It talks
+# directly to trace_collector; it is not a Picoforge route and not exposed by
+# the public gateway.
+echo "[5b/6] picotrace is mesh-managed under mesh.webapps"
 
 # Legacy public surface retired on the gateway (8090)…
 code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
@@ -600,7 +674,7 @@ PARENT_SPAN=1122334455667788
 # traceparent, opens the root span, and forwards to git_repo (which reads
 # sharded_storage) — so one trace_id fans out into a gateway → git_repo →
 # sharded_storage span chain.
-traced=$(curl -sS --max-time 10 -D - -o /dev/null -b tmp/side-cookies.txt -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+traced=$(curl -sS --max-time 10 -D - -o /dev/null -b $SIDE_COOKIES -XPOST "http://127.0.0.1:${WEB}/_rpc" \
     -H "traceparent: 00-${TRACE_ID}-${PARENT_SPAN}-01" \
     -H 'Content-Type: application/json' \
     -d '{"path":"git_repo.git_repo.count_total","args":[]}')
@@ -611,7 +685,7 @@ sleep 1.5
 
 # Query the trace back through the gateway: trace_collector.trace_collector.get_trace
 # returns the whole trace as a JSON string in the /_rpc "result" field.
-trace_rpc=$(curl -sS --max-time 10 -b tmp/side-cookies.txt -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+trace_rpc=$(curl -sS --max-time 10 -b $SIDE_COOKIES -XPOST "http://127.0.0.1:${WEB}/_rpc" \
     -H 'Content-Type: application/json' \
     -d "{\"path\":\"trace_collector.trace_collector.get_trace\",\"args\":[\"${TRACE_ID}\"]}")
 # Reconstruct the tree: >= 2 spans across >1 service, with a child whose
@@ -631,12 +705,12 @@ print("OK" if ok else "NO len=%d linked=%s svcs=%s" % (len(spans), linked, sorte
 expect_contains 'collector reconstructs a linked cross-service span tree' "$tree_ok" 'OK'
 
 # Service + latency aggregates are queryable through the gateway too.
-svc=$(curl -sS --max-time 10 -b tmp/side-cookies.txt -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+svc=$(curl -sS --max-time 10 -b $SIDE_COOKIES -XPOST "http://127.0.0.1:${WEB}/_rpc" \
     -H 'Content-Type: application/json' \
     -d '{"path":"trace_collector.trace_collector.services","args":[]}')
 expect_contains 'collector services() lists the gateway'  "$svc" 'gateway'
 expect_contains 'collector services() lists git_repo'     "$svc" 'git_repo'
-lat=$(curl -sS --max-time 10 -b tmp/side-cookies.txt -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+lat=$(curl -sS --max-time 10 -b $SIDE_COOKIES -XPOST "http://127.0.0.1:${WEB}/_rpc" \
     -H 'Content-Type: application/json' \
     -d '{"path":"trace_collector.trace_collector.latency","args":["gateway","",0]}')
 expect_contains 'collector latency() returns an aggregate' "$lat" 'p50_ns'
@@ -657,14 +731,14 @@ echo "[5d] runner agent (docs/runner-agent.md) — token → register → lease 
 JSONH='Content-Type: application/json'
 
 # Admin (site-owner root) mints a runner token. create_token is owner-gated.
-ct=$(curl -sS --max-time 10 -b tmp/root-cookies.txt -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+ct=$(curl -sS --max-time 10 -b $ROOT_COOKIES -XPOST "http://127.0.0.1:${WEB}/_rpc" \
      -H "$JSONH" -d '{"path":"runner_agent.runner_agent.create_token","args":["ci-runner-1","linux,x86_64"]}')
 expect_contains 'admin create_token mints an rnr_ token' "$ct" '"token":"rnr_'
 RUNNER_TOKEN=$(printf '%s' "$ct" | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"]["token"])' 2>/dev/null)
 RUNNER_ID=$(printf '%s' "$ct" | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"]["runner_id"])' 2>/dev/null)
 
 # A non-owner (alice) must NOT be able to mint a runner token → 403.
-code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b tmp/side-cookies.txt -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b $SIDE_COOKIES -XPOST "http://127.0.0.1:${WEB}/_rpc" \
             -H "$JSONH" -d '{"path":"runner_agent.runner_agent.create_token","args":["evil","linux"]}')
 [ "$code" = "403" ] && note_pass "non-owner alice create_token → 403" \
                     || note_fail "alice create_token returned $code (want 403)"
@@ -676,19 +750,19 @@ reg=$(curl -sS --max-time 10 -XPOST "http://127.0.0.1:${WEB}/_rpc" \
 expect_contains 'runner register echoes its runner_id' "$reg" "\"result\":${RUNNER_ID}"
 
 # A user cookie carries no site:runner group → register is forbidden (403).
-code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b tmp/side-cookies.txt -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b $SIDE_COOKIES -XPOST "http://127.0.0.1:${WEB}/_rpc" \
             -H "$JSONH" -d "{\"path\":\"runner_agent.runner_agent.register\",\"args\":[${RUNNER_ID},\"x\",\"linux\",\"0\",\"h\"]}")
 [ "$code" = "403" ] && note_pass "non-runner alice register → 403" \
                     || note_fail "alice register returned $code (want 403)"
 
 # A user (alice) enqueues a CI job with execution metadata; the runner leases it.
-ej=$(curl -sS --max-time 10 -b tmp/side-cookies.txt -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+ej=$(curl -sS --max-time 10 -b $SIDE_COOKIES -XPOST "http://127.0.0.1:${WEB}/_rpc" \
      -H "$JSONH" -d '{"path":"git_pipeline.git_pipeline.enqueue_job","args":[1,"refs/heads/main","",60]}')
 expect_contains 'user enqueue_job returns a job id' "$ej" '"result":[1-9][0-9]*'
 JOB_ID=$(printf '%s' "$ej" | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"])' 2>/dev/null)
 
 # A non-runner (alice) cannot lease a job → 403 (lease_job is runner-gated).
-code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b tmp/side-cookies.txt -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b $SIDE_COOKIES -XPOST "http://127.0.0.1:${WEB}/_rpc" \
             -H "$JSONH" -d "{\"path\":\"git_pipeline.git_pipeline.lease_job\",\"args\":[${RUNNER_ID},\"linux\"]}")
 [ "$code" = "403" ] && note_pass "non-runner alice lease_job → 403" \
                     || note_fail "alice lease_job returned $code (want 403)"
@@ -717,14 +791,14 @@ cj=$(curl -sS --max-time 10 -XPOST "http://127.0.0.1:${WEB}/_rpc" \
 expect_contains 'runner complete_job → 1' "$cj" '"result":1'
 
 # Ownership: a SECOND runner cannot complete the FIRST runner's job.
-ct2=$(curl -sS --max-time 10 -b tmp/root-cookies.txt -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+ct2=$(curl -sS --max-time 10 -b $ROOT_COOKIES -XPOST "http://127.0.0.1:${WEB}/_rpc" \
       -H "$JSONH" -d '{"path":"runner_agent.runner_agent.create_token","args":["ci-runner-2","linux"]}')
 RUNNER_TOKEN2=$(printf '%s' "$ct2" | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"]["token"])' 2>/dev/null)
 RUNNER_ID2=$(printf '%s' "$ct2" | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"]["runner_id"])' 2>/dev/null)
 curl -sS --max-time 10 -o /dev/null -XPOST "http://127.0.0.1:${WEB}/_rpc" \
      -H "Authorization: Bearer ${RUNNER_TOKEN2}" -H "$JSONH" \
      -d "{\"path\":\"runner_agent.runner_agent.register\",\"args\":[${RUNNER_ID2},\"ci-runner-2\",\"linux\",\"0.1.0\",\"smoke-host\"]}"
-ej2=$(curl -sS --max-time 10 -b tmp/side-cookies.txt -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+ej2=$(curl -sS --max-time 10 -b $SIDE_COOKIES -XPOST "http://127.0.0.1:${WEB}/_rpc" \
       -H "$JSONH" -d '{"path":"git_pipeline.git_pipeline.enqueue_job","args":[1,"refs/heads/dev","",60]}')
 JOB_ID2=$(printf '%s' "$ej2" | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"])' 2>/dev/null)
 curl -sS --max-time 10 -o /dev/null -XPOST "http://127.0.0.1:${WEB}/_rpc" \
@@ -743,36 +817,60 @@ expect_contains 'runner2 complete_job (own job) → 1' "$cj2" '"result":1'
 
 # Drive the REAL runner-agent.py once, end to end: a fresh job is queued, the
 # agent leases it, runs the stub build, streams logs, and completes it.
-curl -sS --max-time 10 -o /dev/null -b tmp/side-cookies.txt -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+curl -sS --max-time 10 -o /dev/null -b $SIDE_COOKIES -XPOST "http://127.0.0.1:${WEB}/_rpc" \
      -H "$JSONH" -d '{"path":"git_pipeline.git_pipeline.enqueue_job","args":[1,"refs/heads/agent","",60]}'
 PICOFORGE_RUNNER_TOKEN="$RUNNER_TOKEN" python3 tools/picoforge/runner-agent/runner-agent.py \
     --gateway "http://127.0.0.1:${WEB}" --runner-id "$RUNNER_ID" --once \
-    > tmp/runner-agent.log 2>&1
-expect_contains 'runner-agent.py drives a job to completion' "$(cat tmp/runner-agent.log)" 'completed job'
+    > $RUNNER_LOG 2>&1
+expect_contains 'runner-agent.py drives a job to completion' "$(cat $RUNNER_LOG)" 'completed job'
 
 echo
-# Storage migrated from the single-env sqlite `storage` plugin to the
-# write-parallel `sharded_storage` (mdbx) backend — see picoforge.yaml. The
-# persistence proof checks the live backend: the register/login flow
-# writes keys whose raw bytes land in the mdbx shard files (no mdbx CLI
-# ships here, so we grep the raw pages — crude but a true on-disk proof).
-echo "[6/6] persistence proof — sharded_storage (mdbx) must have written state to disk"
-SHARDED_DIR=/tmp/picoforge/sharded
-shard_dats=$(ls "$SHARDED_DIR"/shard-*/mdbx.dat 2>/dev/null)
-if [ -z "$shard_dats" ]; then
-    note_fail "no mdbx shard files under $SHARDED_DIR (sharded_storage didn't persist?)"
+# Persistence proof. The security/rel-db refactor split storage in two:
+#   * Account + session state (users, username→uid, sessions, tokens) moved
+#     to the RELATIONAL clusters — per-shard SQLite under $ROOT/rel/{uid,
+#     username,session,token} — where it lives in real tables with columns.
+#   * The sharded_storage (mdbx) backend keeps KV-shaped runtime state; after
+#     the move it holds only the `count` counters, NOT user:/uid:/groups: keys.
+# So the real account-persistence proof is now the relational store: the two
+# registered users (root, alice) must be on disk WITH their usernames, and
+# their sessions must be persisted. We read the SQLite shards directly (Python
+# stdlib sqlite3 — no CLI dep), the authoritative check rather than grepping
+# raw mdbx pages for keys that no longer live there.
+echo "[6/6] persistence proof — relational store (SQLite shards) must hold users + sessions"
+REL_DIR=$ROOT/rel
+persisted=$(python3 - "$REL_DIR" <<'PY'
+import sys, sqlite3, glob, os
+rel = sys.argv[1]
+def rows(cluster, query):
+    out = []
+    for db in glob.glob(os.path.join(rel, cluster, "shard_*.db")):
+        try:
+            con = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
+            out += con.execute(query).fetchall()
+            con.close()
+        except Exception:
+            pass
+    return out
+users = {u for (u,) in rows("uid", "SELECT username FROM users") if u}
+sessions = rows("session", "SELECT uid FROM sessions")
+# alice + root registered above; both must be on disk with a non-empty username,
+# and at least their sessions must be persisted.
+print("OK" if {"root", "alice"} <= users and len(sessions) >= 2
+      else "NO users=%s sessions=%d" % (sorted(users), len(sessions)))
+PY
+)
+if [ "$persisted" = "OK" ]; then
+    note_pass "relational store on disk has registered users (root, alice) + persisted sessions"
 else
-    have_key() { grep -aq "$1" $shard_dats 2>/dev/null; }
-    # accounts → user:/groups:/count, session → uid:<sid>, password_authn → count.
-    # (issue #19: the admin role is now a `groups:<uid>` membership — site:owner —
-    # not the retired raw `role:<uid>` key.)
-    if have_key "uid:" && have_key "user:" && have_key "groups:"; then
-        note_pass "sharded mdbx on disk has session + account state (uid:, user:, groups:)"
-    else
-        present=$(for k in count "user:" "groups:" "uid:"; do have_key "$k" && printf '%s ' "$k"; done)
-        note_fail "expected keys not all found in mdbx shards on disk (present: ${present:-none})"
-    fi
-    du -sh "$SHARDED_DIR" 2>/dev/null | sed 's/^/  sharded on-disk size: /'
+    note_fail "relational store missing expected users/sessions — $persisted"
+fi
+du -sh "$REL_DIR" 2>/dev/null | sed 's/^/  relational on-disk size: /'
+# sharded_storage (mdbx) should still hold the KV-shaped counters it now owns.
+shard_dats=$(ls "$ROOT"/sharded/shard-*/mdbx.dat 2>/dev/null)
+if [ -n "$shard_dats" ] && grep -aq "count" $shard_dats 2>/dev/null; then
+    note_pass "sharded mdbx on disk has KV counters (count)"
+else
+    note_fail "sharded mdbx counters not found on disk"
 fi
 
 echo
@@ -780,11 +878,11 @@ echo "========================================"
 echo "PASS: $PASS    FAIL: $FAIL"
 echo "========================================"
 if [ "$FAIL" -gt 0 ]; then
-    echo "parent log: tmp/mesh-parent.log"
+    echo "parent log: $PARENT_LOG"
     exit 1
 fi
 echo ""
-echo "OK — mesh is live. parent log: tmp/mesh-parent.log"
+echo "OK — mesh is live. parent log: $PARENT_LOG"
 echo "    Browser (picoforge-webapp — the page tier):"
 echo "      open http://127.0.0.1:${SIDE}/login   (server-side HTML)"
 echo "    Gateway (API only — /_rpc, /_describe; HTML 404s here):"
@@ -792,7 +890,7 @@ echo "      curl http://127.0.0.1:${WEB}/_describe"
 echo "    Control plane:"
 echo "      curl http://127.0.0.1:${CTRL}/        (mesh REST)"
 echo "    Service console (gh#15 — generic, app-agnostic):"
-echo "      open http://127.0.0.1:8231/_alpine    (console -> yhttp bridge :8230 -> yrpc backends)"
+echo "      open http://127.0.0.1:${CONSOLE}/_alpine    (console -> yhttp bridge :${BRIDGE} -> yrpc backends)"
 echo "    Tracing:"
 echo "      picotrace is mesh-managed: resolve service picotrace in the registry"
 echo "      curl http://127.0.0.1:${WEB}/_perf    (local op-latency aggregate)"

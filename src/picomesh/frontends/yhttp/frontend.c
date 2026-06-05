@@ -1797,36 +1797,22 @@ static void route_whoami(struct yloop_stream *s,
                          const char *headers_raw, size_t headers_raw_len,
                          int keep_alive)
 {
-    char token[64];
-    uint32_t uid = 0;
-    if (extract_session_token(headers_raw, headers_raw_len, token, sizeof(token)))
-        uid = uid_for_token(token);
-
-    char uname[64] = {0};
-    if (uid) {
-        struct svc_ctx st = {0};
-        if (repo_storage_open(&st)) {
-            char k[64];
-            snprintf(k, sizeof(k), "name:%u", uid);
-            struct picomesh_string_result r =
-                sharded_storage_db_get(&st.c, st.obj, NULL, "accounts", k);
-            if (PICOMESH_IS_OK(r)) {
-                if (r.value) {
-                    snprintf(uname, sizeof(uname), "%s", r.value);
-                    free(r.value);
-                }
-            } else {
-                picomesh_error_destroy(r.error);
-            }
-            SVC_CLOSE(st);
-        }
-    }
+    /* Resolve the opaque sid → verified JWT → claims. The username and groups
+     * are carried IN the access JWT (minted by the token issuer at login), so
+     * we read them straight from the verified context — NOT from a storage
+     * lookup. (The old `accounts`/`name:<uid>` key in sharded_storage is dead:
+     * the security/rel-db refactor moved accounts into the relational store, so
+     * that read always missed and username came back empty.) */
+    struct picomesh_authctx caller;
+    resolve_authctx(headers_raw, headers_raw_len, &caller);
+    int admin = caller.uid &&
+        picomesh_groups_max_role(caller.groups_csv, "site") >= picomesh_role_rank("maintainer");
 
     struct yjson_writer *w = yjson_writer_new();
     yjson_writer_begin_object(w);
-    yjson_writer_key(w, "uid");      yjson_writer_int(w, (int64_t)uid);
-    yjson_writer_key(w, "username"); yjson_writer_string(w, uname);
-    yjson_writer_key(w, "is_admin"); yjson_writer_bool(w, uid ? is_site_admin(uid) : 0);
+    yjson_writer_key(w, "uid");      yjson_writer_int(w, (int64_t)caller.uid);
+    yjson_writer_key(w, "username"); yjson_writer_string(w, caller.username);
+    yjson_writer_key(w, "is_admin"); yjson_writer_bool(w, admin);
     yjson_writer_end_object(w);
     size_t len;
     const char *data = yjson_writer_data(w, &len);

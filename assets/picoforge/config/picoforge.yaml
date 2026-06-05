@@ -159,7 +159,7 @@ mesh:
       plugins: [sharded_storage]
       config:
         sharded_storage:
-          shards: 8
+          shards: 24
           path: /tmp/picoforge/sharded
         # sharded_storage calls no backend, but its skels emit server spans,
         # so it still needs a connection to ship them to the collector.
@@ -298,6 +298,7 @@ mesh:
 
     accounts:
       port: auto
+      workers: 8   # was single-worker → register/account writes serialized
       plugins: [accounts]
       config:
         remotes:
@@ -354,6 +355,7 @@ mesh:
 
     issues:
       port: auto
+      workers: 8   # was single-worker → open_issue (4 serial commits) bottleneck
       plugins: [issues]
       config:
         remotes:
@@ -369,22 +371,17 @@ mesh:
       # and bumps the count / owner index with atomic db_incr + compare-and-set,
       # so concurrent creates can't double-count or lose index entries.
       #
-      # Sizing (profiled with an isolated put_file load — see findings below).
-      # repo ops are CPU-bound libgit2 work: zlib deflate/inflate (~27%) + the
-      # collision-detecting SHA-1 / SHA1DC (~15%) + tree rebuild. The actual
-      # disk write/fsync is ~0.1% — git_repo is NOT disk-bound. That work runs
-      # on the libuv worker pool (sized workers*4), not the serving loop, and it
-      # parallelises per bare repo: under a multi-client load git_repo scaled to
-      # ~13 cores at IPC 1.25.
-      #
-      # Do NOT raise `workers` to "use more cores": workers:4 already gives a
-      # 16-thread pool, and an A/B vs workers:6 (24-thread pool) was a dead heat
-      # (~4.7k commits/s either way). On this ~24-core box the TOTAL core budget
-      # (shared with gateway/session/storage), not git_repo's pool, is the
-      # ceiling — a bigger pool just steals cores from the other tiers. The real
-      # wins are build-level (zlib-ng; hardware SHA-NI instead of bundled
-      # SHA1DC) and structural (less loose-object churn), not a config knob.
-      workers: 4
+      # CPU-bound: a put_file commit is libgit2 work — zlib deflate/inflate
+      # (~27%) + SHA1DC (~15%) + tree rebuild; disk write/fsync is ~0.1%, so it
+      # is NOT disk-bound and storage shards do nothing for it. That work runs on
+      # the libuv worker POOL (sized workers*4), and parallelises per bare repo —
+      # so `workers` is git_repo's commit-parallelism knob. The isolated put_file
+      # test is pool-thread-bound (16 threads at workers:4 → ~8k commits/s while
+      # using only ~13 cores), so raise it: workers:8 gives a 32-thread pool to
+      # push more concurrent commits across the cores. git_repo is the heaviest
+      # tier, so it gets the most parallelism. (Remaining wins are build-level:
+      # zlib-ng — done — and hardware SHA-NI instead of bundled SHA1DC.)
+      workers: 8
       plugins: [git_repo]
       config:
         git_repo:
@@ -400,6 +397,7 @@ mesh:
 
     git_pipeline:
       port: auto
+      workers: 8   # was single-worker → enqueue serialized
       plugins: [git_pipeline]
       config:
         remotes:

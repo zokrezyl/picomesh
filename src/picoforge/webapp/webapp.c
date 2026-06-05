@@ -1863,7 +1863,11 @@ static void page_admin_users(struct yloop *loop, struct yloop_stream *s,
         size_t roster_n = roster ? yjson_array_size(roster) : 0;
         for (size_t i = 0; i < roster_n; ++i) {
             const struct yjson_value *e = yjson_array_at(roster, i);
-            const char *name = yjson_as_string(yjson_object_get(e, "name"), "");
+            /* accounts.accounts.list rows are {"uid":N,"username":"…"} (the
+             * relational `SELECT uid,username FROM users` column names). The
+             * key is "username", not "name" — reading "name" left every row
+             * blank, so the roster never showed the registered users. */
+            const char *name = yjson_as_string(yjson_object_get(e, "username"), "");
             char uid_buf[24];
             snprintf(uid_buf, sizeof(uid_buf), "%lld",
                      (long long)yjson_as_int(yjson_object_get(e, "uid"), 0));

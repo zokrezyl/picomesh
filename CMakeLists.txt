@@ -75,6 +75,7 @@ add_library(picomesh_runtime STATIC
     vendor/cmp/cmp.c
     src/picomesh/yco/coro.c
     src/picomesh/yloop/yloop.c
+    src/picomesh/yloop/yexec.c
     src/picomesh/yengine/engine.c
     src/picomesh/yengine/resolve.c
     src/picomesh/frontends/yrpc/yrpc.c
@@ -326,8 +327,24 @@ target_include_directories(picoforge-webapp PRIVATE
 # Generic Picomesh core app for browsing the trace collector. It binds
 # loopback by default and talks directly to trace_collector over yrpc; it is
 # deliberately separate from the public Picoforge webapp sidecar.
+# Embed the vendored ECharts bundle into the binary so picotrace serves it
+# locally — no CDN, works in an airgapped environment.
+set(PICOTRACE_ECHARTS_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/picomesh/core-apps/picotrace/vendor/echarts.min.js)
+set(PICOTRACE_ECHARTS_GEN ${CMAKE_CURRENT_BINARY_DIR}/picotrace_echarts.c)
+add_custom_command(
+    OUTPUT ${PICOTRACE_ECHARTS_GEN}
+    COMMAND ${CMAKE_COMMAND}
+        -DBIN2C_SRC=${PICOTRACE_ECHARTS_SRC}
+        -DBIN2C_DST=${PICOTRACE_ECHARTS_GEN}
+        -DBIN2C_SYM=picotrace_echarts_js
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/bin2c.cmake
+    DEPENDS ${PICOTRACE_ECHARTS_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/bin2c.cmake
+    COMMENT "Embedding vendored echarts.min.js into picotrace"
+    VERBATIM)
+
 add_executable(picotrace
     src/picomesh/core-apps/picotrace/main.c
+    ${PICOTRACE_ECHARTS_GEN}
     $<TARGET_OBJECTS:picomesh_plugin_trace_collector>
     src/picomesh/yplatform/longjmp_chk_stub.c
 )

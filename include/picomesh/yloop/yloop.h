@@ -47,6 +47,13 @@ struct picomesh_void_result yloop_run(struct yloop *l);
  * must touch only `arg`. Outside a coroutine it runs inline. */
 struct picomesh_void_result yloop_run_blocking(struct yloop *l, void (*work)(void *), void *arg);
 
+/* Resume `coro` (parked via picomesh_coro_yield) from ANOTHER thread: queue it
+ * and wake the loop; the loop thread performs the actual picomesh_coro_resume.
+ * Coroutines are thread-confined (libco scheduler is thread-local), so this is
+ * the only safe way to resume one from off-loop — the handoff a worker-thread
+ * executor (yexec) uses to wake the coroutine that offloaded work to it. */
+void yloop_post_resume(struct yloop *l, struct picomesh_coro *coro);
+
 /* Drain pending work, then exit yloop_run. Safe to call from a serve coro. */
 void yloop_stop(struct yloop *l);
 

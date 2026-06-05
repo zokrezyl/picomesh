@@ -122,13 +122,27 @@ a paged API for pathologically large traces is a future refinement.
 ## Picotrace
 
 `picotrace` is the internal trace browser in
-`src/picomesh/core-apps/picotrace`. It is not part of the public Picoforge
-webapp and does not add gateway HTTP trace routes. By default it binds
-`127.0.0.1:8232` and talks to the internal yhttp bridge at
-`http://127.0.0.1:8230`:
+`src/picomesh/core-apps/picotrace`. It is a generic mesh-managed webapp, not a
+Picoforge sidecar route, and it should stay loopback-only. Configure it under
+`mesh.webapps`:
+
+```yaml
+mesh:
+  webapps:
+    picotrace:
+      app: picotrace
+      port: auto
+      host: 127.0.0.1
+      upstream:
+        service: trace_collector
+```
+
+During reconciliation, mesh allocates the webapp port, resolves
+`trace_collector` through the registry, and starts `picotrace` with that direct
+yrpc upstream address. For manual testing, pass the resolved collector address:
 
 ```sh
-build-desktop-release/picotrace --upstream-url http://127.0.0.1:8230
+build-desktop-release/picotrace --upstream-service trace_collector --upstream-host 127.0.0.1 --upstream-port <collector-port>
 ```
 
 ## Configuration (`assets/picoforge/config/picoforge.yaml`)

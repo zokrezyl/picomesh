@@ -29,8 +29,16 @@ struct yjson_writer;
 void ytelemetry_store_init(size_t max_spans, uint64_t max_age_seconds);
 
 /* Ingest one JSON span object (the body of one NDJSON line). Returns 1 if
- * stored, 0 if malformed/missing required fields. */
+ * accepted, 0 if malformed/missing required fields. Accepted spans land in the
+ * calling thread's lock-free arena and become visible to queries on the next
+ * flush (bucket-full, the periodic time flush, or ytelemetry_store_flush_local). */
 int ytelemetry_store_ingest_json(const char *json, size_t len);
+
+/* Flush the calling thread's accumulation arena into the shared store. A
+ * collector worker calls this from a periodic timer on its own event loop to
+ * bound query staleness; it is thread-confined and takes only the brief
+ * per-shard flush locks. No-op if the calling thread has no pending spans. */
+void ytelemetry_store_flush_local(void);
 
 /* ---- query writers (emit into a caller-owned yjson_writer) ----------- */
 
