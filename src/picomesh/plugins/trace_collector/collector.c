@@ -36,21 +36,28 @@ static uint64_t collector_now_ns(void)
  * (retention). Idempotent (ytelemetry_store_init only honours the first
  * call); the `done` flag just skips the per-call config lookup. Safe across
  * the collector's worker threads — same value, idempotent init. */
+static int64_t collector_cfg_int(const struct yconfig *cfg, const char *key)
+{
+    struct yconfig_node_ptr_result r = yconfig_get(cfg, key);
+    return (PICOMESH_IS_OK(r) && r.value) ? yconfig_node_as_int(r.value, 0) : 0;
+}
+
 static void collector_ensure_store(void)
 {
     static int done = 0;
     if (done) return;
-    int64_t max_spans = 0, max_age = 0;
+    struct ytelemetry_store_config sc = {0};
     struct picomesh_engine *e = picomesh_active_engine();
     if (e) {
         const struct yconfig *cfg = picomesh_engine_config(e);
-        struct yconfig_node_ptr_result ms = yconfig_get(cfg, "telemetry.max_spans");
-        if (PICOMESH_IS_OK(ms) && ms.value) max_spans = yconfig_node_as_int(ms.value, 0);
-        struct yconfig_node_ptr_result ma = yconfig_get(cfg, "telemetry.max_age_seconds");
-        if (PICOMESH_IS_OK(ma) && ma.value) max_age = yconfig_node_as_int(ma.value, 0);
+        int64_t v;
+        if ((v = collector_cfg_int(cfg, "telemetry.max_spans")) > 0) sc.max_spans = (size_t)v;
+        if ((v = collector_cfg_int(cfg, "telemetry.max_age_seconds")) > 0) sc.max_age_seconds = (uint64_t)v;
+        if ((v = collector_cfg_int(cfg, "telemetry.shards")) > 0) sc.shards = (unsigned)v;
+        if ((v = collector_cfg_int(cfg, "telemetry.bucket_spans")) > 0) sc.bucket_spans = (size_t)v;
+        if ((v = collector_cfg_int(cfg, "telemetry.flush_ms")) > 0) sc.flush_ms = (uint64_t)v;
     }
-    ytelemetry_store_init(max_spans > 0 ? (size_t)max_spans : 0,
-                          max_age > 0 ? (uint64_t)max_age : 0);
+    ytelemetry_store_init_config(&sc); /* any field left 0 takes its built-in default */
     done = 1;
 }
 
@@ -58,6 +65,7 @@ static void collector_ensure_store(void)
 static struct picomesh_string_result render(void (*emit)(struct yjson_writer *, void *),
                                             void *ud)
 {
+    collector_ensure_store(); /* config applies on first query too, not only ingest */
     struct yjson_writer *w = yjson_writer_new();
     if (!w) return PICOMESH_ERR(picomesh_string, "trace_collector: writer alloc failed");
     emit(w, ud);
@@ -80,9 +88,11 @@ struct picomesh_void_result trace_collector_trace_collector_ingest_impl(
     collector_ensure_store();
     /* The store tallies malformed/evicted spans (queryable via store_stats),
      * so bad input is not invisible. Ingest is fire-and-forget at the wire,
-     * so we still return OK regardless — the caller never waits on this. */
+     * so we still return OK regardless — the caller never waits on this.
+     * The payload is a JSON array (the batched sender) or one span object
+     * (back-compat); the batch entry point handles both and parses once. */
     if (span_json && *span_json)
-        ytelemetry_store_ingest_json(span_json, strlen(span_json));
+        ytelemetry_store_ingest_batch_json(span_json, strlen(span_json));
     return PICOMESH_OK_VOID();
 }
 

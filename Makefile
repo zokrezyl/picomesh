@@ -23,11 +23,14 @@ BUILD_DIR_DEPLOY  := build-deploy
 .PHONY: help all build-desktop-release build-desktop-debug build-linux-riscv64-release build-deploy build-yemu-release build-webasm-yemu-release perf-picoforge clean
 
 # picoforge perf tunables (override on the command line, e.g.
-#   make perf-picoforge DURATION=30 CONNECTIONS=64 SEED_USERS=20000)
-SEED_USERS       ?= 50000
-CONNECTIONS      ?= 32
+#   make perf-picoforge DURATION=30 CONNECTIONS=128 GENERATORS=12)
+# GENERATORS = parallel load-generator processes; CONNECTIONS is PER generator.
+# A single generator caps ~9k req/s, so several are needed to saturate the mesh.
+GENERATORS       ?= 8
+CONNECTIONS      ?= 256
 DURATION         ?= 60
 REPOS_PER_WORKER ?= 8
+SEED_USERS       ?= 0
 
 help:
 	@awk 'BEGIN{FS=":"} /^## / {sub(/^## /,""); print "  " $$0}' $(MAKEFILE_LIST)
@@ -46,16 +49,19 @@ build-desktop-debug:
 	@ln -sfn $(BUILD_DIR_DEBUG)/compile_commands.json compile_commands.json
 	$(CMAKE) --build $(BUILD_DIR_DEBUG) --parallel $(JOBS)
 
-## perf-picoforge          mixed-load perf on an INDEPENDENT mesh: stage-1
-##                          seeds up to SEED_USERS accounts, then CONNECTIONS
-##                          workers each emulate a user issuing a random op
-##                          stream (read/KV/file/issue/run/repo/login) for
-##                          DURATION secs. Port-shifted (9xxx) + isolated
-##                          storage, so it never touches a running dev stack.
-##                          Tunables: SEED_USERS CONNECTIONS DURATION REPOS_PER_WORKER
+## perf-picoforge          mixed-load perf on an INDEPENDENT mesh: GENERATORS
+##                          parallel load processes, CONNECTIONS each, every
+##                          connection a self-registered user issuing a random
+##                          op stream (read/KV/file/issue/run/repo/login) for
+##                          DURATION secs; throughput is summed across all
+##                          generators. One generator caps ~9k req/s, so the
+##                          default fans out to saturate the mesh (~50k mixed).
+##                          Port-shifted (9xxx) + isolated storage, never
+##                          touches a running dev stack.
+##                          Tunables: GENERATORS CONNECTIONS DURATION REPOS_PER_WORKER
 perf-picoforge: build-desktop-release
-	SEED_USERS=$(SEED_USERS) CONNECTIONS=$(CONNECTIONS) DURATION=$(DURATION) \
-	REPOS_PER_WORKER=$(REPOS_PER_WORKER) \
+	GENERATORS=$(GENERATORS) SEED_USERS=$(SEED_USERS) CONNECTIONS=$(CONNECTIONS) \
+	DURATION=$(DURATION) REPOS_PER_WORKER=$(REPOS_PER_WORKER) \
 		bash tests/performance/picoforge/perf-run.sh
 
 ## build-deploy             stage build-deploy/ — host-runnable picomesh tree

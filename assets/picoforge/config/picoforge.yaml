@@ -114,16 +114,27 @@ mesh:
       # coroutine scheduler, all accept()ing on :8220 via SO_REUSEPORT and
       # multiplexing keep-alive connections. The receiver must drain ~5
       # spans per gateway request, so it needs real parallelism — a single
-      # worker backpressures the request path (gh#13). The in-memory store
-      # is mutex-guarded, so multi-worker is safe (gh#13 tracks sharding the
-      # store so it scales past the single lock).
+      # worker backpressures the request path (gh#13). The in-memory store is
+      # sharded with per-worker lock-free arenas (gh#13 done), so it scales
+      # with workers instead of serializing on a single lock.
       workers: 16
       plugins: [trace_collector]
       config:
-        # In-memory store retention (read by the plugin → ytelemetry_store_init).
+        # In-memory store (read by the plugin → ytelemetry_store_init_config).
+        # Every knob below is optional; omit one to take its built-in default.
         telemetry:
-          max_spans: 200000
-          max_age_seconds: 3600
+          # Sized for the production load: ~10k req/s x ~5 spans = ~50k spans/s.
+          # Retention window = max_spans / span_rate, so 2,000,000 / 50,000 = ~40s
+          # of traces viewable under constant load (~830 MB at ~416 B/span). The
+          # per-trace index keeps list/detail queries O(recent), so a large
+          # max_spans does NOT slow queries — raise it for a longer window.
+          max_spans: 2000000       # total spans kept in RAM, across all shards
+          max_age_seconds: 3600    # drop spans older than this (0 = no age cap)
+          shards: 16               # parallel ingest partitions; match `workers`
+          bucket_spans: 256        # per-shard arena batch before a flush
+                                   #   higher = fewer locks/bigger batches, more RAM
+                                   #   (per worker: shards * bucket_spans * ~416B)
+          flush_ms: 50             # max staleness before a partial arena flush
         remotes: []
 
     # portalloc — bind-probing port allocator. Itself `port: auto`: it cannot

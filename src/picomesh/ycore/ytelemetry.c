@@ -337,66 +337,128 @@ static size_t ytel_lit(char *buf, size_t cap, size_t off, const char *s)
     return off;
 }
 
-/* Send one finished span to the collector plugin's ingest method over the
- * current worker's own connection, fire-and-forget. No-op if the collector
- * is not a remote of this process (or this IS the collector). Bypasses the
- * codegen stub on purpose so the ship-out itself emits no span. */
-static void ytel_ship(const struct ytelemetry_span *sp, int ok, const char *err,
-                      uint64_t dur_ns)
+/* Build one span's JSON object into `js`. Returns its length, or 0 on
+ * overflow (the span is dropped). */
+static size_t ytel_build_span(char *js, size_t cap, const struct ytelemetry_span *sp,
+                              int ok, const char *err, uint64_t dur_ns)
 {
+    size_t off = 0;
+    char uidbuf[16];
+    snprintf(uidbuf, sizeof(uidbuf), "%u", sp->uid);
+    off = ytel_lit(js, cap, off, "{\"trace_id\":");        off = ytel_jstr(js, cap, off, sp->trace_id);
+    off = ytel_lit(js, cap, off, ",\"span_id\":");          off = ytel_jstr(js, cap, off, sp->span_id);
+    off = ytel_lit(js, cap, off, ",\"parent_span_id\":");   off = ytel_jstr(js, cap, off, sp->parent_id);
+    off = ytel_lit(js, cap, off, ",\"name\":");             off = ytel_jstr(js, cap, off, sp->name);
+    off = ytel_lit(js, cap, off, ",\"kind\":");             off = ytel_jstr(js, cap, off, ytel_kind_str(sp->kind));
+    off = ytel_lit(js, cap, off, ",\"service_name\":");     off = ytel_jstr(js, cap, off, ytel_service_name());
+    off = ytel_lit(js, cap, off, ",\"node_id\":");          off = ytel_jstr(js, cap, off, ytel_node_id());
+    { char n[48]; snprintf(n, sizeof(n), ",\"start_time_ns\":%llu", (unsigned long long)sp->start_unix_ns); off = ytel_lit(js, cap, off, n); }
+    { char n[48]; snprintf(n, sizeof(n), ",\"duration_ns\":%llu", (unsigned long long)dur_ns); off = ytel_lit(js, cap, off, n); }
+    off = ytel_lit(js, cap, off, ",\"status\":");           off = ytel_jstr(js, cap, off, ok ? "ok" : "error");
+    if (!ok && err && *err) { off = ytel_lit(js, cap, off, ",\"error_message\":"); off = ytel_jstr(js, cap, off, err); }
+    off = ytel_lit(js, cap, off, ",\"attributes\":{\"rpc.system\":\"yrpc\",\"picomesh.uid\":");
+    off = ytel_jstr(js, cap, off, uidbuf);
+    off = ytel_lit(js, cap, off, "}}");
+    return off >= cap ? 0 : off;
+}
+
+/* Per-worker span batch (an OTel BatchSpanProcessor): finished spans accumulate
+ * thread-locally and ship to the collector as ONE array per RPC — one frame,
+ * one parse for N spans, instead of one RPC per span. Bounds keep each frame
+ * under the yrpc body cap (BUF_MAX). Thread-confined → no lock on the hot path. */
+#define YTEL_BATCH_MAX_SPANS 128
+#define YTEL_BATCH_MAX_BYTES 48000           /* keep the array payload < 64KB BUF_MAX */
+#define YTEL_BATCH_FLUSH_NS  200000000ull    /* 200ms scheduled delay */
+
+struct ytel_batch_state {
+    char *json;   /* accumulated "{..},{..}" without the enclosing brackets */
+    size_t len, cap;
+    int count;
+    uint64_t last_flush_ns;
+    uint8_t *body; /* wire-frame scratch, grown as needed */
+    size_t body_cap;
+};
+
+static __thread struct ytel_batch_state ytel_batch;
+
+/* Ship the accumulated batch as one ingest call, fire-and-forget. Resets the
+ * buffer whether or not the ship-out succeeds (best-effort telemetry). */
+static void ytel_flush_batch(void)
+{
+    struct ytel_batch_state *b = &ytel_batch;
+    if (b->count == 0 || b->len == 0) { b->count = 0; b->len = 0; return; }
+    b->last_flush_ns = ytel_mono_ns();
+
     struct picomesh_engine *e = picomesh_active_engine();
-    if (!e) return;
-    struct ctx c = picomesh_engine_service_ctx(e, "trace_collector");
-    if (!c.peer) return; /* collector not wired here → drop */
+    struct ctx c = e ? picomesh_engine_service_ctx(e, "trace_collector") : (struct ctx){0};
+    if (!c.peer) { b->count = 0; b->len = 0; return; } /* collector not wired → drop */
 
     static method_slot ingest_slot = METHOD_SLOT_UNDEFINED;
     if (ingest_slot == METHOD_SLOT_UNDEFINED) {
         struct method_slot_result sr =
             method_slot_by_name("trace_collector", "trace_collector_ingest");
-        if (PICOMESH_IS_ERR(sr)) { picomesh_error_destroy(sr.error); return; }
+        if (PICOMESH_IS_ERR(sr)) { picomesh_error_destroy(sr.error); b->count = 0; b->len = 0; return; }
         ingest_slot = sr.value;
     }
-
     struct object_ptr_result obr = object_create_in_ctx(&c, "trace_collector_trace_collector");
-    if (PICOMESH_IS_ERR(obr)) { picomesh_error_destroy(obr.error); return; }
+    if (PICOMESH_IS_ERR(obr)) { picomesh_error_destroy(obr.error); b->count = 0; b->len = 0; return; }
     struct object *obj = obr.value;
-
     uint32_t rid = peer_channel_ensure_remote_id(c.peer, ingest_slot);
-    if (rid == RPC_REMOTE_ID_UNRESOLVED) return;
+    if (rid == RPC_REMOTE_ID_UNRESOLVED) { b->count = 0; b->len = 0; return; }
 
-    /* Build the span JSON (the single string arg to ingest). */
-    char js[1024];
-    size_t off = 0;
-    char uidbuf[16];
-    snprintf(uidbuf, sizeof(uidbuf), "%u", sp->uid);
-    off = ytel_lit(js, sizeof(js), off, "{\"trace_id\":");        off = ytel_jstr(js, sizeof(js), off, sp->trace_id);
-    off = ytel_lit(js, sizeof(js), off, ",\"span_id\":");          off = ytel_jstr(js, sizeof(js), off, sp->span_id);
-    off = ytel_lit(js, sizeof(js), off, ",\"parent_span_id\":");   off = ytel_jstr(js, sizeof(js), off, sp->parent_id);
-    off = ytel_lit(js, sizeof(js), off, ",\"name\":");             off = ytel_jstr(js, sizeof(js), off, sp->name);
-    off = ytel_lit(js, sizeof(js), off, ",\"kind\":");             off = ytel_jstr(js, sizeof(js), off, ytel_kind_str(sp->kind));
-    off = ytel_lit(js, sizeof(js), off, ",\"service_name\":");     off = ytel_jstr(js, sizeof(js), off, ytel_service_name());
-    off = ytel_lit(js, sizeof(js), off, ",\"node_id\":");          off = ytel_jstr(js, sizeof(js), off, ytel_node_id());
-    { char n[48]; snprintf(n, sizeof(n), ",\"start_time_ns\":%llu", (unsigned long long)sp->start_unix_ns); off = ytel_lit(js, sizeof(js), off, n); }
-    { char n[48]; snprintf(n, sizeof(n), ",\"duration_ns\":%llu", (unsigned long long)dur_ns); off = ytel_lit(js, sizeof(js), off, n); }
-    off = ytel_lit(js, sizeof(js), off, ",\"status\":");           off = ytel_jstr(js, sizeof(js), off, ok ? "ok" : "error");
-    if (!ok && err && *err) { off = ytel_lit(js, sizeof(js), off, ",\"error_message\":"); off = ytel_jstr(js, sizeof(js), off, err); }
-    off = ytel_lit(js, sizeof(js), off, ",\"attributes\":{\"rpc.system\":\"yrpc\",\"picomesh.uid\":");
-    off = ytel_jstr(js, sizeof(js), off, uidbuf);
-    off = ytel_lit(js, sizeof(js), off, "}}");
-    if (off >= sizeof(js)) return; /* overflow → drop (bounded) */
-
-    /* Pack the wire body: empty header bag + object handle + string arg. */
-    uint8_t body[1280];
-    size_t bo = yheaders_serialize(NULL, body, sizeof(body));
-    if (bo == 0) return;
+    size_t arg_len = b->len + 2; /* the enclosing [ ] */
+    size_t need = 256 + 8 + 4 + arg_len;
+    if (b->body_cap < need) {
+        uint8_t *nb = realloc(b->body, need + 1024);
+        if (!nb) { b->count = 0; b->len = 0; return; }
+        b->body = nb; b->body_cap = need + 1024;
+    }
+    size_t bo = yheaders_serialize(NULL, b->body, b->body_cap);
+    if (bo == 0) { b->count = 0; b->len = 0; return; }
     uint64_t h = *(uint64_t *)((char *)obj + sizeof(struct object));
-    if (bo + 8 + 4 + off > sizeof(body)) return;
-    memcpy(body + bo, &h, 8); bo += 8;
-    uint32_t slen = (uint32_t)off;
-    memcpy(body + bo, &slen, 4); bo += 4;
-    memcpy(body + bo, js, off); bo += off;
+    memcpy(b->body + bo, &h, 8); bo += 8;
+    uint32_t slen = (uint32_t)arg_len;
+    memcpy(b->body + bo, &slen, 4); bo += 4;
+    b->body[bo++] = '[';
+    memcpy(b->body + bo, b->json, b->len); bo += b->len;
+    b->body[bo++] = ']';
 
-    rpc_call_oneway(c.peer, RPC_OP_CALL, rid, body, bo);
+    rpc_call_oneway(c.peer, RPC_OP_CALL, rid, b->body, bo);
+    b->count = 0;
+    b->len = 0;
+}
+
+/* Append one finished span to this worker's batch; flush on size/bytes/time. */
+static void ytel_buffer_span(const struct ytelemetry_span *sp, int ok, const char *err,
+                             uint64_t dur_ns)
+{
+    struct ytel_batch_state *b = &ytel_batch;
+    if (!b->json) {
+        b->cap = YTEL_BATCH_MAX_BYTES + 2048;
+        b->json = malloc(b->cap);
+        if (!b->json) { b->cap = 0; return; } /* can't buffer → drop (best-effort) */
+        b->last_flush_ns = ytel_mono_ns();
+    }
+
+    char js[1024];
+    size_t off = ytel_build_span(js, sizeof(js), sp, ok, err, dur_ns);
+    if (off == 0) return; /* overflow → drop this span */
+
+    /* Flush first if appending would exceed the byte budget for one frame. */
+    if (b->count && b->len + 1 + off > YTEL_BATCH_MAX_BYTES) ytel_flush_batch();
+
+    if (b->len + (b->count ? 1u : 0u) + off <= b->cap) {
+        if (b->count) b->json[b->len++] = ',';
+        memcpy(b->json + b->len, js, off);
+        b->len += off;
+        b->count++;
+    }
+
+    if (b->count >= YTEL_BATCH_MAX_SPANS) {
+        ytel_flush_batch();
+    } else if (b->count && ytel_mono_ns() - b->last_flush_ns > YTEL_BATCH_FLUSH_NS) {
+        ytel_flush_batch();
+    }
 }
 
 void ytelemetry_span_end(struct ytelemetry_span *sp, int ok, const char *err)
@@ -406,5 +468,5 @@ void ytelemetry_span_end(struct ytelemetry_span *sp, int ok, const char *err)
     uint64_t dur = ytel_mono_ns() - sp->start_mono_ns;
     /* Local /_perf aggregate, regardless of collector availability. */
     yspan_record(sp->name, (double)dur / 1000.0);
-    ytel_ship(sp, ok, err, dur);
+    ytel_buffer_span(sp, ok, err, dur);
 }

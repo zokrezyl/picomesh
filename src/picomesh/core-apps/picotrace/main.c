@@ -18,6 +18,7 @@
 #include <picohttpparser.h>
 
 #include <arpa/inet.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -519,6 +520,16 @@ static void usage(const char *prog)
 int main(int argc, char **argv)
 {
     setbuf(stdout, NULL); setbuf(stderr, NULL);
+
+    /* Ignore SIGPIPE process-wide. A write to a peer that has closed its end
+     * must surface as EPIPE on the syscall, not kill the process. The upstream
+     * collector connection (a raw blocking fd) and the client response writes
+     * both go to short-lived peers; under load the collector drops a query
+     * mid-call, and without this the next write would terminate picotrace.
+     * The mesh-hosted services get this from yengine; this standalone app does
+     * not go through yengine, so it must set it itself. */
+    signal(SIGPIPE, SIG_IGN);
+
     struct yargv_chain_ptr_result pr = yargv_parse(OPTIONS, sizeof(OPTIONS) / sizeof(OPTIONS[0]), argc, argv);
     if (PICOMESH_IS_ERR(pr)) {
         fprintf(stderr, "picotrace: argv parse: %s\n", pr.error.msg ? pr.error.msg : "?");

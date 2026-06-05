@@ -26,6 +26,20 @@ struct yjson_writer;
  * no-op (the first sizing wins). If a query/ingest runs before init, the
  * store lazily inits with defaults. max_spans 0 ⇒ default; max_age 0 ⇒ no
  * age limit. */
+/* Tunables for the in-memory store. Any field left 0 takes its built-in
+ * default. All are read from the collector's `telemetry:` config block. */
+struct ytelemetry_store_config {
+    size_t max_spans;         /* total capacity across all shards (default 50000) */
+    uint64_t max_age_seconds; /* drop spans older than this (0 = no age limit) */
+    unsigned shards;          /* parallel ingest partitions (default 16) */
+    size_t bucket_spans;      /* per-shard arena batch before a flush (default 256) */
+    uint64_t flush_ms;        /* periodic arena flush interval (default 50) */
+};
+
+/* Size and configure the store. First call wins (idempotent). */
+void ytelemetry_store_init_config(const struct ytelemetry_store_config *config);
+
+/* Back-compat shorthand: only the two retention knobs, defaults for the rest. */
 void ytelemetry_store_init(size_t max_spans, uint64_t max_age_seconds);
 
 /* Ingest one JSON span object (the body of one NDJSON line). Returns 1 if
@@ -33,6 +47,11 @@ void ytelemetry_store_init(size_t max_spans, uint64_t max_age_seconds);
  * calling thread's lock-free arena and become visible to queries on the next
  * flush (bucket-full, the periodic time flush, or ytelemetry_store_flush_local). */
 int ytelemetry_store_ingest_json(const char *json, size_t len);
+
+/* Ingest a batch payload: a JSON array of span objects (the batched sender
+ * path), or a single span object (back-compat). The whole payload is parsed
+ * once. Returns the number of spans accepted. */
+int ytelemetry_store_ingest_batch_json(const char *json, size_t len);
 
 /* Flush the calling thread's accumulation arena into the shared store. A
  * collector worker calls this from a periodic timer on its own event loop to

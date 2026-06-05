@@ -34,10 +34,18 @@ CTRL=9800
 GW=9090
 SIDE=9080   # browser-facing webapp (port-shifted 8080→9080)
 
-SEED_USERS=${SEED_USERS:-50000}
-CONNECTIONS=${CONNECTIONS:-32}
+# A SINGLE picoforge-perf process caps at ~9k req/s — not because the mesh is
+# slow, but because one client process can only keep ~its-own-connections worth
+# of requests in flight (throughput = concurrency / latency). The mesh itself
+# does ~50k mixed. To drive it to saturation we run GENERATORS processes in
+# parallel and sum their throughput. CONNECTIONS is PER generator.
+GENERATORS=${GENERATORS:-8}
+CONNECTIONS=${CONNECTIONS:-256}
 DURATION=${DURATION:-60}
 REPOS_PER_WORKER=${REPOS_PER_WORKER:-8}
+# Connections self-register their own user (the throughput path). A non-zero
+# pre-seed across many generators collides on usernames, so default it off.
+SEED_USERS=${SEED_USERS:-0}
 
 [ -x "$PICOMESH" ] && [ -x "$PERF" ] || {
     echo "build first: make build-desktop-release"; exit 1; }
@@ -124,15 +132,34 @@ snap_cpu() {
 
 curl -s "http://127.0.0.1:$GW/_perf?reset" >/dev/null 2>&1   # fresh op-latency window
 
-echo "== picoforge mixed load: seed=$SEED_USERS connections=$CONNECTIONS duration=${DURATION}s =="
+echo "== picoforge mixed load: $GENERATORS generators × $CONNECTIONS connections each (= $((GENERATORS * CONNECTIONS)) total), duration=${DURATION}s =="
 snap_cpu > tmp/perf-cpu-before.txt
+rm -f tmp/perf-load-*.txt
 T0=$SECONDS
-"$PERF" --host 127.0.0.1 --port "$GW" --scenario mixed \
-    --seed-users "$SEED_USERS" --connections "$CONNECTIONS" \
-    --duration "$DURATION" --repos-per-worker "$REPOS_PER_WORKER" > tmp/perf-load.txt 2>&1
+for g in $(seq 1 "$GENERATORS"); do
+    "$PERF" --host 127.0.0.1 --port "$GW" --scenario mixed \
+        --seed-users "$SEED_USERS" --connections "$CONNECTIONS" \
+        --duration "$DURATION" --repos-per-worker "$REPOS_PER_WORKER" \
+        > "tmp/perf-load-$g.txt" 2>&1 &
+done
+wait
 WINDOW=$((SECONDS - T0)); [ "$WINDOW" -lt 1 ] && WINDOW=1
 snap_cpu > tmp/perf-cpu-after.txt
 curl -s "http://127.0.0.1:$GW/_perf" > tmp/perf-ops.txt 2>&1
+
+# Aggregate the N generator outputs into one summary perf-report.py understands
+# (sum throughput / requests / sessions across all generators).
+awk '
+    /throughput/{thr+=$3}
+    /requests/{ok+=$3; err+=$5}
+    /established/{for(i=1;i<=NF;i++) if($i ~ /^[0-9]+$/){sess+=$i; tot+=$(i+2); break}}
+    END{
+        printf "scenario       : mixed (%d generators x %d connections)\n", G, C
+        printf "concurrency    : %d total connections\n", G*C
+        printf "sessions       : %d / %d established\n", sess, tot
+        printf "requests       : %d ok, %d errors\n", ok, err
+        printf "throughput     : %.1f req/s\n", thr
+    }' G="$GENERATORS" C="$CONNECTIONS" tmp/perf-load-*.txt > tmp/perf-load.txt
 
 cat tmp/perf-load.txt
 python3 tests/performance/picoforge/perf-report.py \

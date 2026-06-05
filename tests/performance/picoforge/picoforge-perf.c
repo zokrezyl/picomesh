@@ -488,9 +488,14 @@ static int scenario_step(struct vconn *vc, long counter)
         case OP_LOGIN: {
             char lbody[128];
             int bn = snprintf(lbody, sizeof(lbody), "username=%s&password=x", vc->uname);
-            char sid[64];
+            char new_sid[64];
             st = http_try(vc, "POST", "/login", "application/x-www-form-urlencoded", NULL,
-                          lbody, (size_t)bn, sid, sizeof(sid));
+                          lbody, (size_t)bn, new_sid, sizeof(new_sid));
+            /* Adopt the fresh session. Otherwise the connection keeps using its
+             * stale sid and the just-minted session is orphaned in the store —
+             * over a long run that bloats the session lookup and drags throughput. */
+            if ((st == 303 || st == 200) && new_sid[0])
+                memcpy(vc->sid, new_sid, sizeof(vc->sid));
             break;
         }
         case OP__COUNT: break;
