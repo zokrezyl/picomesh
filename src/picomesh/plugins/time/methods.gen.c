@@ -7,6 +7,7 @@
 #include <picomesh/yclass/rpc.h>
 #include <picomesh/yclass/yheaders.h>
 #include <picomesh/msgpack/msgpack.h>
+#include <picomesh/allocator/allocator.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -59,7 +60,22 @@ struct picomesh_int64_result time_clock_now_ms(struct ctx * ctx, struct object *
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int64, "time_clock_now_ms: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_int64_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_int64, "time_clock_now_ms: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -72,24 +88,24 @@ struct picomesh_int64_result time_clock_now_ms(struct ctx * ctx, struct object *
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "time_clock_now_ms: header serialize overflow");
-                return PICOMESH_ERR(picomesh_int64, "time_clock_now_ms: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_int64, "time_clock_now_ms: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "time_clock_now_ms: pack overflow"); return PICOMESH_ERR(picomesh_int64, "time_clock_now_ms: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "time_clock_now_ms: pack overflow"); _ret = PICOMESH_ERR(picomesh_int64, "time_clock_now_ms: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_int64, "time_clock_now_ms: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_int64, "time_clock_now_ms: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -97,12 +113,17 @@ struct picomesh_int64_result time_clock_now_ms(struct ctx * ctx, struct object *
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_int64, _msg[0] ? strdup(_msg) : "time_clock_now_ms: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_int64, _msg[0] ? strdup(_msg) : "time_clock_now_ms: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(int64_t)) return PICOMESH_ERR(picomesh_int64, "time_clock_now_ms: truncated RPC payload");
+        if (_wn != 1 + sizeof(int64_t)) { _ret = PICOMESH_ERR(picomesh_int64, "time_clock_now_ms: truncated RPC payload"); goto _rpc_done; }
         int64_t _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_int64, _v);
+        _ret = PICOMESH_OK(picomesh_int64, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_int64, "time_clock_now_ms: no impl on this class");
@@ -159,7 +180,22 @@ struct picomesh_int64_result time_clock_sleep_ms(struct ctx * ctx, struct object
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_int64_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -172,27 +208,27 @@ struct picomesh_int64_result time_clock_sleep_ms(struct ctx * ctx, struct object
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "time_clock_sleep_ms: header serialize overflow");
-                return PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "time_clock_sleep_ms: pack overflow"); return PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "time_clock_sleep_ms: pack overflow"); _ret = PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(ms) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "time_clock_sleep_ms: pack overflow"); return PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: pack overflow"); }
+        if (_off + sizeof(ms) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "time_clock_sleep_ms: pack overflow"); _ret = PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &ms, sizeof(ms)); _off += sizeof(ms);
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -200,12 +236,17 @@ struct picomesh_int64_result time_clock_sleep_ms(struct ctx * ctx, struct object
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_int64, _msg[0] ? strdup(_msg) : "time_clock_sleep_ms: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_int64, _msg[0] ? strdup(_msg) : "time_clock_sleep_ms: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(int64_t)) return PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: truncated RPC payload");
+        if (_wn != 1 + sizeof(int64_t)) { _ret = PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: truncated RPC payload"); goto _rpc_done; }
         int64_t _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_int64, _v);
+        _ret = PICOMESH_OK(picomesh_int64, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_int64, "time_clock_sleep_ms: no impl on this class");

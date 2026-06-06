@@ -11,7 +11,21 @@
  *   ywarn("timeout exceeded: %dms", ms);
  *   yerror("failed to open: %s", path);
  *
- * Env: YTRACE_DEFAULT_ON=yes  - enable everything at startup.
+ * Env:
+ *   YTRACE_DEFAULT_ON=yes      enable trace points at startup (default: off).
+ *   YTRACE_LOG_LEVEL=error     when DEFAULT_ON, only activate points at this
+ *                              level or higher (trace<debug<info<warn<error).
+ *                              Unset = all levels. e.g. =error → only yerror().
+ *   YTRACE_FILE=/path          write the merged log here (default: stderr).
+ *   YTRACE_FLUSH_MS=250        collector merge/flush interval (default 250 ms).
+ *   YTRACE_BUF_KB=128          per-thread, per-buffer size (two per thread).
+ *
+ * Output is NON-BLOCKING and lock-free across threads on the hot path: each
+ * thread appends formatted lines into its OWN double buffer (guarded only by a
+ * per-thread lock, never the shared sink), and a background collector
+ * periodically swaps each thread's buffer, k-way merges all lines by timestamp,
+ * and writes the batch in one go. Logging never serializes worker threads on a
+ * global stderr lock, and never back-pressures a worker (overflow drops + counts).
  */
 
 #include <stdbool.h>

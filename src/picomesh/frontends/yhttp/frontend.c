@@ -1161,7 +1161,13 @@ static void route_login_post(struct yloop_stream *s, const char *body,
     struct picomesh_int_result ex = accounts_accounts_exists(&acc.c, acc.obj, NULL, uid);
     SVC_CLOSE(acc);
     int exists = PICOMESH_IS_OK(ex) && ex.value;
-    if (PICOMESH_IS_ERR(ex)) picomesh_error_destroy(ex.error);
+    if (PICOMESH_IS_ERR(ex)) {
+        yerror("LOGIN-DBG: exists(uid=%u) ERROR: %s", uid,
+               ex.error.msg ? ex.error.msg : "(no msg)");
+        picomesh_error_destroy(ex.error);
+    } else if (!ex.value) {
+        yerror("LOGIN-DBG: exists(uid=%u) returned 0 (clean, no row found)", uid);
+    }
     if (!exists) {
         render_login(s, "no such user — register first", keep_alive);
         return;

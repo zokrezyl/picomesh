@@ -10,6 +10,8 @@ methods:
         type: "struct object *"
       - name: hdrs
         type: "struct yheaders *"
+      - name: db_name
+        type: "const char *"
       - name: shard_key
         type: uint32_t
       - name: sql
@@ -27,6 +29,8 @@ methods:
         type: "struct object *"
       - name: hdrs
         type: "struct yheaders *"
+      - name: db_name
+        type: "const char *"
       - name: shard_key
         type: uint32_t
       - name: sql
@@ -44,6 +48,8 @@ methods:
         type: "struct object *"
       - name: hdrs
         type: "struct yheaders *"
+      - name: db_name
+        type: "const char *"
 classes:
   - name: db
     domain: relational_storage

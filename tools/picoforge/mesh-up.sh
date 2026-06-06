@@ -180,6 +180,13 @@ note_fail() { FAIL=$((FAIL+1)); echo "  FAIL: $1" >&2; }
 # deployment exports its own secret before bring-up.
 export PICOMESH_JWT_SECRET="${PICOMESH_JWT_SECRET:-picoforge-dev-mesh-secret-change-me}"
 
+# Error-only tracing on by default — the control parent's env is inherited by
+# every spawned backend, so yerror() across the whole mesh is captured at low
+# overhead (per-thread async log buffer, no shared-sink serialization).
+# Override: YTRACE_LOG_LEVEL=trace for full tracing, YTRACE_DEFAULT_ON=no to mute.
+export YTRACE_DEFAULT_ON="${YTRACE_DEFAULT_ON:-yes}"
+export YTRACE_LOG_LEVEL="${YTRACE_LOG_LEVEL:-error}"
+
 echo "[1/6] starting parent picomesh (yhttp control) on :${CTRL} (registry :${REG}, gateway :${WEB})"
 # Pin every on-disk path onto $ROOT. The config ships with /tmp/picoforge
 # defaults (so a bare `picomesh` run still works); these overrides move ALL of

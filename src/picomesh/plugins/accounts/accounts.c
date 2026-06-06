@@ -80,8 +80,10 @@
     "uid INTEGER NOT NULL, role TEXT NOT NULL DEFAULT 'guest', " \
     "PRIMARY KEY(namespace_id, uid))"
 
-#define ACCOUNTS_STORE_UID  "rstore_uid"
+#define ACCOUNTS_STORE_UID  "rstore_uid"      /* mesh service (remote routing) */
 #define ACCOUNTS_STORE_NAME "rstore_username"
+#define ACCOUNTS_DB_UID     "uid"             /* logical database within the instance */
+#define ACCOUNTS_DB_NAME    "username"
 
 struct PICOMESH_CLASS_ANNOTATE("class@accounts:accounts") accounts_accounts_data {
     int users_schema_ensured; /* per-worker: `users` created in rstore_uid */
@@ -97,7 +99,7 @@ static struct accounts_accounts_data *acc(struct object *obj)
 /* Open the uid-sharded data cluster (users). Caller sets h->shard = uid. */
 static struct picomesh_void_result accounts_open_uid(struct rel_handle *h, struct yheaders *hdrs, struct object *obj)
 {
-    struct picomesh_void_result o = rel_open(h, ACCOUNTS_STORE_UID);
+    struct picomesh_void_result o = rel_open(h, ACCOUNTS_STORE_UID, ACCOUNTS_DB_UID);
     if (PICOMESH_IS_ERR(o)) return PICOMESH_ERR(picomesh_void, "accounts: open rstore_uid failed", o);
     return rel_ensure_schema(h, hdrs, &acc(obj)->users_schema_ensured, ACCOUNTS_USERS_DDL);
 }
@@ -105,7 +107,7 @@ static struct picomesh_void_result accounts_open_uid(struct rel_handle *h, struc
 /* Open the username→uid lookup cluster. Caller sets h->shard = hash(username). */
 static struct picomesh_void_result accounts_open_names(struct rel_handle *h, struct yheaders *hdrs, struct object *obj)
 {
-    struct picomesh_void_result o = rel_open(h, ACCOUNTS_STORE_NAME);
+    struct picomesh_void_result o = rel_open(h, ACCOUNTS_STORE_NAME, ACCOUNTS_DB_NAME);
     if (PICOMESH_IS_ERR(o)) return PICOMESH_ERR(picomesh_void, "accounts: open rstore_username failed", o);
     return rel_ensure_schema(h, hdrs, &acc(obj)->names_schema_ensured, ACCOUNTS_NAMES_DDL);
 }

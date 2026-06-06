@@ -213,6 +213,9 @@ struct vconn {
     uint64_t seed_ok, seed_err;
     uint64_t op_ok[OP__COUNT];
     uint64_t op_err[OP__COUNT];
+    /* diagnostic: HTTP status distribution (mixed). Buckets:
+     * 0=transport(<0/0), 1=2xx, 2=303, 3=401, 4=403, 5=5xx, 6=other */
+    uint64_t status_hist[7];
 };
 
 static int vconn_connect(struct vconn *vc)
@@ -544,19 +547,27 @@ static int scenario_step(struct vconn *vc, long counter)
             break;
         }
         case OP_NS_ADD_MEMBER: {
-            /* Grant a role on the connection's own namespace. The target must be
-             * a REAL account (accounts.ns_add_member rejects non-existent uids):
-             * with a seed population, pick a seeded uid (u1..uN); otherwise pick a
-             * sibling connection's uid, which it registered for itself. */
-            uint32_t member;
-            if (vc->cfg->seed_users > 0)
-                member = 1u + (uint32_t)(rng_next(&vc->rng) % (uint32_t)vc->cfg->seed_users);
-            else {
-                char other[40];
-                int oid = (int)(rng_next(&vc->rng) % (uint32_t)vc->cfg->total);
-                make_user(other, sizeof(other), vc->cfg->run_nonce, oid, -1);
-                member = hash_username(other);
+            /* Grant a role on the connection's OWN namespace to ANOTHER
+             * connection's user. The target must be a real registered account
+             * (accounts.ns_add_member rejects unknown uids), and every
+             * connection self-registers, so a sibling reliably exists — no
+             * dependence on the (optional) seed population. Never target self:
+             * INSERT OR REPLACE would overwrite our own owner row and downgrade
+             * us out of the maintainer role the other ns ops need. */
+            if (vc->cfg->total <= 1) {
+                /* Degenerate single-connection run: no sibling to grant to —
+                 * read members instead so the op still touches the namespace. */
+                did = OP_NS_MEMBERS;
+                int bn = snprintf(body, sizeof(body),
+                    "{\"path\":\"accounts.accounts.ns_members\",\"args\":[\"%s\"]}", vc->uname);
+                st = http_try(vc, "POST", "/_rpc", "application/json", vc->sid, body, (size_t)bn, NULL, 0);
+                break;
             }
+            int oid = (vc->id + 1 + (int)(rng_next(&vc->rng) % (uint32_t)(vc->cfg->total - 1)))
+                      % vc->cfg->total;
+            char other[40];
+            make_user(other, sizeof(other), vc->cfg->run_nonce, oid, -1);
+            uint32_t member = hash_username(other);
             int bn = snprintf(body, sizeof(body),
                 "{\"path\":\"accounts.accounts.ns_add_member\",\"args\":[\"%s\",%u,\"developer\"]}",
                 vc->uname, member);
@@ -565,6 +576,9 @@ static int scenario_step(struct vconn *vc, long counter)
         }
         case OP__COUNT: break;
         }
+        int bucket = st < 0 ? 0 : (st >= 200 && st < 300) ? 1 : st == 303 ? 2
+                   : st == 401 ? 3 : st == 403 ? 4 : (st >= 500 && st < 600) ? 5 : 6;
+        vc->status_hist[bucket]++;
         int is_ok = (op == OP_LOGIN) ? (st == 303 || st == 200) : (st == 200);
         if (is_ok) vc->op_ok[did]++; else vc->op_err[did]++;
         return is_ok;
@@ -963,6 +977,15 @@ int main(int argc, char **argv)
                    (unsigned long long)op_err_tot[o], share,
                    wall_s > 0 ? (double)n / wall_s : 0.0);
         }
+        uint64_t sh[7] = {0};
+        for (int i = 0; i < cfg.total; ++i)
+            for (int b = 0; b < 7; ++b) sh[b] += vconns[i].status_hist[b];
+        static const char *const SB[7] = {
+            "transport(<0)", "2xx", "303", "401", "403", "5xx", "other"};
+        printf("status codes   : (what the errors actually were)\n");
+        for (int b = 0; b < 7; ++b)
+            if (sh[b])
+                printf("    %-13s : %llu\n", SB[b], (unsigned long long)sh[b]);
     }
     printf("\n");
 

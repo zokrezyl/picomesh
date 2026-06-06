@@ -37,20 +37,20 @@ static size_t relational_storage_db_exec_skel(const void *_body, size_t _body_le
         memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
         _obj = (struct object *)rpc_handle_resolve(_h);
     }
-    uint32_t _v1 = 0;
-    if (_off + sizeof(_v1) > _body_len) goto _short_body;
-    memcpy(&_v1, (const uint8_t *)_body + _off, sizeof(_v1));
-    _off += sizeof(_v1);
-    char _s2[4096];
+    char _s1[4096];
     {
         if (_off + 4 > _body_len) goto _short_body;
         uint32_t _slen;
         memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
         if (_off + _slen > _body_len) goto _short_body;
-        if (_slen >= sizeof(_s2)) goto _short_body;
-        if (_slen) memcpy(_s2, (const uint8_t *)_body + _off, _slen);
-        _s2[_slen] = 0; _off += _slen;
+        if (_slen >= sizeof(_s1)) goto _short_body;
+        if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
+        _s1[_slen] = 0; _off += _slen;
     }
+    uint32_t _v2 = 0;
+    if (_off + sizeof(_v2) > _body_len) goto _short_body;
+    memcpy(&_v2, (const uint8_t *)_body + _off, sizeof(_v2));
+    _off += sizeof(_v2);
     char _s3[4096];
     {
         if (_off + 4 > _body_len) goto _short_body;
@@ -61,9 +61,19 @@ static size_t relational_storage_db_exec_skel(const void *_body, size_t _body_le
         if (_slen) memcpy(_s3, (const uint8_t *)_body + _off, _slen);
         _s3[_slen] = 0; _off += _slen;
     }
+    char _s4[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s4)) goto _short_body;
+        if (_slen) memcpy(_s4, (const uint8_t *)_body + _off, _slen);
+        _s4[_slen] = 0; _off += _slen;
+    }
     struct ytelemetry_span _tsp;
     ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.relational_storage_db_exec");
-    struct picomesh_json_result _r = relational_storage_db_exec(&_local, _obj, _hdrs, _v1, _s2, _s3);
+    struct picomesh_json_result _r = relational_storage_db_exec(&_local, _obj, _hdrs, _s1, _v2, _s3, _s4);
     ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
@@ -122,20 +132,20 @@ static size_t relational_storage_db_query_skel(const void *_body, size_t _body_l
         memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
         _obj = (struct object *)rpc_handle_resolve(_h);
     }
-    uint32_t _v1 = 0;
-    if (_off + sizeof(_v1) > _body_len) goto _short_body;
-    memcpy(&_v1, (const uint8_t *)_body + _off, sizeof(_v1));
-    _off += sizeof(_v1);
-    char _s2[4096];
+    char _s1[4096];
     {
         if (_off + 4 > _body_len) goto _short_body;
         uint32_t _slen;
         memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
         if (_off + _slen > _body_len) goto _short_body;
-        if (_slen >= sizeof(_s2)) goto _short_body;
-        if (_slen) memcpy(_s2, (const uint8_t *)_body + _off, _slen);
-        _s2[_slen] = 0; _off += _slen;
+        if (_slen >= sizeof(_s1)) goto _short_body;
+        if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
+        _s1[_slen] = 0; _off += _slen;
     }
+    uint32_t _v2 = 0;
+    if (_off + sizeof(_v2) > _body_len) goto _short_body;
+    memcpy(&_v2, (const uint8_t *)_body + _off, sizeof(_v2));
+    _off += sizeof(_v2);
     char _s3[4096];
     {
         if (_off + 4 > _body_len) goto _short_body;
@@ -146,9 +156,19 @@ static size_t relational_storage_db_query_skel(const void *_body, size_t _body_l
         if (_slen) memcpy(_s3, (const uint8_t *)_body + _off, _slen);
         _s3[_slen] = 0; _off += _slen;
     }
+    char _s4[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s4)) goto _short_body;
+        if (_slen) memcpy(_s4, (const uint8_t *)_body + _off, _slen);
+        _s4[_slen] = 0; _off += _slen;
+    }
     struct ytelemetry_span _tsp;
     ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.relational_storage_db_query");
-    struct picomesh_json_result _r = relational_storage_db_query(&_local, _obj, _hdrs, _v1, _s2, _s3);
+    struct picomesh_json_result _r = relational_storage_db_query(&_local, _obj, _hdrs, _s1, _v2, _s3, _s4);
     ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
@@ -207,9 +227,19 @@ static size_t relational_storage_db_shard_count_skel(const void *_body, size_t _
         memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
         _obj = (struct object *)rpc_handle_resolve(_h);
     }
+    char _s1[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s1)) goto _short_body;
+        if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
+        _s1[_slen] = 0; _off += _slen;
+    }
     struct ytelemetry_span _tsp;
     ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.relational_storage_db_shard_count");
-    struct picomesh_int_result _r = relational_storage_db_shard_count(&_local, _obj, _hdrs);
+    struct picomesh_int_result _r = relational_storage_db_shard_count(&_local, _obj, _hdrs, _s1);
     ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
     yheaders_free(_hdrs); _hdrs = NULL;
     if (_resp_max < 1) return 0;
@@ -245,12 +275,13 @@ static int relational_storage_db_exec_jinvoke(struct ctx *ctx, struct object *ob
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
 {
-    uint32_t arg0 = (uint32_t)yjson_as_int(yjson_array_at(args, 0), 0);
-    const char *arg1 = yjson_as_string(yjson_array_at(args, 1), "");
+    const char *arg0 = yjson_as_string(yjson_array_at(args, 0), "");
+    uint32_t arg1 = (uint32_t)yjson_as_int(yjson_array_at(args, 1), 0);
     const char *arg2 = yjson_as_string(yjson_array_at(args, 2), "");
+    const char *arg3 = yjson_as_string(yjson_array_at(args, 3), "");
     struct ctx local_ctx = {0};
     struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct picomesh_json_result call_result = relational_storage_db_exec(call_ctx, obj, hdrs, arg0, arg1, arg2);
+    struct picomesh_json_result call_result = relational_storage_db_exec(call_ctx, obj, hdrs, arg0, arg1, arg2, arg3);
     if (PICOMESH_IS_ERR(call_result)) {
         char chain[8192] = {0};
         picomesh_error_snprint(chain, sizeof(chain), call_result.error);
@@ -268,12 +299,13 @@ static int relational_storage_db_query_jinvoke(struct ctx *ctx, struct object *o
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
 {
-    uint32_t arg0 = (uint32_t)yjson_as_int(yjson_array_at(args, 0), 0);
-    const char *arg1 = yjson_as_string(yjson_array_at(args, 1), "");
+    const char *arg0 = yjson_as_string(yjson_array_at(args, 0), "");
+    uint32_t arg1 = (uint32_t)yjson_as_int(yjson_array_at(args, 1), 0);
     const char *arg2 = yjson_as_string(yjson_array_at(args, 2), "");
+    const char *arg3 = yjson_as_string(yjson_array_at(args, 3), "");
     struct ctx local_ctx = {0};
     struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct picomesh_json_result call_result = relational_storage_db_query(call_ctx, obj, hdrs, arg0, arg1, arg2);
+    struct picomesh_json_result call_result = relational_storage_db_query(call_ctx, obj, hdrs, arg0, arg1, arg2, arg3);
     if (PICOMESH_IS_ERR(call_result)) {
         char chain[8192] = {0};
         picomesh_error_snprint(chain, sizeof(chain), call_result.error);
@@ -291,9 +323,10 @@ static int relational_storage_db_shard_count_jinvoke(struct ctx *ctx, struct obj
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
 {
+    const char *arg0 = yjson_as_string(yjson_array_at(args, 0), "");
     struct ctx local_ctx = {0};
     struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct picomesh_int_result call_result = relational_storage_db_shard_count(call_ctx, obj, hdrs);
+    struct picomesh_int_result call_result = relational_storage_db_shard_count(call_ctx, obj, hdrs, arg0);
     if (PICOMESH_IS_ERR(call_result)) {
         char chain[8192] = {0};
         picomesh_error_snprint(chain, sizeof(chain), call_result.error);
@@ -311,36 +344,44 @@ static int relational_storage_db_exec_minvoke(struct ctx *ctx, struct object *ob
                           char *_err, size_t _err_cap)
 {
     (void)_mr;
-    if (_argc != 3u) {
-        snprintf(_err, _err_cap, "relational_storage_db_exec: expected 3 arg(s), got %u", _argc);
+    if (_argc != 4u) {
+        snprintf(_err, _err_cap, "relational_storage_db_exec: expected 4 arg(s), got %u", _argc);
         return -1;
     }
-    uint32_t _v0;
+    char _v0[4096];
+    {
+        uint32_t _sz = (uint32_t)sizeof(_v0);
+        if (!cmp_read_str(_mr, _v0, &_sz)) {
+            snprintf(_err, _err_cap, "db_name: expected str arg (%s)", cmp_strerror(_mr));
+            return -1;
+        }
+    }
+    uint32_t _v1;
     {
         uint64_t _u;
         if (!cmp_read_uinteger(_mr, &_u)) { snprintf(_err, _err_cap, "shard_key: expected unsigned int (%s)", cmp_strerror(_mr)); return -1; }
         if (_u > UINT32_MAX) { snprintf(_err, _err_cap, "shard_key: value %llu out of range for uint32_t", (unsigned long long)_u); return -1; }
-        _v0 = (uint32_t)_u;
-    }
-    char _v1[4096];
-    {
-        uint32_t _sz = (uint32_t)sizeof(_v1);
-        if (!cmp_read_str(_mr, _v1, &_sz)) {
-            snprintf(_err, _err_cap, "sql: expected str arg (%s)", cmp_strerror(_mr));
-            return -1;
-        }
+        _v1 = (uint32_t)_u;
     }
     char _v2[4096];
     {
         uint32_t _sz = (uint32_t)sizeof(_v2);
         if (!cmp_read_str(_mr, _v2, &_sz)) {
+            snprintf(_err, _err_cap, "sql: expected str arg (%s)", cmp_strerror(_mr));
+            return -1;
+        }
+    }
+    char _v3[4096];
+    {
+        uint32_t _sz = (uint32_t)sizeof(_v3);
+        if (!cmp_read_str(_mr, _v3, &_sz)) {
             snprintf(_err, _err_cap, "args_json: expected str arg (%s)", cmp_strerror(_mr));
             return -1;
         }
     }
     struct ctx local_ctx = {0};
     struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct picomesh_json_result call_result = relational_storage_db_exec(call_ctx, obj, hdrs, _v0, _v1, _v2);
+    struct picomesh_json_result call_result = relational_storage_db_exec(call_ctx, obj, hdrs, _v0, _v1, _v2, _v3);
     if (PICOMESH_IS_ERR(call_result)) {
         char chain[8192] = {0};
         picomesh_error_snprint(chain, sizeof(chain), call_result.error);
@@ -362,36 +403,44 @@ static int relational_storage_db_query_minvoke(struct ctx *ctx, struct object *o
                           char *_err, size_t _err_cap)
 {
     (void)_mr;
-    if (_argc != 3u) {
-        snprintf(_err, _err_cap, "relational_storage_db_query: expected 3 arg(s), got %u", _argc);
+    if (_argc != 4u) {
+        snprintf(_err, _err_cap, "relational_storage_db_query: expected 4 arg(s), got %u", _argc);
         return -1;
     }
-    uint32_t _v0;
+    char _v0[4096];
+    {
+        uint32_t _sz = (uint32_t)sizeof(_v0);
+        if (!cmp_read_str(_mr, _v0, &_sz)) {
+            snprintf(_err, _err_cap, "db_name: expected str arg (%s)", cmp_strerror(_mr));
+            return -1;
+        }
+    }
+    uint32_t _v1;
     {
         uint64_t _u;
         if (!cmp_read_uinteger(_mr, &_u)) { snprintf(_err, _err_cap, "shard_key: expected unsigned int (%s)", cmp_strerror(_mr)); return -1; }
         if (_u > UINT32_MAX) { snprintf(_err, _err_cap, "shard_key: value %llu out of range for uint32_t", (unsigned long long)_u); return -1; }
-        _v0 = (uint32_t)_u;
-    }
-    char _v1[4096];
-    {
-        uint32_t _sz = (uint32_t)sizeof(_v1);
-        if (!cmp_read_str(_mr, _v1, &_sz)) {
-            snprintf(_err, _err_cap, "sql: expected str arg (%s)", cmp_strerror(_mr));
-            return -1;
-        }
+        _v1 = (uint32_t)_u;
     }
     char _v2[4096];
     {
         uint32_t _sz = (uint32_t)sizeof(_v2);
         if (!cmp_read_str(_mr, _v2, &_sz)) {
+            snprintf(_err, _err_cap, "sql: expected str arg (%s)", cmp_strerror(_mr));
+            return -1;
+        }
+    }
+    char _v3[4096];
+    {
+        uint32_t _sz = (uint32_t)sizeof(_v3);
+        if (!cmp_read_str(_mr, _v3, &_sz)) {
             snprintf(_err, _err_cap, "args_json: expected str arg (%s)", cmp_strerror(_mr));
             return -1;
         }
     }
     struct ctx local_ctx = {0};
     struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct picomesh_json_result call_result = relational_storage_db_query(call_ctx, obj, hdrs, _v0, _v1, _v2);
+    struct picomesh_json_result call_result = relational_storage_db_query(call_ctx, obj, hdrs, _v0, _v1, _v2, _v3);
     if (PICOMESH_IS_ERR(call_result)) {
         char chain[8192] = {0};
         picomesh_error_snprint(chain, sizeof(chain), call_result.error);
@@ -413,13 +462,21 @@ static int relational_storage_db_shard_count_minvoke(struct ctx *ctx, struct obj
                           char *_err, size_t _err_cap)
 {
     (void)_mr;
-    if (_argc != 0u) {
-        snprintf(_err, _err_cap, "relational_storage_db_shard_count: expected 0 arg(s), got %u", _argc);
+    if (_argc != 1u) {
+        snprintf(_err, _err_cap, "relational_storage_db_shard_count: expected 1 arg(s), got %u", _argc);
         return -1;
+    }
+    char _v0[4096];
+    {
+        uint32_t _sz = (uint32_t)sizeof(_v0);
+        if (!cmp_read_str(_mr, _v0, &_sz)) {
+            snprintf(_err, _err_cap, "db_name: expected str arg (%s)", cmp_strerror(_mr));
+            return -1;
+        }
     }
     struct ctx local_ctx = {0};
     struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct picomesh_int_result call_result = relational_storage_db_shard_count(call_ctx, obj, hdrs);
+    struct picomesh_int_result call_result = relational_storage_db_shard_count(call_ctx, obj, hdrs, _v0);
     if (PICOMESH_IS_ERR(call_result)) {
         char chain[8192] = {0};
         picomesh_error_snprint(chain, sizeof(chain), call_result.error);
@@ -485,21 +542,26 @@ static minvoke_fn relational_storage_minvoke_lookup(const char *qname)
 /* ---- relational_storage: per-method parameter signatures (runtime reflection) -- */
 
 static const struct jinvoke_param relational_storage_db_exec_params[] = {
+    {"db_name", "const char *"},
     {"shard_key", "uint32_t"},
     {"sql", "const char *"},
     {"args_json", "const char *"}
 };
 static const struct jinvoke_param relational_storage_db_query_params[] = {
+    {"db_name", "const char *"},
     {"shard_key", "uint32_t"},
     {"sql", "const char *"},
     {"args_json", "const char *"}
 };
+static const struct jinvoke_param relational_storage_db_shard_count_params[] = {
+    {"db_name", "const char *"}
+};
 struct relational_storage_params_row { const char *name; struct jinvoke_params params; };
 
 static const struct relational_storage_params_row relational_storage_params_rows[] = {
-    {"relational_storage_db_exec", {relational_storage_db_exec_params, 3}},
-    {"relational_storage_db_query", {relational_storage_db_query_params, 3}},
-    {"relational_storage_db_shard_count", {NULL, 0}}
+    {"relational_storage_db_exec", {relational_storage_db_exec_params, 4}},
+    {"relational_storage_db_query", {relational_storage_db_query_params, 4}},
+    {"relational_storage_db_shard_count", {relational_storage_db_shard_count_params, 1}}
 };
 
 static const struct jinvoke_params *relational_storage_params_lookup(const char *qname)

@@ -39,6 +39,7 @@
 #include <picomesh/yclass/rpc.h>
 #include <picomesh/yjson/yjson.h>
 #include <picomesh/ycore/result.h>
+#include <picomesh/ycore/ytrace.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -52,18 +53,26 @@
 struct rel_handle {
     struct ctx c;
     struct object *obj;
+    const char *db;        /* named logical database this handle routes to */
     uint32_t shard;        /* routing key for the next op (uid for user state) */
-    int shard_count;       /* opened instance's shard count, fetched lazily (0 = not yet) */
+    int shard_count;       /* opened database's shard count, fetched lazily (0 = not yet) */
 };
 
-/* Open a NAMED relational_storage cluster instance (a mesh service). One
- * instance == one cluster == one shard set. `instance` is the service name the
- * caller is wired to (e.g. "rstore_uid", "rstore_session"). */
-static inline struct picomesh_void_result rel_open(struct rel_handle *out, const char *instance)
+/* Open a handle onto a named logical database. `service` is the mesh service the
+ * caller is wired to (the relational_storage instance — local in collocated
+ * mode, a remote `rstore_*` process in the split mesh); `db` is the logical
+ * database WITHIN that instance to route every op to. One instance hosts many
+ * databases, each its own shard set/count/schema. In the split mesh a service
+ * serves a single (default) database from its flat config, so `db` is just the
+ * name its `relational_storage.databases.<db>.*` block uses (or is ignored when
+ * the service has only the flat config). */
+static inline struct picomesh_void_result rel_open(struct rel_handle *out,
+                                                   const char *service, const char *db)
 {
     struct picomesh_engine *engine = picomesh_active_engine();
     if (!engine) return PICOMESH_ERR(picomesh_void, "relational: no active engine");
-    out->c = picomesh_engine_service_ctx(engine, instance ? instance : "relational_storage");
+    out->c = picomesh_engine_service_ctx(engine, service ? service : "relational_storage");
+    out->db = db ? db : "default";
     out->shard = REL_SHARD_GLOBAL;
     out->shard_count = 0;
     struct object_ptr_result o = relational_storage_db_create(&out->c);
@@ -92,7 +101,7 @@ static inline struct picomesh_void_result rel_open(struct rel_handle *out, const
 static inline struct picomesh_int_result rel_handle_shard_count(struct rel_handle *h, struct yheaders *hdrs)
 {
     if (h->shard_count > 0) return PICOMESH_OK(picomesh_int, h->shard_count);
-    struct picomesh_int_result r = relational_storage_db_shard_count(&h->c, h->obj, hdrs);
+    struct picomesh_int_result r = relational_storage_db_shard_count(&h->c, h->obj, hdrs, h->db);
     if (PICOMESH_IS_ERR(r)) return PICOMESH_ERR(picomesh_int, "relational: shard count unavailable", r);
     h->shard_count = r.value < 1 ? 1 : r.value;
     return PICOMESH_OK(picomesh_int, h->shard_count);
@@ -101,13 +110,13 @@ static inline struct picomesh_int_result rel_handle_shard_count(struct rel_handl
 static inline struct picomesh_json_result
 rel_exec(struct rel_handle *h, struct yheaders *hdrs, const char *sql, const char *args_json)
 {
-    return relational_storage_db_exec(&h->c, h->obj, hdrs, h->shard, sql, args_json ? args_json : "[]");
+    return relational_storage_db_exec(&h->c, h->obj, hdrs, h->db, h->shard, sql, args_json ? args_json : "[]");
 }
 
 static inline struct picomesh_json_result
 rel_query(struct rel_handle *h, struct yheaders *hdrs, const char *sql, const char *args_json)
 {
-    return relational_storage_db_query(&h->c, h->obj, hdrs, h->shard, sql, args_json ? args_json : "[]");
+    return relational_storage_db_query(&h->c, h->obj, hdrs, h->db, h->shard, sql, args_json ? args_json : "[]");
 }
 
 /* Finish a JSON bind-args array (the caller filled via yjson_writer_*). Returns
@@ -174,7 +183,12 @@ static inline int rel_exec_changes(struct rel_handle *h, struct yheaders *hdrs,
                                    const char *sql, const char *args_json)
 {
     struct picomesh_json_result r = rel_exec(h, hdrs, sql, args_json);
-    if (PICOMESH_IS_ERR(r)) { picomesh_error_destroy(r.error); return -1; }
+    if (PICOMESH_IS_ERR(r)) {
+        yerror("relational exec failed: %s | db=%s shard=%u sql=%.120s",
+               r.error.msg ? r.error.msg : "?", h->db ? h->db : "?", h->shard, sql);
+        picomesh_error_destroy(r.error);
+        return -1;
+    }
     int changes = -1;
     struct yjson_doc *doc = yjson_parse(r.value ? r.value : "{}", r.value ? strlen(r.value) : 2);
     if (doc) {
@@ -193,7 +207,12 @@ static inline int64_t rel_query_int(struct rel_handle *h, struct yheaders *hdrs,
 {
     if (found) *found = 0;
     struct picomesh_json_result r = rel_query(h, hdrs, sql, args_json);
-    if (PICOMESH_IS_ERR(r)) { picomesh_error_destroy(r.error); return fallback; }
+    if (PICOMESH_IS_ERR(r)) {
+        yerror("relational query failed: %s | db=%s shard=%u sql=%.120s",
+               r.error.msg ? r.error.msg : "?", h->db ? h->db : "?", h->shard, sql);
+        picomesh_error_destroy(r.error);
+        return fallback;
+    }
     int64_t value = fallback;
     struct yjson_doc *doc = yjson_parse(r.value ? r.value : "[]", r.value ? strlen(r.value) : 2);
     if (doc) {
@@ -237,7 +256,12 @@ static inline char *rel_query_str(struct rel_handle *h, struct yheaders *hdrs,
                                   const char *sql, const char *args_json, const char *col)
 {
     struct picomesh_json_result r = rel_query(h, hdrs, sql, args_json);
-    if (PICOMESH_IS_ERR(r)) { picomesh_error_destroy(r.error); return NULL; }
+    if (PICOMESH_IS_ERR(r)) {
+        yerror("relational query failed: %s | db=%s shard=%u sql=%.120s",
+               r.error.msg ? r.error.msg : "?", h->db ? h->db : "?", h->shard, sql);
+        picomesh_error_destroy(r.error);
+        return NULL;
+    }
     char *out = NULL;
     struct yjson_doc *doc = yjson_parse(r.value ? r.value : "[]", r.value ? strlen(r.value) : 2);
     if (doc) {

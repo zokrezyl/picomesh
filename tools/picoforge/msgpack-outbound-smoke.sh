@@ -8,6 +8,11 @@
 
 set -uo pipefail
 
+# Error-only tracing on by default (inherited by the picomesh client process).
+# Override: YTRACE_LOG_LEVEL=trace for full tracing, YTRACE_DEFAULT_ON=no to mute.
+export YTRACE_DEFAULT_ON="${YTRACE_DEFAULT_ON:-yes}"
+export YTRACE_LOG_LEVEL="${YTRACE_LOG_LEVEL:-error}"
+
 PICOMESH=./build-desktop-release/picomesh
 SERVER=./tools/msgpack-client/echo_server.py
 HOST=127.0.0.1

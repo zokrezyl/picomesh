@@ -6,6 +6,7 @@
 # Targets (run `make` with no args to list):
 #   build-desktop-release    — release build (default platform = host)
 #   build-desktop-debug      — debug build
+#   build-desktop-asan       — debug build + AddressSanitizer
 #   compile_commands.json    — symlink to the last configured build database
 #   clean                    — wipe every build-* directory
 #   help                     — this list
@@ -16,11 +17,20 @@ JOBS    ?= $(shell nproc 2>/dev/null || echo 4)
 
 BUILD_DIR_RELEASE := build-desktop-release
 BUILD_DIR_DEBUG   := build-desktop-debug
+BUILD_DIR_ASAN    := build-desktop-asan
 BUILD_DIR_RISCV   := build-linux-riscv64-release
 BUILD_DIR_YEMU    := build-yemu-release
 BUILD_DIR_DEPLOY  := build-deploy
 
-.PHONY: help all build-desktop-release build-desktop-debug build-linux-riscv64-release build-deploy build-yemu-release build-webasm-yemu-release perf-picoforge perf-throughput-notracing perf-throughput-tracing clean
+.PHONY: help all build-desktop-release build-desktop-debug build-desktop-asan build-linux-riscv64-release build-deploy build-yemu-release build-webasm-yemu-release perf-picoforge perf-throughput-notracing perf-throughput-tracing clean
+
+# AddressSanitizer flags. Frame pointers for readable traces; the same flags
+# go on compile AND link so the asan runtime is pulled in. The vendored static
+# 3rdparty libs aren't instrumented (built separately), so asan covers the
+# picomesh code + the boundaries — which is what we debug. The libco coroutine
+# stacks confuse asan's stack-use-after-return check; run with
+# `ASAN_OPTIONS=detect_stack_use_after_return=0` if it false-positives there.
+ASAN_FLAGS := -fsanitize=address -fno-omit-frame-pointer
 
 # picoforge perf tunables (override on the command line, e.g.
 #   make perf-picoforge DURATION=30 CONNECTIONS=128 GENERATORS=12)
@@ -48,6 +58,16 @@ build-desktop-debug:
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 	@ln -sfn $(BUILD_DIR_DEBUG)/compile_commands.json compile_commands.json
 	$(CMAKE) --build $(BUILD_DIR_DEBUG) --parallel $(JOBS)
+
+## build-desktop-asan     configure + build a debug variant with AddressSanitizer
+build-desktop-asan:
+	$(CMAKE) -S . -B $(BUILD_DIR_ASAN) -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+		-DCMAKE_C_FLAGS="$(ASAN_FLAGS)" \
+		-DCMAKE_CXX_FLAGS="$(ASAN_FLAGS)" \
+		-DCMAKE_EXE_LINKER_FLAGS="$(ASAN_FLAGS)" \
+		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+	@ln -sfn $(BUILD_DIR_ASAN)/compile_commands.json compile_commands.json
+	$(CMAKE) --build $(BUILD_DIR_ASAN) --parallel $(JOBS)
 
 ## perf-picoforge          mixed-load perf on an INDEPENDENT mesh: GENERATORS
 ##                          parallel load processes, CONNECTIONS each, every

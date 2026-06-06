@@ -13,6 +13,11 @@ PORT=8801
 # issue #19: token_issuer signs access JWTs with this shared secret.
 export PICOMESH_JWT_SECRET="${PICOMESH_JWT_SECRET:-picoforge-dev-mesh-secret-change-me}"
 
+# Error-only tracing on by default (inherited by every spawned backend).
+# Override: YTRACE_LOG_LEVEL=trace for full tracing, YTRACE_DEFAULT_ON=no to mute.
+export YTRACE_DEFAULT_ON="${YTRACE_DEFAULT_ON:-yes}"
+export YTRACE_LOG_LEVEL="${YTRACE_LOG_LEVEL:-error}"
+
 mkdir -p tmp
 
 # Start the yttp server. The picoforge.yaml binds yttp on 0.0.0.0:8801 (see

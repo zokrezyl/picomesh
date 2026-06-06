@@ -7,6 +7,7 @@
 #include <picomesh/yclass/rpc.h>
 #include <picomesh/yclass/yheaders.h>
 #include <picomesh/msgpack/msgpack.h>
+#include <picomesh/allocator/allocator.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,7 +59,22 @@ struct picomesh_void_result trace_collector_trace_collector_ingest(struct ctx * 
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_void, "trace_collector_trace_collector_ingest: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_void_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_void, "trace_collector_trace_collector_ingest: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -71,31 +87,31 @@ struct picomesh_void_result trace_collector_trace_collector_ingest(struct ctx * 
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_ingest: header serialize overflow");
-                return PICOMESH_ERR(picomesh_void, "trace_collector_trace_collector_ingest: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_void, "trace_collector_trace_collector_ingest: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_ingest: pack overflow"); return PICOMESH_ERR(picomesh_void, "trace_collector_trace_collector_ingest: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_ingest: pack overflow"); _ret = PICOMESH_ERR(picomesh_void, "trace_collector_trace_collector_ingest: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(span_json ? strlen(span_json) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_ingest: pack overflow"); return PICOMESH_ERR(picomesh_void, "trace_collector_trace_collector_ingest: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_ingest: pack overflow"); _ret = PICOMESH_ERR(picomesh_void, "trace_collector_trace_collector_ingest: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, span_json, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_void, "trace_collector_trace_collector_ingest: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_void, "trace_collector_trace_collector_ingest: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -103,9 +119,14 @@ struct picomesh_void_result trace_collector_trace_collector_ingest(struct ctx * 
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_void, _msg[0] ? strdup(_msg) : "trace_collector_trace_collector_ingest: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_void, _msg[0] ? strdup(_msg) : "trace_collector_trace_collector_ingest: remote error (no msg)");
+            goto _rpc_done;
         }
-        return PICOMESH_OK_VOID();
+        _ret = PICOMESH_OK_VOID(); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_void, "trace_collector_trace_collector_ingest: no impl on this class");
@@ -172,7 +193,22 @@ struct picomesh_string_result trace_collector_trace_collector_get_trace(struct c
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_get_trace: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_string_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_get_trace: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -185,31 +221,31 @@ struct picomesh_string_result trace_collector_trace_collector_get_trace(struct c
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_get_trace: header serialize overflow");
-                return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_get_trace: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_get_trace: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_get_trace: pack overflow"); return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_get_trace: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_get_trace: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_get_trace: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(trace_id ? strlen(trace_id) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_get_trace: pack overflow"); return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_get_trace: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_get_trace: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_get_trace: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, trace_id, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_get_trace: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_get_trace: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -217,17 +253,22 @@ struct picomesh_string_result trace_collector_trace_collector_get_trace(struct c
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "trace_collector_trace_collector_get_trace: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "trace_collector_trace_collector_get_trace: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_get_trace: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_get_trace: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_get_trace: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_get_trace: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_get_trace: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_get_trace: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_string, _sv);
+        _ret = PICOMESH_OK(picomesh_string, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_get_trace: no impl on this class");
@@ -296,7 +337,22 @@ struct picomesh_string_result trace_collector_trace_collector_traces(struct ctx 
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_traces: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_string_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_traces: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -309,41 +365,41 @@ struct picomesh_string_result trace_collector_trace_collector_traces(struct ctx 
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_traces: header serialize overflow");
-                return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_traces: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_traces: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_traces: pack overflow"); return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_traces: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_traces: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_traces: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(service ? strlen(service) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_traces: pack overflow"); return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_traces: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_traces: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_traces: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, service, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(status ? strlen(status) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_traces: pack overflow"); return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_traces: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_traces: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_traces: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, status, _slen); _off += _slen; }
         }
-        if (_off + sizeof(since_secs) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_traces: pack overflow"); return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_traces: pack overflow"); }
+        if (_off + sizeof(since_secs) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_traces: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_traces: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &since_secs, sizeof(since_secs)); _off += sizeof(since_secs);
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_traces: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_traces: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -351,17 +407,22 @@ struct picomesh_string_result trace_collector_trace_collector_traces(struct ctx 
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "trace_collector_trace_collector_traces: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "trace_collector_trace_collector_traces: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_traces: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_traces: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_traces: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_traces: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_traces: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_traces: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_string, _sv);
+        _ret = PICOMESH_OK(picomesh_string, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_traces: no impl on this class");
@@ -427,7 +488,22 @@ struct picomesh_string_result trace_collector_trace_collector_services(struct ct
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_services: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_string_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_services: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -440,24 +516,24 @@ struct picomesh_string_result trace_collector_trace_collector_services(struct ct
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_services: header serialize overflow");
-                return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_services: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_services: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_services: pack overflow"); return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_services: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_services: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_services: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_services: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_services: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -465,17 +541,22 @@ struct picomesh_string_result trace_collector_trace_collector_services(struct ct
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "trace_collector_trace_collector_services: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "trace_collector_trace_collector_services: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_services: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_services: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_services: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_services: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_services: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_services: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_string, _sv);
+        _ret = PICOMESH_OK(picomesh_string, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_services: no impl on this class");
@@ -542,7 +623,22 @@ struct picomesh_string_result trace_collector_trace_collector_operations(struct 
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_operations: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_string_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_operations: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -555,31 +651,31 @@ struct picomesh_string_result trace_collector_trace_collector_operations(struct 
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_operations: header serialize overflow");
-                return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_operations: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_operations: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_operations: pack overflow"); return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_operations: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_operations: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_operations: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(service ? strlen(service) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_operations: pack overflow"); return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_operations: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_operations: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_operations: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, service, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_operations: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_operations: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -587,17 +683,22 @@ struct picomesh_string_result trace_collector_trace_collector_operations(struct 
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "trace_collector_trace_collector_operations: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "trace_collector_trace_collector_operations: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_operations: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_operations: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_operations: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_operations: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_operations: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_operations: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_string, _sv);
+        _ret = PICOMESH_OK(picomesh_string, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_operations: no impl on this class");
@@ -666,7 +767,22 @@ struct picomesh_string_result trace_collector_trace_collector_latency(struct ctx
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_latency: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_string_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_latency: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -679,41 +795,41 @@ struct picomesh_string_result trace_collector_trace_collector_latency(struct ctx
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_latency: header serialize overflow");
-                return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_latency: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_latency: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_latency: pack overflow"); return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_latency: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_latency: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_latency: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(service ? strlen(service) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_latency: pack overflow"); return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_latency: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_latency: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_latency: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, service, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(operation ? strlen(operation) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_latency: pack overflow"); return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_latency: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_latency: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_latency: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, operation, _slen); _off += _slen; }
         }
-        if (_off + sizeof(window_secs) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_latency: pack overflow"); return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_latency: pack overflow"); }
+        if (_off + sizeof(window_secs) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_latency: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_latency: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &window_secs, sizeof(window_secs)); _off += sizeof(window_secs);
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_latency: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_latency: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -721,17 +837,22 @@ struct picomesh_string_result trace_collector_trace_collector_latency(struct ctx
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "trace_collector_trace_collector_latency: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "trace_collector_trace_collector_latency: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_latency: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_latency: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_latency: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_latency: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_latency: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_latency: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_string, _sv);
+        _ret = PICOMESH_OK(picomesh_string, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_latency: no impl on this class");
@@ -797,7 +918,22 @@ struct picomesh_string_result trace_collector_trace_collector_stats(struct ctx *
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_stats: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_string_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_stats: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -810,24 +946,24 @@ struct picomesh_string_result trace_collector_trace_collector_stats(struct ctx *
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_stats: header serialize overflow");
-                return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_stats: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_stats: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_stats: pack overflow"); return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_stats: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_stats: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_stats: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_stats: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_stats: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -835,17 +971,22 @@ struct picomesh_string_result trace_collector_trace_collector_stats(struct ctx *
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "trace_collector_trace_collector_stats: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "trace_collector_trace_collector_stats: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_stats: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_stats: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_stats: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_stats: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_stats: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_stats: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_string, _sv);
+        _ret = PICOMESH_OK(picomesh_string, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_stats: no impl on this class");
@@ -912,7 +1053,22 @@ struct picomesh_string_result trace_collector_trace_collector_errors(struct ctx 
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_errors: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_string_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_errors: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -925,27 +1081,27 @@ struct picomesh_string_result trace_collector_trace_collector_errors(struct ctx 
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_errors: header serialize overflow");
-                return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_errors: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_errors: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_errors: pack overflow"); return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_errors: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_errors: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_errors: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(since_secs) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_errors: pack overflow"); return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_errors: pack overflow"); }
+        if (_off + sizeof(since_secs) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "trace_collector_trace_collector_errors: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_errors: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &since_secs, sizeof(since_secs)); _off += sizeof(since_secs);
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_errors: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_errors: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -953,17 +1109,22 @@ struct picomesh_string_result trace_collector_trace_collector_errors(struct ctx 
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "trace_collector_trace_collector_errors: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "trace_collector_trace_collector_errors: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_errors: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_errors: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_errors: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_errors: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_errors: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_errors: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_string, _sv);
+        _ret = PICOMESH_OK(picomesh_string, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_string, "trace_collector_trace_collector_errors: no impl on this class");

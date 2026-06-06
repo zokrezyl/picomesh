@@ -59,8 +59,13 @@ Bring the mesh up, then point the tool at it:
 `mixed` is the "lots of users doing lots of things" workload. Each worker
 logs in as its own user and then issues a **weighted-random stream of real
 actions** — `read_count`/`read_list` (reads), `put_file` (libgit2
-commit), `open_issue`, `enqueue_run`, `make_repo` (bounded per worker), and
-periodic re-`login` — emulating a live user session. Every action is a real
+commit), `open_issue`, `enqueue_run`, `make_repo` (bounded per worker),
+periodic re-`login`, and the GitLab-style group/namespace ops (issue #30):
+`ns_subtree`/`ns_members` (reads) and `ns_create` subgroup / `ns_add_member`
+(writes), all on the worker's **own** personal namespace — which it owns, so
+they exercise the namespace RBAC authority without needing site-admin rights
+(`ns_add_member` grants a role to a sibling worker's user) — emulating a live
+user session. Every action is a real
 business call (no raw storage access); methods are
 addressed over `/_rpc` carrying the session cookie, so the gateway
 resolves sid→uid on every call (the real per-call cost). Two extra options:

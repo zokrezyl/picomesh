@@ -7,11 +7,12 @@
 #include <picomesh/yclass/rpc.h>
 #include <picomesh/yclass/yheaders.h>
 #include <picomesh/msgpack/msgpack.h>
+#include <picomesh/allocator/allocator.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
-struct picomesh_json_result relational_storage_db_exec(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t shard_key, const char * sql, const char * args_json)
+struct picomesh_json_result relational_storage_db_exec(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * db_name, uint32_t shard_key, const char * sql, const char * args_json)
 {
     static method_slot _slot = METHOD_SLOT_UNDEFINED;
     if (_slot == METHOD_SLOT_UNDEFINED) {
@@ -37,7 +38,8 @@ struct picomesh_json_result relational_storage_db_exec(struct ctx * ctx, struct 
             struct picomesh_msgpack_buffer _mab;
             cmp_ctx_t _maw;
             picomesh_msgpack_writer_init(&_maw, &_mab, _margs, 16384);
-            cmp_write_array(&_maw, 3u);
+            cmp_write_array(&_maw, 4u);
+            cmp_write_str(&_maw, db_name ? db_name : "", (uint32_t)(db_name ? strlen(db_name) : 0));
             cmp_write_uinteger(&_maw, (uint64_t)shard_key);
             cmp_write_str(&_maw, sql ? sql : "", (uint32_t)(sql ? strlen(sql) : 0));
             cmp_write_str(&_maw, args_json ? args_json : "", (uint32_t)(args_json ? strlen(args_json) : 0));
@@ -72,7 +74,22 @@ struct picomesh_json_result relational_storage_db_exec(struct ctx * ctx, struct 
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_json, "relational_storage_db_exec: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_json_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_json, "relational_storage_db_exec: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -85,41 +102,48 @@ struct picomesh_json_result relational_storage_db_exec(struct ctx * ctx, struct 
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "relational_storage_db_exec: header serialize overflow");
-                return PICOMESH_ERR(picomesh_json, "relational_storage_db_exec: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_json, "relational_storage_db_exec: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "relational_storage_db_exec: pack overflow"); return PICOMESH_ERR(picomesh_json, "relational_storage_db_exec: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "relational_storage_db_exec: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "relational_storage_db_exec: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(shard_key) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "relational_storage_db_exec: pack overflow"); return PICOMESH_ERR(picomesh_json, "relational_storage_db_exec: pack overflow"); }
+        {
+            uint32_t _slen = (uint32_t)(db_name ? strlen(db_name) : 0);
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "relational_storage_db_exec: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "relational_storage_db_exec: pack overflow"); goto _rpc_done; }
+            memcpy(_a + _off, &_slen, 4); _off += 4;
+            if (_slen) { memcpy(_a + _off, db_name, _slen); _off += _slen; }
+        }
+        if (_off + sizeof(shard_key) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "relational_storage_db_exec: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "relational_storage_db_exec: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &shard_key, sizeof(shard_key)); _off += sizeof(shard_key);
         {
             uint32_t _slen = (uint32_t)(sql ? strlen(sql) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "relational_storage_db_exec: pack overflow"); return PICOMESH_ERR(picomesh_json, "relational_storage_db_exec: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "relational_storage_db_exec: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "relational_storage_db_exec: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, sql, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(args_json ? strlen(args_json) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "relational_storage_db_exec: pack overflow"); return PICOMESH_ERR(picomesh_json, "relational_storage_db_exec: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "relational_storage_db_exec: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "relational_storage_db_exec: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, args_json, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_json, "relational_storage_db_exec: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_json, "relational_storage_db_exec: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -127,25 +151,30 @@ struct picomesh_json_result relational_storage_db_exec(struct ctx * ctx, struct 
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_json, _msg[0] ? strdup(_msg) : "relational_storage_db_exec: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_json, _msg[0] ? strdup(_msg) : "relational_storage_db_exec: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_json, "relational_storage_db_exec: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_json, "relational_storage_db_exec: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_json, "relational_storage_db_exec: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_json, "relational_storage_db_exec: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_json, "relational_storage_db_exec: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_json, "relational_storage_db_exec: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_json, _sv);
+        _ret = PICOMESH_OK(picomesh_json, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_json, "relational_storage_db_exec: no impl on this class");
-        return ((relational_storage_db_exec_fn)fn)(ctx, obj, hdrs, shard_key, sql, args_json);
+        return ((relational_storage_db_exec_fn)fn)(ctx, obj, hdrs, db_name, shard_key, sql, args_json);
     }
 }
 
-struct picomesh_json_result relational_storage_db_query(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t shard_key, const char * sql, const char * args_json)
+struct picomesh_json_result relational_storage_db_query(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * db_name, uint32_t shard_key, const char * sql, const char * args_json)
 {
     static method_slot _slot = METHOD_SLOT_UNDEFINED;
     if (_slot == METHOD_SLOT_UNDEFINED) {
@@ -171,7 +200,8 @@ struct picomesh_json_result relational_storage_db_query(struct ctx * ctx, struct
             struct picomesh_msgpack_buffer _mab;
             cmp_ctx_t _maw;
             picomesh_msgpack_writer_init(&_maw, &_mab, _margs, 16384);
-            cmp_write_array(&_maw, 3u);
+            cmp_write_array(&_maw, 4u);
+            cmp_write_str(&_maw, db_name ? db_name : "", (uint32_t)(db_name ? strlen(db_name) : 0));
             cmp_write_uinteger(&_maw, (uint64_t)shard_key);
             cmp_write_str(&_maw, sql ? sql : "", (uint32_t)(sql ? strlen(sql) : 0));
             cmp_write_str(&_maw, args_json ? args_json : "", (uint32_t)(args_json ? strlen(args_json) : 0));
@@ -206,7 +236,22 @@ struct picomesh_json_result relational_storage_db_query(struct ctx * ctx, struct
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_json, "relational_storage_db_query: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_json_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_json, "relational_storage_db_query: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -219,41 +264,48 @@ struct picomesh_json_result relational_storage_db_query(struct ctx * ctx, struct
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "relational_storage_db_query: header serialize overflow");
-                return PICOMESH_ERR(picomesh_json, "relational_storage_db_query: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_json, "relational_storage_db_query: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "relational_storage_db_query: pack overflow"); return PICOMESH_ERR(picomesh_json, "relational_storage_db_query: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "relational_storage_db_query: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "relational_storage_db_query: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(shard_key) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "relational_storage_db_query: pack overflow"); return PICOMESH_ERR(picomesh_json, "relational_storage_db_query: pack overflow"); }
+        {
+            uint32_t _slen = (uint32_t)(db_name ? strlen(db_name) : 0);
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "relational_storage_db_query: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "relational_storage_db_query: pack overflow"); goto _rpc_done; }
+            memcpy(_a + _off, &_slen, 4); _off += 4;
+            if (_slen) { memcpy(_a + _off, db_name, _slen); _off += _slen; }
+        }
+        if (_off + sizeof(shard_key) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "relational_storage_db_query: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "relational_storage_db_query: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &shard_key, sizeof(shard_key)); _off += sizeof(shard_key);
         {
             uint32_t _slen = (uint32_t)(sql ? strlen(sql) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "relational_storage_db_query: pack overflow"); return PICOMESH_ERR(picomesh_json, "relational_storage_db_query: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "relational_storage_db_query: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "relational_storage_db_query: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, sql, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(args_json ? strlen(args_json) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "relational_storage_db_query: pack overflow"); return PICOMESH_ERR(picomesh_json, "relational_storage_db_query: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "relational_storage_db_query: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "relational_storage_db_query: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, args_json, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_json, "relational_storage_db_query: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_json, "relational_storage_db_query: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -261,25 +313,30 @@ struct picomesh_json_result relational_storage_db_query(struct ctx * ctx, struct
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_json, _msg[0] ? strdup(_msg) : "relational_storage_db_query: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_json, _msg[0] ? strdup(_msg) : "relational_storage_db_query: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_json, "relational_storage_db_query: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_json, "relational_storage_db_query: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_json, "relational_storage_db_query: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_json, "relational_storage_db_query: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_json, "relational_storage_db_query: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_json, "relational_storage_db_query: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_json, _sv);
+        _ret = PICOMESH_OK(picomesh_json, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_json, "relational_storage_db_query: no impl on this class");
-        return ((relational_storage_db_query_fn)fn)(ctx, obj, hdrs, shard_key, sql, args_json);
+        return ((relational_storage_db_query_fn)fn)(ctx, obj, hdrs, db_name, shard_key, sql, args_json);
     }
 }
 
-struct picomesh_int_result relational_storage_db_shard_count(struct ctx * ctx, struct object * obj, struct yheaders * hdrs)
+struct picomesh_int_result relational_storage_db_shard_count(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * db_name)
 {
     static method_slot _slot = METHOD_SLOT_UNDEFINED;
     if (_slot == METHOD_SLOT_UNDEFINED) {
@@ -305,7 +362,8 @@ struct picomesh_int_result relational_storage_db_shard_count(struct ctx * ctx, s
             struct picomesh_msgpack_buffer _mab;
             cmp_ctx_t _maw;
             picomesh_msgpack_writer_init(&_maw, &_mab, _margs, 16384);
-            cmp_write_array(&_maw, 0u);
+            cmp_write_array(&_maw, 1u);
+            cmp_write_str(&_maw, db_name ? db_name : "", (uint32_t)(db_name ? strlen(db_name) : 0));
             size_t _mrlen = 0;
             char _merr[8192] = {0};
             if (!peer_channel_msgpack_call(_s->peer, "relational_storage.db.shard_count", hdrs,
@@ -327,7 +385,22 @@ struct picomesh_int_result relational_storage_db_shard_count(struct ctx * ctx, s
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int, "relational_storage_db_shard_count: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_int_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_int, "relational_storage_db_shard_count: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -340,24 +413,31 @@ struct picomesh_int_result relational_storage_db_shard_count(struct ctx * ctx, s
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "relational_storage_db_shard_count: header serialize overflow");
-                return PICOMESH_ERR(picomesh_int, "relational_storage_db_shard_count: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_int, "relational_storage_db_shard_count: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "relational_storage_db_shard_count: pack overflow"); return PICOMESH_ERR(picomesh_int, "relational_storage_db_shard_count: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "relational_storage_db_shard_count: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "relational_storage_db_shard_count: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        uint8_t _wbuf[8197];
+        {
+            uint32_t _slen = (uint32_t)(db_name ? strlen(db_name) : 0);
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "relational_storage_db_shard_count: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "relational_storage_db_shard_count: pack overflow"); goto _rpc_done; }
+            memcpy(_a + _off, &_slen, 4); _off += 4;
+            if (_slen) { memcpy(_a + _off, db_name, _slen); _off += _slen; }
+        }
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_int, "relational_storage_db_shard_count: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_int, "relational_storage_db_shard_count: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -365,16 +445,21 @@ struct picomesh_int_result relational_storage_db_shard_count(struct ctx * ctx, s
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "relational_storage_db_shard_count: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "relational_storage_db_shard_count: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(int)) return PICOMESH_ERR(picomesh_int, "relational_storage_db_shard_count: truncated RPC payload");
+        if (_wn != 1 + sizeof(int)) { _ret = PICOMESH_ERR(picomesh_int, "relational_storage_db_shard_count: truncated RPC payload"); goto _rpc_done; }
         int _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_int, _v);
+        _ret = PICOMESH_OK(picomesh_int, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_int, "relational_storage_db_shard_count: no impl on this class");
-        return ((relational_storage_db_shard_count_fn)fn)(ctx, obj, hdrs);
+        return ((relational_storage_db_shard_count_fn)fn)(ctx, obj, hdrs, db_name);
     }
 }
 

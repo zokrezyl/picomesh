@@ -7,6 +7,7 @@
 #include <picomesh/yclass/rpc.h>
 #include <picomesh/yclass/yheaders.h>
 #include <picomesh/msgpack/msgpack.h>
+#include <picomesh/allocator/allocator.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -63,7 +64,22 @@ struct picomesh_int_result registry_registry_register_service(struct ctx * ctx, 
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int, "registry_registry_register_service: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_int_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_int, "registry_registry_register_service: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -76,48 +92,48 @@ struct picomesh_int_result registry_registry_register_service(struct ctx * ctx, 
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "registry_registry_register_service: header serialize overflow");
-                return PICOMESH_ERR(picomesh_int, "registry_registry_register_service: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_int, "registry_registry_register_service: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "registry_registry_register_service: pack overflow"); return PICOMESH_ERR(picomesh_int, "registry_registry_register_service: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "registry_registry_register_service: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "registry_registry_register_service: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(name ? strlen(name) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "registry_registry_register_service: pack overflow"); return PICOMESH_ERR(picomesh_int, "registry_registry_register_service: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "registry_registry_register_service: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "registry_registry_register_service: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, name, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(instance_id ? strlen(instance_id) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "registry_registry_register_service: pack overflow"); return PICOMESH_ERR(picomesh_int, "registry_registry_register_service: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "registry_registry_register_service: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "registry_registry_register_service: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, instance_id, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(host ? strlen(host) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "registry_registry_register_service: pack overflow"); return PICOMESH_ERR(picomesh_int, "registry_registry_register_service: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "registry_registry_register_service: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "registry_registry_register_service: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, host, _slen); _off += _slen; }
         }
-        if (_off + sizeof(port) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "registry_registry_register_service: pack overflow"); return PICOMESH_ERR(picomesh_int, "registry_registry_register_service: pack overflow"); }
+        if (_off + sizeof(port) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "registry_registry_register_service: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "registry_registry_register_service: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &port, sizeof(port)); _off += sizeof(port);
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_int, "registry_registry_register_service: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_int, "registry_registry_register_service: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -125,12 +141,17 @@ struct picomesh_int_result registry_registry_register_service(struct ctx * ctx, 
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "registry_registry_register_service: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "registry_registry_register_service: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(int)) return PICOMESH_ERR(picomesh_int, "registry_registry_register_service: truncated RPC payload");
+        if (_wn != 1 + sizeof(int)) { _ret = PICOMESH_ERR(picomesh_int, "registry_registry_register_service: truncated RPC payload"); goto _rpc_done; }
         int _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_int, _v);
+        _ret = PICOMESH_OK(picomesh_int, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_int, "registry_registry_register_service: no impl on this class");
@@ -188,7 +209,22 @@ struct picomesh_int_result registry_registry_deregister_service(struct ctx * ctx
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int, "registry_registry_deregister_service: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_int_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_int, "registry_registry_deregister_service: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -201,38 +237,38 @@ struct picomesh_int_result registry_registry_deregister_service(struct ctx * ctx
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "registry_registry_deregister_service: header serialize overflow");
-                return PICOMESH_ERR(picomesh_int, "registry_registry_deregister_service: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_int, "registry_registry_deregister_service: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "registry_registry_deregister_service: pack overflow"); return PICOMESH_ERR(picomesh_int, "registry_registry_deregister_service: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "registry_registry_deregister_service: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "registry_registry_deregister_service: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(name ? strlen(name) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "registry_registry_deregister_service: pack overflow"); return PICOMESH_ERR(picomesh_int, "registry_registry_deregister_service: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "registry_registry_deregister_service: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "registry_registry_deregister_service: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, name, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(instance_id ? strlen(instance_id) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "registry_registry_deregister_service: pack overflow"); return PICOMESH_ERR(picomesh_int, "registry_registry_deregister_service: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "registry_registry_deregister_service: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "registry_registry_deregister_service: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, instance_id, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_int, "registry_registry_deregister_service: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_int, "registry_registry_deregister_service: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -240,12 +276,17 @@ struct picomesh_int_result registry_registry_deregister_service(struct ctx * ctx
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "registry_registry_deregister_service: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "registry_registry_deregister_service: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(int)) return PICOMESH_ERR(picomesh_int, "registry_registry_deregister_service: truncated RPC payload");
+        if (_wn != 1 + sizeof(int)) { _ret = PICOMESH_ERR(picomesh_int, "registry_registry_deregister_service: truncated RPC payload"); goto _rpc_done; }
         int _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_int, _v);
+        _ret = PICOMESH_OK(picomesh_int, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_int, "registry_registry_deregister_service: no impl on this class");
@@ -312,7 +353,22 @@ struct picomesh_string_result registry_registry_resolve(struct ctx * ctx, struct
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_string, "registry_registry_resolve: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_string_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_string, "registry_registry_resolve: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -325,31 +381,31 @@ struct picomesh_string_result registry_registry_resolve(struct ctx * ctx, struct
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "registry_registry_resolve: header serialize overflow");
-                return PICOMESH_ERR(picomesh_string, "registry_registry_resolve: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_string, "registry_registry_resolve: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "registry_registry_resolve: pack overflow"); return PICOMESH_ERR(picomesh_string, "registry_registry_resolve: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "registry_registry_resolve: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "registry_registry_resolve: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(name ? strlen(name) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "registry_registry_resolve: pack overflow"); return PICOMESH_ERR(picomesh_string, "registry_registry_resolve: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "registry_registry_resolve: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "registry_registry_resolve: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, name, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_string, "registry_registry_resolve: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_string, "registry_registry_resolve: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -357,17 +413,22 @@ struct picomesh_string_result registry_registry_resolve(struct ctx * ctx, struct
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "registry_registry_resolve: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "registry_registry_resolve: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_string, "registry_registry_resolve: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_string, "registry_registry_resolve: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_string, "registry_registry_resolve: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_string, "registry_registry_resolve: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_string, "registry_registry_resolve: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_string, "registry_registry_resolve: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_string, _sv);
+        _ret = PICOMESH_OK(picomesh_string, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_string, "registry_registry_resolve: no impl on this class");
@@ -434,7 +495,22 @@ struct picomesh_json_result registry_registry_discover_service(struct ctx * ctx,
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_json, "registry_registry_discover_service: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_json_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_json, "registry_registry_discover_service: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -447,31 +523,31 @@ struct picomesh_json_result registry_registry_discover_service(struct ctx * ctx,
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "registry_registry_discover_service: header serialize overflow");
-                return PICOMESH_ERR(picomesh_json, "registry_registry_discover_service: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_json, "registry_registry_discover_service: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "registry_registry_discover_service: pack overflow"); return PICOMESH_ERR(picomesh_json, "registry_registry_discover_service: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "registry_registry_discover_service: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "registry_registry_discover_service: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(name ? strlen(name) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "registry_registry_discover_service: pack overflow"); return PICOMESH_ERR(picomesh_json, "registry_registry_discover_service: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "registry_registry_discover_service: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "registry_registry_discover_service: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, name, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_json, "registry_registry_discover_service: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_json, "registry_registry_discover_service: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -479,17 +555,22 @@ struct picomesh_json_result registry_registry_discover_service(struct ctx * ctx,
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_json, _msg[0] ? strdup(_msg) : "registry_registry_discover_service: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_json, _msg[0] ? strdup(_msg) : "registry_registry_discover_service: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_json, "registry_registry_discover_service: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_json, "registry_registry_discover_service: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_json, "registry_registry_discover_service: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_json, "registry_registry_discover_service: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_json, "registry_registry_discover_service: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_json, "registry_registry_discover_service: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_json, _sv);
+        _ret = PICOMESH_OK(picomesh_json, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_json, "registry_registry_discover_service: no impl on this class");
@@ -555,7 +636,22 @@ struct picomesh_json_result registry_registry_list_services(struct ctx * ctx, st
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_json, "registry_registry_list_services: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_json_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_json, "registry_registry_list_services: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -568,24 +664,24 @@ struct picomesh_json_result registry_registry_list_services(struct ctx * ctx, st
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "registry_registry_list_services: header serialize overflow");
-                return PICOMESH_ERR(picomesh_json, "registry_registry_list_services: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_json, "registry_registry_list_services: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "registry_registry_list_services: pack overflow"); return PICOMESH_ERR(picomesh_json, "registry_registry_list_services: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "registry_registry_list_services: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "registry_registry_list_services: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_json, "registry_registry_list_services: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_json, "registry_registry_list_services: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -593,17 +689,22 @@ struct picomesh_json_result registry_registry_list_services(struct ctx * ctx, st
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_json, _msg[0] ? strdup(_msg) : "registry_registry_list_services: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_json, _msg[0] ? strdup(_msg) : "registry_registry_list_services: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_json, "registry_registry_list_services: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_json, "registry_registry_list_services: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_json, "registry_registry_list_services: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_json, "registry_registry_list_services: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_json, "registry_registry_list_services: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_json, "registry_registry_list_services: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_json, _sv);
+        _ret = PICOMESH_OK(picomesh_json, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_json, "registry_registry_list_services: no impl on this class");
@@ -659,7 +760,22 @@ struct picomesh_size_result registry_registry_count(struct ctx * ctx, struct obj
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_size, "registry_registry_count: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_size_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_size, "registry_registry_count: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -672,24 +788,24 @@ struct picomesh_size_result registry_registry_count(struct ctx * ctx, struct obj
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "registry_registry_count: header serialize overflow");
-                return PICOMESH_ERR(picomesh_size, "registry_registry_count: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_size, "registry_registry_count: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "registry_registry_count: pack overflow"); return PICOMESH_ERR(picomesh_size, "registry_registry_count: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "registry_registry_count: pack overflow"); _ret = PICOMESH_ERR(picomesh_size, "registry_registry_count: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_size, "registry_registry_count: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_size, "registry_registry_count: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -697,12 +813,17 @@ struct picomesh_size_result registry_registry_count(struct ctx * ctx, struct obj
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_size, _msg[0] ? strdup(_msg) : "registry_registry_count: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_size, _msg[0] ? strdup(_msg) : "registry_registry_count: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(size_t)) return PICOMESH_ERR(picomesh_size, "registry_registry_count: truncated RPC payload");
+        if (_wn != 1 + sizeof(size_t)) { _ret = PICOMESH_ERR(picomesh_size, "registry_registry_count: truncated RPC payload"); goto _rpc_done; }
         size_t _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_size, _v);
+        _ret = PICOMESH_OK(picomesh_size, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_size, "registry_registry_count: no impl on this class");

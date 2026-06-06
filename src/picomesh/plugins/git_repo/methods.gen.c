@@ -7,6 +7,7 @@
 #include <picomesh/yclass/rpc.h>
 #include <picomesh/yclass/yheaders.h>
 #include <picomesh/msgpack/msgpack.h>
+#include <picomesh/allocator/allocator.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -62,7 +63,22 @@ struct picomesh_uint32_result git_repo_git_repo_make(struct ctx * ctx, struct ob
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_make: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_uint32_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_make: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -75,41 +91,41 @@ struct picomesh_uint32_result git_repo_git_repo_make(struct ctx * ctx, struct ob
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_make: header serialize overflow");
-                return PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_make: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_make: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_make: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_make: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_make: pack overflow"); _ret = PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_make: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(owner_id) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_make: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_make: pack overflow"); }
+        if (_off + sizeof(owner_id) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_make: pack overflow"); _ret = PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_make: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &owner_id, sizeof(owner_id)); _off += sizeof(owner_id);
         {
             uint32_t _slen = (uint32_t)(owner_name ? strlen(owner_name) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_make: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_make: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_make: pack overflow"); _ret = PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_make: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, owner_name, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(repo_name ? strlen(repo_name) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_make: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_make: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_make: pack overflow"); _ret = PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_make: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, repo_name, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_make: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_make: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -117,12 +133,17 @@ struct picomesh_uint32_result git_repo_git_repo_make(struct ctx * ctx, struct ob
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_uint32, _msg[0] ? strdup(_msg) : "git_repo_git_repo_make: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_uint32, _msg[0] ? strdup(_msg) : "git_repo_git_repo_make: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(uint32_t)) return PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_make: truncated RPC payload");
+        if (_wn != 1 + sizeof(uint32_t)) { _ret = PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_make: truncated RPC payload"); goto _rpc_done; }
         uint32_t _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_uint32, _v);
+        _ret = PICOMESH_OK(picomesh_uint32, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_make: no impl on this class");
@@ -179,7 +200,22 @@ struct picomesh_int_result git_repo_git_repo_delete(struct ctx * ctx, struct obj
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_delete: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_int_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_delete: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -192,27 +228,27 @@ struct picomesh_int_result git_repo_git_repo_delete(struct ctx * ctx, struct obj
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_delete: header serialize overflow");
-                return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_delete: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_int, "git_repo_git_repo_delete: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_delete: pack overflow"); return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_delete: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_delete: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "git_repo_git_repo_delete: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(repo_id) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_delete: pack overflow"); return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_delete: pack overflow"); }
+        if (_off + sizeof(repo_id) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_delete: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "git_repo_git_repo_delete: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &repo_id, sizeof(repo_id)); _off += sizeof(repo_id);
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_delete: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_int, "git_repo_git_repo_delete: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -220,12 +256,17 @@ struct picomesh_int_result git_repo_git_repo_delete(struct ctx * ctx, struct obj
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "git_repo_git_repo_delete: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "git_repo_git_repo_delete: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(int)) return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_delete: truncated RPC payload");
+        if (_wn != 1 + sizeof(int)) { _ret = PICOMESH_ERR(picomesh_int, "git_repo_git_repo_delete: truncated RPC payload"); goto _rpc_done; }
         int _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_int, _v);
+        _ret = PICOMESH_OK(picomesh_int, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_delete: no impl on this class");
@@ -282,7 +323,22 @@ struct picomesh_uint32_result git_repo_git_repo_owner_of(struct ctx * ctx, struc
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_owner_of: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_uint32_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_owner_of: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -295,27 +351,27 @@ struct picomesh_uint32_result git_repo_git_repo_owner_of(struct ctx * ctx, struc
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_owner_of: header serialize overflow");
-                return PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_owner_of: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_owner_of: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_owner_of: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_owner_of: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_owner_of: pack overflow"); _ret = PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_owner_of: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(repo_id) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_owner_of: pack overflow"); return PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_owner_of: pack overflow"); }
+        if (_off + sizeof(repo_id) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_owner_of: pack overflow"); _ret = PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_owner_of: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &repo_id, sizeof(repo_id)); _off += sizeof(repo_id);
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_owner_of: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_owner_of: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -323,12 +379,17 @@ struct picomesh_uint32_result git_repo_git_repo_owner_of(struct ctx * ctx, struc
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_uint32, _msg[0] ? strdup(_msg) : "git_repo_git_repo_owner_of: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_uint32, _msg[0] ? strdup(_msg) : "git_repo_git_repo_owner_of: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(uint32_t)) return PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_owner_of: truncated RPC payload");
+        if (_wn != 1 + sizeof(uint32_t)) { _ret = PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_owner_of: truncated RPC payload"); goto _rpc_done; }
         uint32_t _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_uint32, _v);
+        _ret = PICOMESH_OK(picomesh_uint32, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_uint32, "git_repo_git_repo_owner_of: no impl on this class");
@@ -395,7 +456,22 @@ struct picomesh_string_result git_repo_git_repo_namespace_of(struct ctx * ctx, s
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_namespace_of: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_string_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_namespace_of: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -408,27 +484,27 @@ struct picomesh_string_result git_repo_git_repo_namespace_of(struct ctx * ctx, s
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_namespace_of: header serialize overflow");
-                return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_namespace_of: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_namespace_of: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_namespace_of: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_namespace_of: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_namespace_of: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_namespace_of: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(repo_id) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_namespace_of: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_namespace_of: pack overflow"); }
+        if (_off + sizeof(repo_id) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_namespace_of: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_namespace_of: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &repo_id, sizeof(repo_id)); _off += sizeof(repo_id);
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_namespace_of: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_namespace_of: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -436,17 +512,22 @@ struct picomesh_string_result git_repo_git_repo_namespace_of(struct ctx * ctx, s
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "git_repo_git_repo_namespace_of: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "git_repo_git_repo_namespace_of: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_namespace_of: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_namespace_of: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_namespace_of: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_namespace_of: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_namespace_of: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_namespace_of: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_string, _sv);
+        _ret = PICOMESH_OK(picomesh_string, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_namespace_of: no impl on this class");
@@ -503,7 +584,22 @@ struct picomesh_size_result git_repo_git_repo_count_for_owner(struct ctx * ctx, 
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_owner: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_size_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_owner: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -516,27 +612,27 @@ struct picomesh_size_result git_repo_git_repo_count_for_owner(struct ctx * ctx, 
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_count_for_owner: header serialize overflow");
-                return PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_owner: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_owner: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_count_for_owner: pack overflow"); return PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_owner: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_count_for_owner: pack overflow"); _ret = PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_owner: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(owner_id) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_count_for_owner: pack overflow"); return PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_owner: pack overflow"); }
+        if (_off + sizeof(owner_id) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_count_for_owner: pack overflow"); _ret = PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_owner: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &owner_id, sizeof(owner_id)); _off += sizeof(owner_id);
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_owner: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_owner: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -544,12 +640,17 @@ struct picomesh_size_result git_repo_git_repo_count_for_owner(struct ctx * ctx, 
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_size, _msg[0] ? strdup(_msg) : "git_repo_git_repo_count_for_owner: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_size, _msg[0] ? strdup(_msg) : "git_repo_git_repo_count_for_owner: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(size_t)) return PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_owner: truncated RPC payload");
+        if (_wn != 1 + sizeof(size_t)) { _ret = PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_owner: truncated RPC payload"); goto _rpc_done; }
         size_t _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_size, _v);
+        _ret = PICOMESH_OK(picomesh_size, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_owner: no impl on this class");
@@ -605,7 +706,22 @@ struct picomesh_size_result git_repo_git_repo_count_total(struct ctx * ctx, stru
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_total: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_size_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_total: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -618,24 +734,24 @@ struct picomesh_size_result git_repo_git_repo_count_total(struct ctx * ctx, stru
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_count_total: header serialize overflow");
-                return PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_total: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_total: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_count_total: pack overflow"); return PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_total: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_count_total: pack overflow"); _ret = PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_total: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_total: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_total: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -643,12 +759,17 @@ struct picomesh_size_result git_repo_git_repo_count_total(struct ctx * ctx, stru
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_size, _msg[0] ? strdup(_msg) : "git_repo_git_repo_count_total: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_size, _msg[0] ? strdup(_msg) : "git_repo_git_repo_count_total: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(size_t)) return PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_total: truncated RPC payload");
+        if (_wn != 1 + sizeof(size_t)) { _ret = PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_total: truncated RPC payload"); goto _rpc_done; }
         size_t _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_size, _v);
+        _ret = PICOMESH_OK(picomesh_size, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_total: no impl on this class");
@@ -715,7 +836,22 @@ struct picomesh_string_result git_repo_git_repo_list_for_owner(struct ctx * ctx,
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_owner: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_string_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_owner: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -728,27 +864,27 @@ struct picomesh_string_result git_repo_git_repo_list_for_owner(struct ctx * ctx,
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_list_for_owner: header serialize overflow");
-                return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_owner: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_owner: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_list_for_owner: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_owner: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_list_for_owner: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_owner: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(owner_id) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_list_for_owner: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_owner: pack overflow"); }
+        if (_off + sizeof(owner_id) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_list_for_owner: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_owner: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &owner_id, sizeof(owner_id)); _off += sizeof(owner_id);
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_owner: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_owner: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -756,17 +892,22 @@ struct picomesh_string_result git_repo_git_repo_list_for_owner(struct ctx * ctx,
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "git_repo_git_repo_list_for_owner: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "git_repo_git_repo_list_for_owner: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_owner: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_owner: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_owner: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_owner: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_owner: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_owner: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_string, _sv);
+        _ret = PICOMESH_OK(picomesh_string, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_owner: no impl on this class");
@@ -833,7 +974,22 @@ struct picomesh_string_result git_repo_git_repo_list_for_namespace(struct ctx * 
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_namespace: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_string_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_namespace: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -846,31 +1002,31 @@ struct picomesh_string_result git_repo_git_repo_list_for_namespace(struct ctx * 
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_list_for_namespace: header serialize overflow");
-                return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_namespace: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_namespace: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_list_for_namespace: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_namespace: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_list_for_namespace: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_namespace: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(path ? strlen(path) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_list_for_namespace: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_namespace: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_list_for_namespace: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_namespace: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, path, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_namespace: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_namespace: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -878,17 +1034,22 @@ struct picomesh_string_result git_repo_git_repo_list_for_namespace(struct ctx * 
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "git_repo_git_repo_list_for_namespace: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "git_repo_git_repo_list_for_namespace: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_namespace: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_namespace: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_namespace: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_namespace: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_namespace: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_namespace: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_string, _sv);
+        _ret = PICOMESH_OK(picomesh_string, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_list_for_namespace: no impl on this class");
@@ -945,7 +1106,22 @@ struct picomesh_size_result git_repo_git_repo_count_for_namespace(struct ctx * c
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_namespace: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_size_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_namespace: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -958,31 +1134,31 @@ struct picomesh_size_result git_repo_git_repo_count_for_namespace(struct ctx * c
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_count_for_namespace: header serialize overflow");
-                return PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_namespace: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_namespace: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_count_for_namespace: pack overflow"); return PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_namespace: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_count_for_namespace: pack overflow"); _ret = PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_namespace: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(path ? strlen(path) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_count_for_namespace: pack overflow"); return PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_namespace: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_count_for_namespace: pack overflow"); _ret = PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_namespace: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, path, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_namespace: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_namespace: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -990,12 +1166,17 @@ struct picomesh_size_result git_repo_git_repo_count_for_namespace(struct ctx * c
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_size, _msg[0] ? strdup(_msg) : "git_repo_git_repo_count_for_namespace: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_size, _msg[0] ? strdup(_msg) : "git_repo_git_repo_count_for_namespace: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(size_t)) return PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_namespace: truncated RPC payload");
+        if (_wn != 1 + sizeof(size_t)) { _ret = PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_namespace: truncated RPC payload"); goto _rpc_done; }
         size_t _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_size, _v);
+        _ret = PICOMESH_OK(picomesh_size, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_size, "git_repo_git_repo_count_for_namespace: no impl on this class");
@@ -1064,7 +1245,22 @@ struct picomesh_string_result git_repo_git_repo_read_tree(struct ctx * ctx, stru
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_tree: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_string_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_tree: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -1077,41 +1273,41 @@ struct picomesh_string_result git_repo_git_repo_read_tree(struct ctx * ctx, stru
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_read_tree: header serialize overflow");
-                return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_tree: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_tree: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_read_tree: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_tree: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_read_tree: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_tree: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(repo_id) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_read_tree: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_tree: pack overflow"); }
+        if (_off + sizeof(repo_id) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_read_tree: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_tree: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &repo_id, sizeof(repo_id)); _off += sizeof(repo_id);
         {
             uint32_t _slen = (uint32_t)(ref ? strlen(ref) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_read_tree: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_tree: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_read_tree: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_tree: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, ref, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(path ? strlen(path) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_read_tree: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_tree: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_read_tree: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_tree: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, path, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_tree: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_tree: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -1119,17 +1315,22 @@ struct picomesh_string_result git_repo_git_repo_read_tree(struct ctx * ctx, stru
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "git_repo_git_repo_read_tree: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "git_repo_git_repo_read_tree: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_tree: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_tree: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_tree: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_tree: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_tree: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_tree: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_string, _sv);
+        _ret = PICOMESH_OK(picomesh_string, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_tree: no impl on this class");
@@ -1198,7 +1399,22 @@ struct picomesh_string_result git_repo_git_repo_read_file(struct ctx * ctx, stru
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_file: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_string_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_file: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -1211,41 +1427,41 @@ struct picomesh_string_result git_repo_git_repo_read_file(struct ctx * ctx, stru
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_read_file: header serialize overflow");
-                return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_file: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_file: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_read_file: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_file: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_read_file: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_file: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(repo_id) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_read_file: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_file: pack overflow"); }
+        if (_off + sizeof(repo_id) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_read_file: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_file: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &repo_id, sizeof(repo_id)); _off += sizeof(repo_id);
         {
             uint32_t _slen = (uint32_t)(ref ? strlen(ref) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_read_file: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_file: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_read_file: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_file: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, ref, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(path ? strlen(path) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_read_file: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_file: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_read_file: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_file: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, path, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_file: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_file: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -1253,17 +1469,22 @@ struct picomesh_string_result git_repo_git_repo_read_file(struct ctx * ctx, stru
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "git_repo_git_repo_read_file: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "git_repo_git_repo_read_file: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_file: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_file: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_file: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_file: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_file: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_file: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_string, _sv);
+        _ret = PICOMESH_OK(picomesh_string, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_read_file: no impl on this class");
@@ -1335,7 +1556,22 @@ struct picomesh_string_result git_repo_git_repo_put_file(struct ctx * ctx, struc
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_string_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -1348,62 +1584,62 @@ struct picomesh_string_result git_repo_git_repo_put_file(struct ctx * ctx, struc
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_put_file: header serialize overflow");
-                return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_put_file: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_put_file: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(repo_id) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_put_file: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: pack overflow"); }
+        if (_off + sizeof(repo_id) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_put_file: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &repo_id, sizeof(repo_id)); _off += sizeof(repo_id);
         {
             uint32_t _slen = (uint32_t)(path ? strlen(path) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_put_file: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_put_file: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, path, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(content ? strlen(content) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_put_file: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_put_file: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, content, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(message ? strlen(message) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_put_file: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_put_file: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, message, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(author_name ? strlen(author_name) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_put_file: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_put_file: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, author_name, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(author_email ? strlen(author_email) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_put_file: pack overflow"); return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_put_file: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, author_email, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -1411,17 +1647,22 @@ struct picomesh_string_result git_repo_git_repo_put_file(struct ctx * ctx, struc
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "git_repo_git_repo_put_file: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "git_repo_git_repo_put_file: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_string, _sv);
+        _ret = PICOMESH_OK(picomesh_string, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_string, "git_repo_git_repo_put_file: no impl on this class");
@@ -1478,7 +1719,22 @@ struct picomesh_int_result git_repo_git_repo_is_public(struct ctx * ctx, struct 
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_is_public: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_int_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_is_public: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -1491,27 +1747,27 @@ struct picomesh_int_result git_repo_git_repo_is_public(struct ctx * ctx, struct 
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_is_public: header serialize overflow");
-                return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_is_public: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_int, "git_repo_git_repo_is_public: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_is_public: pack overflow"); return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_is_public: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_is_public: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "git_repo_git_repo_is_public: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(repo_id) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_is_public: pack overflow"); return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_is_public: pack overflow"); }
+        if (_off + sizeof(repo_id) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_is_public: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "git_repo_git_repo_is_public: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &repo_id, sizeof(repo_id)); _off += sizeof(repo_id);
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_is_public: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_int, "git_repo_git_repo_is_public: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -1519,12 +1775,17 @@ struct picomesh_int_result git_repo_git_repo_is_public(struct ctx * ctx, struct 
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "git_repo_git_repo_is_public: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "git_repo_git_repo_is_public: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(int)) return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_is_public: truncated RPC payload");
+        if (_wn != 1 + sizeof(int)) { _ret = PICOMESH_ERR(picomesh_int, "git_repo_git_repo_is_public: truncated RPC payload"); goto _rpc_done; }
         int _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_int, _v);
+        _ret = PICOMESH_OK(picomesh_int, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_is_public: no impl on this class");
@@ -1582,7 +1843,22 @@ struct picomesh_int_result git_repo_git_repo_set_public(struct ctx * ctx, struct
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_set_public: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_int_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_set_public: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -1595,30 +1871,30 @@ struct picomesh_int_result git_repo_git_repo_set_public(struct ctx * ctx, struct
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_set_public: header serialize overflow");
-                return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_set_public: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_int, "git_repo_git_repo_set_public: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_set_public: pack overflow"); return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_set_public: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_set_public: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "git_repo_git_repo_set_public: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(repo_id) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_set_public: pack overflow"); return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_set_public: pack overflow"); }
+        if (_off + sizeof(repo_id) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_set_public: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "git_repo_git_repo_set_public: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &repo_id, sizeof(repo_id)); _off += sizeof(repo_id);
-        if (_off + sizeof(is_public) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_set_public: pack overflow"); return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_set_public: pack overflow"); }
+        if (_off + sizeof(is_public) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_set_public: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "git_repo_git_repo_set_public: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &is_public, sizeof(is_public)); _off += sizeof(is_public);
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_set_public: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_int, "git_repo_git_repo_set_public: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -1626,12 +1902,17 @@ struct picomesh_int_result git_repo_git_repo_set_public(struct ctx * ctx, struct
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "git_repo_git_repo_set_public: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "git_repo_git_repo_set_public: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(int)) return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_set_public: truncated RPC payload");
+        if (_wn != 1 + sizeof(int)) { _ret = PICOMESH_ERR(picomesh_int, "git_repo_git_repo_set_public: truncated RPC payload"); goto _rpc_done; }
         int _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_int, _v);
+        _ret = PICOMESH_OK(picomesh_int, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_int, "git_repo_git_repo_set_public: no impl on this class");
@@ -1699,7 +1980,22 @@ struct picomesh_json_result git_repo_git_repo_list(struct ctx * ctx, struct obje
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_json_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -1712,30 +2008,30 @@ struct picomesh_json_result git_repo_git_repo_list(struct ctx * ctx, struct obje
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_list: header serialize overflow");
-                return PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_list: pack overflow"); return PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_list: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(offset) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_list: pack overflow"); return PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list: pack overflow"); }
+        if (_off + sizeof(offset) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_list: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &offset, sizeof(offset)); _off += sizeof(offset);
-        if (_off + sizeof(limit) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_list: pack overflow"); return PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list: pack overflow"); }
+        if (_off + sizeof(limit) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_list: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &limit, sizeof(limit)); _off += sizeof(limit);
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -1743,17 +2039,22 @@ struct picomesh_json_result git_repo_git_repo_list(struct ctx * ctx, struct obje
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_json, _msg[0] ? strdup(_msg) : "git_repo_git_repo_list: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_json, _msg[0] ? strdup(_msg) : "git_repo_git_repo_list: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_json, _sv);
+        _ret = PICOMESH_OK(picomesh_json, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list: no impl on this class");
@@ -1819,7 +2120,22 @@ struct picomesh_json_result git_repo_git_repo_list_all(struct ctx * ctx, struct 
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list_all: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_json_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list_all: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -1832,24 +2148,24 @@ struct picomesh_json_result git_repo_git_repo_list_all(struct ctx * ctx, struct 
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_list_all: header serialize overflow");
-                return PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list_all: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list_all: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_list_all: pack overflow"); return PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list_all: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "git_repo_git_repo_list_all: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list_all: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list_all: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list_all: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -1857,17 +2173,22 @@ struct picomesh_json_result git_repo_git_repo_list_all(struct ctx * ctx, struct 
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_json, _msg[0] ? strdup(_msg) : "git_repo_git_repo_list_all: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_json, _msg[0] ? strdup(_msg) : "git_repo_git_repo_list_all: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list_all: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list_all: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list_all: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list_all: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list_all: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list_all: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_json, _sv);
+        _ret = PICOMESH_OK(picomesh_json, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_json, "git_repo_git_repo_list_all: no impl on this class");

@@ -14,16 +14,19 @@
  * `hash(external_id)` (see docs/sharded-relational-storage.md). The engine never
  * interprets the id — it only does `shard_id % N`.
  *
- * One running instance == one cluster == one shard set. The shard set is
- * process-global, so a process hosts exactly ONE relational cluster; multiple
- * clusters are multiple instances, i.e. multiple processes in the split mesh
- * (the supported deployment — see rel_set()).
+ * One instance hosts MULTIPLE named logical databases, each its own shard set,
+ * shard count and schema, selected per call by `db_name` (see rel_set_for()).
+ * The split mesh runs a process per `rstore_*` service, each serving its sole
+ * (default) database from the flat `relational_storage.*` config; the
+ * collocated/all-in-one deployment hosts every logical database
+ * (uid/username/session/token) in ONE process via the
+ * `relational_storage.databases.<name>.*` config map.
  *
  * Generic surface — raw storage, not a product API; the service layer owns
  * routing and correctness:
  *
- *     exec(shard_id, sql, args_json)  -> {"changes":N,"last_insert_rowid":M}
- *     query(shard_id, sql, args_json) -> [ {col: val, …}, … ]
+ *     exec(db, shard_id, sql, args_json)  -> {"changes":N,"last_insert_rowid":M}
+ *     query(db, shard_id, sql, args_json) -> [ {col: val, …}, … ]
  *
  * `args_json` is a JSON array of bind params for the `?` placeholders (so
  * callers never splice values into SQL). Cross-shard work is the caller's job
@@ -48,7 +51,9 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#define REL_MAX_SHARDS 64
+#define REL_MAX_SHARDS  64
+#define REL_MAX_DBS     16
+#define REL_DB_NAME_MAX 48
 
 /* This engine carries NO application data model. The per-shard schema (the
  * CREATE TABLE/INDEX statements) and the shard count are CONFIG, applied
@@ -61,31 +66,105 @@ struct rel_shard {
     pthread_mutex_t mu;
 };
 
+/* One NAMED logical database == one shard set. A single relational_storage
+ * instance hosts several of these, each with its OWN shard count and schema, so
+ * each store shards by whatever routing key its consumer supplies (data stores
+ * by the owning `uid`, identity-lookup stores by `hash(external_id)`) entirely
+ * independently of the others. The `name` selects which set an op routes to. */
 struct rel_set {
+    char name[REL_DB_NAME_MAX];
     struct rel_shard shards[REL_MAX_SHARDS];
     int n;
-    int ready;     /* 1 once open succeeded; -1 once it permanently failed */
+    int ready;     /* 0 = not opened yet; 1 = open; -1 = permanently failed */
     pthread_mutex_t init_mu;
 };
 
-/* The process-global shard set. COMMITTED DECISION (gh#29): one process hosts
- * exactly ONE relational cluster. Multiple clusters = multiple instances =
- * multiple processes — which is how the split mesh already deploys every
- * relational_storage service (each `rstore_*` is its own process with its own
- * `relational_storage.path`/`shards` projection). Collocated/all-in-one mode
- * with two relational clusters in one process is therefore NOT supported: there
- * is one config projection and one shard set per process. Keying the shard set
- * by config path to lift that limit is possible but unneeded while the mesh
- * spawns a process per service; revisit only if collocated multi-cluster is
- * ever required.
+/* Process-global registry of named shard sets. ONE relational_storage instance
+ * (process) hosts MULTIPLE logical databases — each its own shard set, shard
+ * count and schema — selected per op by `db_name`. This lifts the former
+ * one-cluster-per-process limit (gh#29) so the collocated/all-in-one deployment
+ * can host uid/username/session/token in a single process; the split mesh still
+ * runs a process per `rstore_*` service, each serving its sole (default)
+ * database from the flat `relational_storage.*` config.
+ *
+ * The registry mutex guards name lookup + slot allocation; each set then opens
+ * lazily behind its OWN init mutex. Slots are never moved or freed, so a
+ * returned `struct rel_set *` stays valid for the process lifetime.
  *
  * This is the one sanctioned file-scope datum here: a process-lifetime
- * subsystem singleton guarded by its own init mutex, with no per-engine slot to
- * hang it off of. */
-static struct rel_set *rel_set(void)
+ * subsystem singleton guarded by its own mutex, with no per-engine slot to hang
+ * it off of. */
+struct rel_registry {
+    struct rel_set sets[REL_MAX_DBS];
+    int count;
+    pthread_mutex_t mu;
+};
+
+static struct rel_registry *rel_registry(void)
 {
-    static struct rel_set s = {.init_mu = PTHREAD_MUTEX_INITIALIZER};
-    return &s;
+    static struct rel_registry r = {.mu = PTHREAD_MUTEX_INITIALIZER};
+    return &r;
+}
+
+/* Find the shard set for `db_name`, allocating a fresh (unopened) slot the
+ * first time a name is seen. A NULL/empty name maps to "default" — the legacy
+ * single-database identity served from the flat `relational_storage.*` config,
+ * which keeps every existing split-mesh `rstore_*` process working unchanged.
+ * Returns NULL only if more than REL_MAX_DBS distinct names are requested. */
+static struct rel_set *rel_set_for(const char *db_name)
+{
+    if (!db_name || !*db_name) db_name = "default";
+    struct rel_registry *reg = rel_registry();
+    pthread_mutex_lock(&reg->mu);
+    struct rel_set *found = NULL;
+    for (int i = 0; i < reg->count; ++i) {
+        if (strcmp(reg->sets[i].name, db_name) == 0) { found = &reg->sets[i]; break; }
+    }
+    if (!found && reg->count < REL_MAX_DBS) {
+        found = &reg->sets[reg->count++];
+        snprintf(found->name, sizeof(found->name), "%s", db_name);
+        found->n = 0;
+        found->ready = 0;
+        pthread_mutex_init(&found->init_mu, NULL);
+    }
+    pthread_mutex_unlock(&reg->mu);
+    return found;
+}
+
+/* Read a string config value for database `db_name`, preferring the
+ * per-database key `relational_storage.databases.<name>.<leaf>` and falling
+ * back to the flat legacy key `relational_storage.<leaf>` when the named form
+ * is absent (so the split mesh's per-process flat config still applies). NULL
+ * if neither is set. */
+static const char *rel_cfg_str(const struct yconfig *cfg, const char *db_name, const char *leaf)
+{
+    if (!cfg) return NULL;
+    char key[160];
+    snprintf(key, sizeof(key), "relational_storage.databases.%s.%s", db_name, leaf);
+    struct yconfig_node_ptr_result pr = yconfig_get(cfg, key);
+    if (PICOMESH_IS_OK(pr) && pr.value) return yconfig_node_as_string(pr.value, NULL);
+    if (PICOMESH_IS_ERR(pr)) picomesh_error_destroy(pr.error);
+    snprintf(key, sizeof(key), "relational_storage.%s", leaf);
+    pr = yconfig_get(cfg, key);
+    if (PICOMESH_IS_OK(pr) && pr.value) return yconfig_node_as_string(pr.value, NULL);
+    if (PICOMESH_IS_ERR(pr)) picomesh_error_destroy(pr.error);
+    return NULL;
+}
+
+/* Integer counterpart to rel_cfg_str (same per-database → flat fallback). */
+static int rel_cfg_int(const struct yconfig *cfg, const char *db_name, const char *leaf, int fallback)
+{
+    if (!cfg) return fallback;
+    char key[160];
+    snprintf(key, sizeof(key), "relational_storage.databases.%s.%s", db_name, leaf);
+    struct yconfig_node_ptr_result pr = yconfig_get(cfg, key);
+    if (PICOMESH_IS_OK(pr) && pr.value) return (int)yconfig_node_as_int(pr.value, fallback);
+    if (PICOMESH_IS_ERR(pr)) picomesh_error_destroy(pr.error);
+    snprintf(key, sizeof(key), "relational_storage.%s", leaf);
+    pr = yconfig_get(cfg, key);
+    if (PICOMESH_IS_OK(pr) && pr.value) return (int)yconfig_node_as_int(pr.value, fallback);
+    if (PICOMESH_IS_ERR(pr)) picomesh_error_destroy(pr.error);
+    return fallback;
 }
 
 /* mkdir -p: create `dir` and any missing parents (best-effort). The configured
@@ -123,35 +202,34 @@ static int rel_pragma_text(sqlite3 *db, const char *pragma, char *out, size_t ca
     return got;
 }
 
-/* Lazy one-shot open: read config, open N shard DBs, apply the schema.
- * `relational_storage.path` is REQUIRED (a data-location path must be
- * explicit — no silent /tmp fallback). Returns NULL on failure. */
-static struct rel_set *rel_init(void)
+/* Lazy one-shot open of the named database `db_name`: read its config, open N
+ * shard DBs, apply its schema. The path is REQUIRED (a data-location path must
+ * be explicit — no silent /tmp fallback), read from
+ * `relational_storage.databases.<name>.path` or the flat `relational_storage.path`.
+ * Returns NULL on failure (or if the registry is full). */
+static struct rel_set *rel_init(const char *db_name)
 {
-    struct rel_set *s = rel_set();
+    struct rel_set *s = rel_set_for(db_name);
+    if (!s) {
+        ytrace_output("error", __FILE__, __LINE__, __func__,
+                      "relational_storage: too many distinct databases (raise REL_MAX_DBS)");
+        return NULL;
+    }
     pthread_mutex_lock(&s->init_mu);
     if (s->ready != 0) { pthread_mutex_unlock(&s->init_mu); return s->ready > 0 ? s : NULL; }
 
     struct picomesh_engine *e = picomesh_active_engine();
     const struct yconfig *cfg = e ? picomesh_engine_config(e) : NULL;
-    const char *dir = NULL;
-    const char *schema = NULL; /* config-provided DDL, applied verbatim */
-    int shards = 8;
-    if (cfg) {
-        struct yconfig_node_ptr_result pr = yconfig_get(cfg, "relational_storage.path");
-        if (PICOMESH_IS_OK(pr) && pr.value) dir = yconfig_node_as_string(pr.value, NULL);
-        else if (PICOMESH_IS_ERR(pr)) picomesh_error_destroy(pr.error);
-        struct yconfig_node_ptr_result sr = yconfig_get(cfg, "relational_storage.shards");
-        if (PICOMESH_IS_OK(sr) && sr.value) shards = (int)yconfig_node_as_int(sr.value, 8);
-        else if (PICOMESH_IS_ERR(sr)) picomesh_error_destroy(sr.error);
-        struct yconfig_node_ptr_result cr = yconfig_get(cfg, "relational_storage.schema");
-        if (PICOMESH_IS_OK(cr) && cr.value) schema = yconfig_node_as_string(cr.value, NULL);
-        else if (PICOMESH_IS_ERR(cr)) picomesh_error_destroy(cr.error);
-    }
+    const char *dir = rel_cfg_str(cfg, s->name, "path");          /* shard dir */
+    const char *schema = rel_cfg_str(cfg, s->name, "schema");     /* DDL, verbatim */
+    int shards = rel_cfg_int(cfg, s->name, "shards", 8);
     if (!dir || !*dir) {
-        ytrace_output("error", __FILE__, __LINE__, __func__,
-                      "relational_storage: config key relational_storage.path is REQUIRED "
-                      "(the directory for the shard SQLite files) — refusing to start");
+        char msg[220];
+        snprintf(msg, sizeof(msg),
+                 "relational_storage: path is REQUIRED for database '%s' "
+                 "(set relational_storage.databases.%s.path or relational_storage.path) "
+                 "— refusing to start", s->name, s->name);
+        ytrace_output("error", __FILE__, __LINE__, __func__, "%s", msg);
         s->ready = -1;
         pthread_mutex_unlock(&s->init_mu);
         return NULL;
@@ -227,7 +305,7 @@ static struct rel_set *rel_init(void)
     }
     s->n = shards;
     s->ready = 1;
-    yinfo("relational_storage: opened %d SQLite shard(s) under %s", shards, dir);
+    yinfo("relational_storage: database '%s' opened %d SQLite shard(s) under %s", s->name, shards, dir);
     pthread_mutex_unlock(&s->init_mu);
     return s;
 }
@@ -278,6 +356,7 @@ enum rel_op { REL_EXEC, REL_QUERY };
 
 struct rel_work {
     enum rel_op op;
+    const char *db_name;            /* which named database to route to */
     uint32_t shard_key;
     const char *sql;
     const struct rel_bind *binds;   /* plain-C bind params (no JSON on worker) */
@@ -293,8 +372,9 @@ static void rel_work_fn(void *arg)
 {
     struct rel_work *w = arg;
     w->ok = 0;
-    struct rel_set *s = rel_init();
-    if (!s) { snprintf(w->err, sizeof(w->err), "relational_storage: not configured"); return; }
+    struct rel_set *s = rel_init(w->db_name);
+    if (!s) { snprintf(w->err, sizeof(w->err), "relational_storage: database '%s' not configured",
+                       w->db_name ? w->db_name : "default"); return; }
     struct rel_shard *sh = &s->shards[(uint64_t)w->shard_key % (uint64_t)s->n];
 
     pthread_mutex_lock(&sh->mu);
@@ -323,11 +403,22 @@ static void rel_work_fn(void *arg)
         return;
     }
 
-    struct yjson_writer *jw = yjson_writer_new();
-    if (!jw) { sqlite3_finalize(st); pthread_mutex_unlock(&sh->mu);
-               snprintf(w->err, sizeof(w->err), "writer alloc"); return; }
+    /* The shard mutex guards ONLY the SQLite statement (prepare/bind/step and,
+     * for a query, the live column reads — a sqlite3* is not concurrency-safe).
+     * It must NOT be held across result serialization or heap allocation: those
+     * touch no shard state, and holding the DB lock across malloc/strdup/JSON
+     * building (and across the cross-shard fan-out that drives this) needlessly
+     * serializes every shard behind one lock. For a query the rows are read into
+     * the writer under the lock (columns are only valid while stepping); the
+     * final strdup happens after unlock. For an exec the counters are captured
+     * into locals and the JSON is built entirely after unlock. */
+    struct yjson_writer *jw = NULL;
+    int64_t exec_changes = 0, exec_rowid = 0;
 
     if (w->op == REL_QUERY) {
+        jw = yjson_writer_new();
+        if (!jw) { sqlite3_finalize(st); pthread_mutex_unlock(&sh->mu);
+                   snprintf(w->err, sizeof(w->err), "writer alloc"); return; }
         yjson_writer_begin_array(jw);
         int ncol = sqlite3_column_count(st);
         int rc;
@@ -349,12 +440,23 @@ static void rel_work_fn(void *arg)
         int rc = sqlite3_step(st);
         if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
             snprintf(w->err, sizeof(w->err), "exec: %s", sqlite3_errmsg(sh->db));
-            yjson_writer_free(jw); sqlite3_finalize(st); pthread_mutex_unlock(&sh->mu);
+            sqlite3_finalize(st); pthread_mutex_unlock(&sh->mu);
             return;
         }
+        exec_changes = sqlite3_changes(sh->db);
+        exec_rowid   = sqlite3_last_insert_rowid(sh->db);
+    }
+
+    sqlite3_finalize(st);
+    pthread_mutex_unlock(&sh->mu);
+    /* --- DB lock released: serialize + allocate the result OUTSIDE it. --- */
+
+    if (w->op == REL_EXEC) {
+        jw = yjson_writer_new();
+        if (!jw) { snprintf(w->err, sizeof(w->err), "writer alloc"); return; }
         yjson_writer_begin_object(jw);
-        yjson_writer_key(jw, "changes");           yjson_writer_int(jw, sqlite3_changes(sh->db));
-        yjson_writer_key(jw, "last_insert_rowid"); yjson_writer_int(jw, sqlite3_last_insert_rowid(sh->db));
+        yjson_writer_key(jw, "changes");           yjson_writer_int(jw, exec_changes);
+        yjson_writer_key(jw, "last_insert_rowid"); yjson_writer_int(jw, exec_rowid);
         yjson_writer_end_object(jw);
     }
 
@@ -362,8 +464,6 @@ static void rel_work_fn(void *arg)
     const char *data = yjson_writer_data(jw, &len);
     w->out_json = strdup(data ? data : (w->op == REL_QUERY ? "[]" : "{}"));
     yjson_writer_free(jw);
-    sqlite3_finalize(st);
-    pthread_mutex_unlock(&sh->mu);
     w->ok = w->out_json != NULL;
 }
 
@@ -386,7 +486,7 @@ struct PICOMESH_CLASS_ANNOTATE("class@relational_storage:db") relational_storage
 };
 
 /* Shared by exec + query: parse args_json, dispatch, return the JSON result. */
-static struct picomesh_json_result rel_call(enum rel_op op, uint32_t shard_key,
+static struct picomesh_json_result rel_call(enum rel_op op, const char *db_name, uint32_t shard_key,
                                             const char *sql, const char *args_json)
 {
     if (!sql || !*sql) return PICOMESH_ERR(picomesh_json, "relational_storage: empty SQL");
@@ -429,7 +529,7 @@ static struct picomesh_json_result rel_call(enum rel_op op, uint32_t shard_key,
         }
     }
 
-    struct rel_work w = {.op = op, .shard_key = shard_key, .sql = sql,
+    struct rel_work w = {.op = op, .db_name = db_name, .shard_key = shard_key, .sql = sql,
                          .binds = binds, .nbinds = nbinds};
     rel_run(&w);
     if (doc) yjson_doc_free(doc);
@@ -444,41 +544,44 @@ static struct picomesh_json_result rel_call(enum rel_op op, uint32_t shard_key,
     return PICOMESH_OK(picomesh_json, w.out_json);
 }
 
-/* Run a write/DDL statement against namespace `shard_key`'s shard. Returns
- * {"changes":N,"last_insert_rowid":M}. `args_json` binds the `?` params. */
+/* Run a write/DDL statement against database `db_name`, shard `shard_key`%N.
+ * Returns {"changes":N,"last_insert_rowid":M}. `args_json` binds the `?` params. */
 PICOMESH_CLASS_ANNOTATE("override@relational_storage:db:db_exec")
 struct picomesh_json_result relational_storage_db_exec_impl(struct ctx *ctx, struct object *obj,
-                                                            struct yheaders *hdrs, uint32_t shard_key,
+                                                            struct yheaders *hdrs, const char *db_name,
+                                                            uint32_t shard_key,
                                                             const char *sql, const char *args_json)
 {
     (void)ctx; (void)obj; (void)hdrs;
-    return rel_call(REL_EXEC, shard_key, sql, args_json);
+    return rel_call(REL_EXEC, db_name, shard_key, sql, args_json);
 }
 
-/* Run a SELECT against namespace `shard_key`'s shard. Returns a JSON array of
- * row objects ({column: value, …}). `args_json` binds the `?` params. */
+/* Run a SELECT against database `db_name`, shard `shard_key`%N. Returns a JSON
+ * array of row objects ({column: value, …}). `args_json` binds the `?` params. */
 PICOMESH_CLASS_ANNOTATE("override@relational_storage:db:db_query")
 struct picomesh_json_result relational_storage_db_query_impl(struct ctx *ctx, struct object *obj,
-                                                             struct yheaders *hdrs, uint32_t shard_key,
+                                                             struct yheaders *hdrs, const char *db_name,
+                                                             uint32_t shard_key,
                                                              const char *sql, const char *args_json)
 {
     (void)ctx; (void)obj; (void)hdrs;
-    return rel_call(REL_QUERY, shard_key, sql, args_json);
+    return rel_call(REL_QUERY, db_name, shard_key, sql, args_json);
 }
 
-/* The number of shards THIS instance actually opened. Fan-out (DDL broadcast,
- * cross-shard aggregates and pagination) must iterate the serving instance's
- * shard count — in the split mesh a consumer is wired to a remote cluster whose
- * shard count it cannot read from its own local config. Reading the count from
- * the caller's config instead would miss shards (undercount) or wrap onto
+/* The number of shards database `db_name` actually opened. Fan-out (DDL
+ * broadcast, cross-shard aggregates and pagination) must iterate the serving
+ * database's shard count — in the split mesh a consumer is wired to a remote
+ * cluster whose shard count it cannot read from its own local config, and even
+ * collocated each named database may have a different count. Reading the count
+ * from the caller's config instead would miss shards (undercount) or wrap onto
  * already-queried shards (double-count). So consumers ask the instance. */
 PICOMESH_CLASS_ANNOTATE("override@relational_storage:db:db_shard_count")
 struct picomesh_int_result relational_storage_db_shard_count_impl(struct ctx *ctx, struct object *obj,
-                                                                  struct yheaders *hdrs)
+                                                                  struct yheaders *hdrs, const char *db_name)
 {
     (void)ctx; (void)obj; (void)hdrs;
-    struct rel_set *s = rel_init();
-    if (!s) return PICOMESH_ERR(picomesh_int, "relational_storage: not configured");
+    struct rel_set *s = rel_init(db_name);
+    if (!s) return PICOMESH_ERR(picomesh_int, "relational_storage: database not configured");
     return PICOMESH_OK(picomesh_int, s->n);
 }
 

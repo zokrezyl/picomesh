@@ -53,7 +53,7 @@ static struct token_issuer_token_issuer_data *ti(struct object *obj)
 
 static struct picomesh_void_result ti_open(struct rel_handle *h, struct yheaders *hdrs, struct object *obj)
 {
-    struct picomesh_void_result o = rel_open(h, "rstore_token");
+    struct picomesh_void_result o = rel_open(h, "rstore_token", "token");
     if (PICOMESH_IS_ERR(o)) return PICOMESH_ERR(picomesh_void, "token_issuer: open relational_storage failed", o);
     return rel_ensure_schema(h, hdrs, &ti(obj)->schema_ensured, TI_DDL);
 }

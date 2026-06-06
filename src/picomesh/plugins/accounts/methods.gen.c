@@ -7,6 +7,7 @@
 #include <picomesh/yclass/rpc.h>
 #include <picomesh/yclass/yheaders.h>
 #include <picomesh/msgpack/msgpack.h>
+#include <picomesh/allocator/allocator.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -61,7 +62,22 @@ struct picomesh_int_result accounts_accounts_claim_username(struct ctx * ctx, st
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int, "accounts_accounts_claim_username: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_int_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_int, "accounts_accounts_claim_username: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -74,34 +90,34 @@ struct picomesh_int_result accounts_accounts_claim_username(struct ctx * ctx, st
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "accounts_accounts_claim_username: header serialize overflow");
-                return PICOMESH_ERR(picomesh_int, "accounts_accounts_claim_username: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_claim_username: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_claim_username: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_claim_username: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_claim_username: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_claim_username: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(uid) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_claim_username: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_claim_username: pack overflow"); }
+        if (_off + sizeof(uid) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_claim_username: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_claim_username: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &uid, sizeof(uid)); _off += sizeof(uid);
         {
             uint32_t _slen = (uint32_t)(username ? strlen(username) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_claim_username: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_claim_username: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_claim_username: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_claim_username: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, username, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_int, "accounts_accounts_claim_username: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_claim_username: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -109,12 +125,17 @@ struct picomesh_int_result accounts_accounts_claim_username(struct ctx * ctx, st
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "accounts_accounts_claim_username: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "accounts_accounts_claim_username: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(int)) return PICOMESH_ERR(picomesh_int, "accounts_accounts_claim_username: truncated RPC payload");
+        if (_wn != 1 + sizeof(int)) { _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_claim_username: truncated RPC payload"); goto _rpc_done; }
         int _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_int, _v);
+        _ret = PICOMESH_OK(picomesh_int, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_int, "accounts_accounts_claim_username: no impl on this class");
@@ -172,7 +193,22 @@ struct picomesh_int_result accounts_accounts_release_username(struct ctx * ctx, 
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int, "accounts_accounts_release_username: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_int_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_int, "accounts_accounts_release_username: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -185,34 +221,34 @@ struct picomesh_int_result accounts_accounts_release_username(struct ctx * ctx, 
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "accounts_accounts_release_username: header serialize overflow");
-                return PICOMESH_ERR(picomesh_int, "accounts_accounts_release_username: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_release_username: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_release_username: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_release_username: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_release_username: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_release_username: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(uid) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_release_username: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_release_username: pack overflow"); }
+        if (_off + sizeof(uid) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_release_username: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_release_username: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &uid, sizeof(uid)); _off += sizeof(uid);
         {
             uint32_t _slen = (uint32_t)(username ? strlen(username) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_release_username: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_release_username: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_release_username: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_release_username: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, username, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_int, "accounts_accounts_release_username: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_release_username: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -220,12 +256,17 @@ struct picomesh_int_result accounts_accounts_release_username(struct ctx * ctx, 
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "accounts_accounts_release_username: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "accounts_accounts_release_username: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(int)) return PICOMESH_ERR(picomesh_int, "accounts_accounts_release_username: truncated RPC payload");
+        if (_wn != 1 + sizeof(int)) { _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_release_username: truncated RPC payload"); goto _rpc_done; }
         int _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_int, _v);
+        _ret = PICOMESH_OK(picomesh_int, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_int, "accounts_accounts_release_username: no impl on this class");
@@ -283,7 +324,22 @@ struct picomesh_int_result accounts_accounts_register(struct ctx * ctx, struct o
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int, "accounts_accounts_register: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_int_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_int, "accounts_accounts_register: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -296,34 +352,34 @@ struct picomesh_int_result accounts_accounts_register(struct ctx * ctx, struct o
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "accounts_accounts_register: header serialize overflow");
-                return PICOMESH_ERR(picomesh_int, "accounts_accounts_register: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_register: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_register: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_register: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_register: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_register: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(uid) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_register: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_register: pack overflow"); }
+        if (_off + sizeof(uid) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_register: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_register: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &uid, sizeof(uid)); _off += sizeof(uid);
         {
             uint32_t _slen = (uint32_t)(username ? strlen(username) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_register: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_register: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_register: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_register: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, username, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_int, "accounts_accounts_register: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_register: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -331,12 +387,17 @@ struct picomesh_int_result accounts_accounts_register(struct ctx * ctx, struct o
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "accounts_accounts_register: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "accounts_accounts_register: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(int)) return PICOMESH_ERR(picomesh_int, "accounts_accounts_register: truncated RPC payload");
+        if (_wn != 1 + sizeof(int)) { _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_register: truncated RPC payload"); goto _rpc_done; }
         int _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_int, _v);
+        _ret = PICOMESH_OK(picomesh_int, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_int, "accounts_accounts_register: no impl on this class");
@@ -393,7 +454,22 @@ struct picomesh_int_result accounts_accounts_exists(struct ctx * ctx, struct obj
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int, "accounts_accounts_exists: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_int_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_int, "accounts_accounts_exists: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -406,27 +482,27 @@ struct picomesh_int_result accounts_accounts_exists(struct ctx * ctx, struct obj
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "accounts_accounts_exists: header serialize overflow");
-                return PICOMESH_ERR(picomesh_int, "accounts_accounts_exists: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_exists: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_exists: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_exists: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_exists: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_exists: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(uid) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_exists: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_exists: pack overflow"); }
+        if (_off + sizeof(uid) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_exists: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_exists: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &uid, sizeof(uid)); _off += sizeof(uid);
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_int, "accounts_accounts_exists: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_exists: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -434,12 +510,17 @@ struct picomesh_int_result accounts_accounts_exists(struct ctx * ctx, struct obj
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "accounts_accounts_exists: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "accounts_accounts_exists: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(int)) return PICOMESH_ERR(picomesh_int, "accounts_accounts_exists: truncated RPC payload");
+        if (_wn != 1 + sizeof(int)) { _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_exists: truncated RPC payload"); goto _rpc_done; }
         int _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_int, _v);
+        _ret = PICOMESH_OK(picomesh_int, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_int, "accounts_accounts_exists: no impl on this class");
@@ -497,7 +578,22 @@ struct picomesh_int_result accounts_accounts_set_balance(struct ctx * ctx, struc
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int, "accounts_accounts_set_balance: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_int_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_int, "accounts_accounts_set_balance: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -510,30 +606,30 @@ struct picomesh_int_result accounts_accounts_set_balance(struct ctx * ctx, struc
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "accounts_accounts_set_balance: header serialize overflow");
-                return PICOMESH_ERR(picomesh_int, "accounts_accounts_set_balance: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_set_balance: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_set_balance: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_set_balance: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_set_balance: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_set_balance: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(uid) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_set_balance: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_set_balance: pack overflow"); }
+        if (_off + sizeof(uid) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_set_balance: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_set_balance: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &uid, sizeof(uid)); _off += sizeof(uid);
-        if (_off + sizeof(n) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_set_balance: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_set_balance: pack overflow"); }
+        if (_off + sizeof(n) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_set_balance: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_set_balance: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &n, sizeof(n)); _off += sizeof(n);
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_int, "accounts_accounts_set_balance: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_set_balance: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -541,12 +637,17 @@ struct picomesh_int_result accounts_accounts_set_balance(struct ctx * ctx, struc
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "accounts_accounts_set_balance: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "accounts_accounts_set_balance: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(int)) return PICOMESH_ERR(picomesh_int, "accounts_accounts_set_balance: truncated RPC payload");
+        if (_wn != 1 + sizeof(int)) { _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_set_balance: truncated RPC payload"); goto _rpc_done; }
         int _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_int, _v);
+        _ret = PICOMESH_OK(picomesh_int, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_int, "accounts_accounts_set_balance: no impl on this class");
@@ -603,7 +704,22 @@ struct picomesh_int64_result accounts_accounts_balance(struct ctx * ctx, struct 
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int64, "accounts_accounts_balance: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_int64_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_int64, "accounts_accounts_balance: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -616,27 +732,27 @@ struct picomesh_int64_result accounts_accounts_balance(struct ctx * ctx, struct 
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "accounts_accounts_balance: header serialize overflow");
-                return PICOMESH_ERR(picomesh_int64, "accounts_accounts_balance: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_int64, "accounts_accounts_balance: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_balance: pack overflow"); return PICOMESH_ERR(picomesh_int64, "accounts_accounts_balance: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_balance: pack overflow"); _ret = PICOMESH_ERR(picomesh_int64, "accounts_accounts_balance: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(uid) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_balance: pack overflow"); return PICOMESH_ERR(picomesh_int64, "accounts_accounts_balance: pack overflow"); }
+        if (_off + sizeof(uid) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_balance: pack overflow"); _ret = PICOMESH_ERR(picomesh_int64, "accounts_accounts_balance: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &uid, sizeof(uid)); _off += sizeof(uid);
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_int64, "accounts_accounts_balance: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_int64, "accounts_accounts_balance: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -644,12 +760,17 @@ struct picomesh_int64_result accounts_accounts_balance(struct ctx * ctx, struct 
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_int64, _msg[0] ? strdup(_msg) : "accounts_accounts_balance: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_int64, _msg[0] ? strdup(_msg) : "accounts_accounts_balance: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(int64_t)) return PICOMESH_ERR(picomesh_int64, "accounts_accounts_balance: truncated RPC payload");
+        if (_wn != 1 + sizeof(int64_t)) { _ret = PICOMESH_ERR(picomesh_int64, "accounts_accounts_balance: truncated RPC payload"); goto _rpc_done; }
         int64_t _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_int64, _v);
+        _ret = PICOMESH_OK(picomesh_int64, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_int64, "accounts_accounts_balance: no impl on this class");
@@ -705,7 +826,22 @@ struct picomesh_size_result accounts_accounts_count(struct ctx * ctx, struct obj
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_size, "accounts_accounts_count: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_size_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_size, "accounts_accounts_count: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -718,24 +854,24 @@ struct picomesh_size_result accounts_accounts_count(struct ctx * ctx, struct obj
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "accounts_accounts_count: header serialize overflow");
-                return PICOMESH_ERR(picomesh_size, "accounts_accounts_count: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_size, "accounts_accounts_count: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_count: pack overflow"); return PICOMESH_ERR(picomesh_size, "accounts_accounts_count: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_count: pack overflow"); _ret = PICOMESH_ERR(picomesh_size, "accounts_accounts_count: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_size, "accounts_accounts_count: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_size, "accounts_accounts_count: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -743,12 +879,17 @@ struct picomesh_size_result accounts_accounts_count(struct ctx * ctx, struct obj
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_size, _msg[0] ? strdup(_msg) : "accounts_accounts_count: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_size, _msg[0] ? strdup(_msg) : "accounts_accounts_count: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(size_t)) return PICOMESH_ERR(picomesh_size, "accounts_accounts_count: truncated RPC payload");
+        if (_wn != 1 + sizeof(size_t)) { _ret = PICOMESH_ERR(picomesh_size, "accounts_accounts_count: truncated RPC payload"); goto _rpc_done; }
         size_t _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_size, _v);
+        _ret = PICOMESH_OK(picomesh_size, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_size, "accounts_accounts_count: no impl on this class");
@@ -806,7 +947,22 @@ struct picomesh_int_result accounts_accounts_set_groups(struct ctx * ctx, struct
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int, "accounts_accounts_set_groups: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_int_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_int, "accounts_accounts_set_groups: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -819,34 +975,34 @@ struct picomesh_int_result accounts_accounts_set_groups(struct ctx * ctx, struct
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "accounts_accounts_set_groups: header serialize overflow");
-                return PICOMESH_ERR(picomesh_int, "accounts_accounts_set_groups: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_set_groups: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_set_groups: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_set_groups: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_set_groups: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_set_groups: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(uid) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_set_groups: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_set_groups: pack overflow"); }
+        if (_off + sizeof(uid) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_set_groups: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_set_groups: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &uid, sizeof(uid)); _off += sizeof(uid);
         {
             uint32_t _slen = (uint32_t)(groups_csv ? strlen(groups_csv) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_set_groups: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_set_groups: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_set_groups: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_set_groups: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, groups_csv, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_int, "accounts_accounts_set_groups: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_set_groups: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -854,12 +1010,17 @@ struct picomesh_int_result accounts_accounts_set_groups(struct ctx * ctx, struct
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "accounts_accounts_set_groups: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "accounts_accounts_set_groups: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(int)) return PICOMESH_ERR(picomesh_int, "accounts_accounts_set_groups: truncated RPC payload");
+        if (_wn != 1 + sizeof(int)) { _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_set_groups: truncated RPC payload"); goto _rpc_done; }
         int _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_int, _v);
+        _ret = PICOMESH_OK(picomesh_int, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_int, "accounts_accounts_set_groups: no impl on this class");
@@ -926,7 +1087,22 @@ struct picomesh_string_result accounts_accounts_groups(struct ctx * ctx, struct 
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_string, "accounts_accounts_groups: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_string_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_string, "accounts_accounts_groups: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -939,27 +1115,27 @@ struct picomesh_string_result accounts_accounts_groups(struct ctx * ctx, struct 
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "accounts_accounts_groups: header serialize overflow");
-                return PICOMESH_ERR(picomesh_string, "accounts_accounts_groups: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_string, "accounts_accounts_groups: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_groups: pack overflow"); return PICOMESH_ERR(picomesh_string, "accounts_accounts_groups: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_groups: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "accounts_accounts_groups: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(uid) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_groups: pack overflow"); return PICOMESH_ERR(picomesh_string, "accounts_accounts_groups: pack overflow"); }
+        if (_off + sizeof(uid) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_groups: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "accounts_accounts_groups: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &uid, sizeof(uid)); _off += sizeof(uid);
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_string, "accounts_accounts_groups: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_string, "accounts_accounts_groups: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -967,17 +1143,22 @@ struct picomesh_string_result accounts_accounts_groups(struct ctx * ctx, struct 
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "accounts_accounts_groups: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "accounts_accounts_groups: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_string, "accounts_accounts_groups: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_string, "accounts_accounts_groups: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_string, "accounts_accounts_groups: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_string, "accounts_accounts_groups: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_string, "accounts_accounts_groups: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_string, "accounts_accounts_groups: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_string, _sv);
+        _ret = PICOMESH_OK(picomesh_string, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_string, "accounts_accounts_groups: no impl on this class");
@@ -1047,7 +1228,22 @@ struct picomesh_string_result accounts_accounts_ns_create(struct ctx * ctx, stru
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_string, "accounts_accounts_ns_create: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_string_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_string, "accounts_accounts_ns_create: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -1060,48 +1256,48 @@ struct picomesh_string_result accounts_accounts_ns_create(struct ctx * ctx, stru
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_create: header serialize overflow");
-                return PICOMESH_ERR(picomesh_string, "accounts_accounts_ns_create: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_string, "accounts_accounts_ns_create: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_create: pack overflow"); return PICOMESH_ERR(picomesh_string, "accounts_accounts_ns_create: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_create: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "accounts_accounts_ns_create: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(owner_uid) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_create: pack overflow"); return PICOMESH_ERR(picomesh_string, "accounts_accounts_ns_create: pack overflow"); }
+        if (_off + sizeof(owner_uid) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_create: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "accounts_accounts_ns_create: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &owner_uid, sizeof(owner_uid)); _off += sizeof(owner_uid);
         {
             uint32_t _slen = (uint32_t)(kind ? strlen(kind) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_create: pack overflow"); return PICOMESH_ERR(picomesh_string, "accounts_accounts_ns_create: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_create: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "accounts_accounts_ns_create: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, kind, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(slug ? strlen(slug) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_create: pack overflow"); return PICOMESH_ERR(picomesh_string, "accounts_accounts_ns_create: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_create: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "accounts_accounts_ns_create: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, slug, _slen); _off += _slen; }
         }
         {
             uint32_t _slen = (uint32_t)(parent_path ? strlen(parent_path) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_create: pack overflow"); return PICOMESH_ERR(picomesh_string, "accounts_accounts_ns_create: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_create: pack overflow"); _ret = PICOMESH_ERR(picomesh_string, "accounts_accounts_ns_create: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, parent_path, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_string, "accounts_accounts_ns_create: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_string, "accounts_accounts_ns_create: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -1109,17 +1305,22 @@ struct picomesh_string_result accounts_accounts_ns_create(struct ctx * ctx, stru
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "accounts_accounts_ns_create: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_string, _msg[0] ? strdup(_msg) : "accounts_accounts_ns_create: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_string, "accounts_accounts_ns_create: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_string, "accounts_accounts_ns_create: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_string, "accounts_accounts_ns_create: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_string, "accounts_accounts_ns_create: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_string, "accounts_accounts_ns_create: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_string, "accounts_accounts_ns_create: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_string, _sv);
+        _ret = PICOMESH_OK(picomesh_string, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_string, "accounts_accounts_ns_create: no impl on this class");
@@ -1178,7 +1379,22 @@ struct picomesh_int_result accounts_accounts_ns_add_member(struct ctx * ctx, str
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_add_member: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_int_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_add_member: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -1191,41 +1407,41 @@ struct picomesh_int_result accounts_accounts_ns_add_member(struct ctx * ctx, str
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_add_member: header serialize overflow");
-                return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_add_member: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_add_member: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_add_member: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_add_member: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_add_member: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_add_member: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(path ? strlen(path) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_add_member: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_add_member: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_add_member: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_add_member: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, path, _slen); _off += _slen; }
         }
-        if (_off + sizeof(uid) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_add_member: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_add_member: pack overflow"); }
+        if (_off + sizeof(uid) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_add_member: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_add_member: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &uid, sizeof(uid)); _off += sizeof(uid);
         {
             uint32_t _slen = (uint32_t)(role ? strlen(role) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_add_member: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_add_member: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_add_member: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_add_member: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, role, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_add_member: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_add_member: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -1233,12 +1449,17 @@ struct picomesh_int_result accounts_accounts_ns_add_member(struct ctx * ctx, str
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "accounts_accounts_ns_add_member: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "accounts_accounts_ns_add_member: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(int)) return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_add_member: truncated RPC payload");
+        if (_wn != 1 + sizeof(int)) { _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_add_member: truncated RPC payload"); goto _rpc_done; }
         int _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_int, _v);
+        _ret = PICOMESH_OK(picomesh_int, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_add_member: no impl on this class");
@@ -1295,7 +1516,22 @@ struct picomesh_int64_result accounts_accounts_ns_resolve(struct ctx * ctx, stru
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int64, "accounts_accounts_ns_resolve: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_int64_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_int64, "accounts_accounts_ns_resolve: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -1308,31 +1544,31 @@ struct picomesh_int64_result accounts_accounts_ns_resolve(struct ctx * ctx, stru
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_resolve: header serialize overflow");
-                return PICOMESH_ERR(picomesh_int64, "accounts_accounts_ns_resolve: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_int64, "accounts_accounts_ns_resolve: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_resolve: pack overflow"); return PICOMESH_ERR(picomesh_int64, "accounts_accounts_ns_resolve: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_resolve: pack overflow"); _ret = PICOMESH_ERR(picomesh_int64, "accounts_accounts_ns_resolve: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(path ? strlen(path) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_resolve: pack overflow"); return PICOMESH_ERR(picomesh_int64, "accounts_accounts_ns_resolve: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_resolve: pack overflow"); _ret = PICOMESH_ERR(picomesh_int64, "accounts_accounts_ns_resolve: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, path, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_int64, "accounts_accounts_ns_resolve: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_int64, "accounts_accounts_ns_resolve: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -1340,12 +1576,17 @@ struct picomesh_int64_result accounts_accounts_ns_resolve(struct ctx * ctx, stru
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_int64, _msg[0] ? strdup(_msg) : "accounts_accounts_ns_resolve: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_int64, _msg[0] ? strdup(_msg) : "accounts_accounts_ns_resolve: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(int64_t)) return PICOMESH_ERR(picomesh_int64, "accounts_accounts_ns_resolve: truncated RPC payload");
+        if (_wn != 1 + sizeof(int64_t)) { _ret = PICOMESH_ERR(picomesh_int64, "accounts_accounts_ns_resolve: truncated RPC payload"); goto _rpc_done; }
         int64_t _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_int64, _v);
+        _ret = PICOMESH_OK(picomesh_int64, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_int64, "accounts_accounts_ns_resolve: no impl on this class");
@@ -1411,7 +1652,22 @@ struct picomesh_json_result accounts_accounts_ns_list(struct ctx * ctx, struct o
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_list: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_json_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_list: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -1424,24 +1680,24 @@ struct picomesh_json_result accounts_accounts_ns_list(struct ctx * ctx, struct o
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_list: header serialize overflow");
-                return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_list: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_list: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_list: pack overflow"); return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_list: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_list: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_list: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_list: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_list: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -1449,17 +1705,22 @@ struct picomesh_json_result accounts_accounts_ns_list(struct ctx * ctx, struct o
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_json, _msg[0] ? strdup(_msg) : "accounts_accounts_ns_list: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_json, _msg[0] ? strdup(_msg) : "accounts_accounts_ns_list: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_list: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_list: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_list: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_list: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_list: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_list: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_json, _sv);
+        _ret = PICOMESH_OK(picomesh_json, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_list: no impl on this class");
@@ -1526,7 +1787,22 @@ struct picomesh_json_result accounts_accounts_ns_members(struct ctx * ctx, struc
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_members: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_json_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_members: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -1539,31 +1815,31 @@ struct picomesh_json_result accounts_accounts_ns_members(struct ctx * ctx, struc
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_members: header serialize overflow");
-                return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_members: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_members: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_members: pack overflow"); return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_members: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_members: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_members: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(path ? strlen(path) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_members: pack overflow"); return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_members: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_members: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_members: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, path, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_members: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_members: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -1571,17 +1847,22 @@ struct picomesh_json_result accounts_accounts_ns_members(struct ctx * ctx, struc
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_json, _msg[0] ? strdup(_msg) : "accounts_accounts_ns_members: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_json, _msg[0] ? strdup(_msg) : "accounts_accounts_ns_members: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_members: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_members: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_members: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_members: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_members: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_members: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_json, _sv);
+        _ret = PICOMESH_OK(picomesh_json, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_members: no impl on this class");
@@ -1639,7 +1920,22 @@ struct picomesh_int_result accounts_accounts_ns_remove_member(struct ctx * ctx, 
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_remove_member: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_int_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_remove_member: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -1652,34 +1948,34 @@ struct picomesh_int_result accounts_accounts_ns_remove_member(struct ctx * ctx, 
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_remove_member: header serialize overflow");
-                return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_remove_member: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_remove_member: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_remove_member: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_remove_member: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_remove_member: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_remove_member: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(path ? strlen(path) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_remove_member: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_remove_member: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_remove_member: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_remove_member: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, path, _slen); _off += _slen; }
         }
-        if (_off + sizeof(uid) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_remove_member: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_remove_member: pack overflow"); }
+        if (_off + sizeof(uid) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_remove_member: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_remove_member: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &uid, sizeof(uid)); _off += sizeof(uid);
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_remove_member: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_remove_member: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -1687,12 +1983,17 @@ struct picomesh_int_result accounts_accounts_ns_remove_member(struct ctx * ctx, 
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "accounts_accounts_ns_remove_member: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "accounts_accounts_ns_remove_member: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(int)) return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_remove_member: truncated RPC payload");
+        if (_wn != 1 + sizeof(int)) { _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_remove_member: truncated RPC payload"); goto _rpc_done; }
         int _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_int, _v);
+        _ret = PICOMESH_OK(picomesh_int, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_remove_member: no impl on this class");
@@ -1759,7 +2060,22 @@ struct picomesh_json_result accounts_accounts_ns_subtree(struct ctx * ctx, struc
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_subtree: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_json_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_subtree: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -1772,31 +2088,31 @@ struct picomesh_json_result accounts_accounts_ns_subtree(struct ctx * ctx, struc
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_subtree: header serialize overflow");
-                return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_subtree: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_subtree: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_subtree: pack overflow"); return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_subtree: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_subtree: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_subtree: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(path ? strlen(path) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_subtree: pack overflow"); return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_subtree: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_subtree: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_subtree: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, path, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_subtree: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_subtree: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -1804,17 +2120,22 @@ struct picomesh_json_result accounts_accounts_ns_subtree(struct ctx * ctx, struc
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_json, _msg[0] ? strdup(_msg) : "accounts_accounts_ns_subtree: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_json, _msg[0] ? strdup(_msg) : "accounts_accounts_ns_subtree: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_subtree: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_subtree: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_subtree: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_subtree: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_subtree: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_subtree: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_json, _sv);
+        _ret = PICOMESH_OK(picomesh_json, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_json, "accounts_accounts_ns_subtree: no impl on this class");
@@ -1871,7 +2192,22 @@ struct picomesh_int_result accounts_accounts_ns_delete(struct ctx * ctx, struct 
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_delete: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_int_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 8197);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_delete: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -1884,31 +2220,31 @@ struct picomesh_int_result accounts_accounts_ns_delete(struct ctx * ctx, struct 
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_delete: header serialize overflow");
-                return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_delete: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_delete: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_delete: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_delete: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_delete: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_delete: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
         {
             uint32_t _slen = (uint32_t)(path ? strlen(path) : 0);
-            if (_off + 4 + _slen > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_delete: pack overflow"); return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_delete: pack overflow"); }
+            if (_off + 4 + _slen > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_ns_delete: pack overflow"); _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_delete: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_slen, 4); _off += 4;
             if (_slen) { memcpy(_a + _off, path, _slen); _off += _slen; }
         }
-        uint8_t _wbuf[8197];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 8197);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_delete: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_delete: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -1916,12 +2252,17 @@ struct picomesh_int_result accounts_accounts_ns_delete(struct ctx * ctx, struct 
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "accounts_accounts_ns_delete: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_int, _msg[0] ? strdup(_msg) : "accounts_accounts_ns_delete: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn != 1 + sizeof(int)) return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_delete: truncated RPC payload");
+        if (_wn != 1 + sizeof(int)) { _ret = PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_delete: truncated RPC payload"); goto _rpc_done; }
         int _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK(picomesh_int, _v);
+        _ret = PICOMESH_OK(picomesh_int, _v); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_int, "accounts_accounts_ns_delete: no impl on this class");
@@ -1989,7 +2330,22 @@ struct picomesh_json_result accounts_accounts_list(struct ctx * ctx, struct obje
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_json, "accounts_accounts_list: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_json_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_json, "accounts_accounts_list: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -2002,30 +2358,30 @@ struct picomesh_json_result accounts_accounts_list(struct ctx * ctx, struct obje
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "accounts_accounts_list: header serialize overflow");
-                return PICOMESH_ERR(picomesh_json, "accounts_accounts_list: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_list: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_list: pack overflow"); return PICOMESH_ERR(picomesh_json, "accounts_accounts_list: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_list: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_list: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        if (_off + sizeof(offset) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_list: pack overflow"); return PICOMESH_ERR(picomesh_json, "accounts_accounts_list: pack overflow"); }
+        if (_off + sizeof(offset) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_list: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_list: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &offset, sizeof(offset)); _off += sizeof(offset);
-        if (_off + sizeof(limit) > sizeof(_a))
-            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_list: pack overflow"); return PICOMESH_ERR(picomesh_json, "accounts_accounts_list: pack overflow"); }
+        if (_off + sizeof(limit) > _acap)
+            { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_list: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_list: pack overflow"); goto _rpc_done; }
         memcpy(_a + _off, &limit, sizeof(limit)); _off += sizeof(limit);
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_json, "accounts_accounts_list: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_list: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -2033,17 +2389,22 @@ struct picomesh_json_result accounts_accounts_list(struct ctx * ctx, struct obje
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_json, _msg[0] ? strdup(_msg) : "accounts_accounts_list: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_json, _msg[0] ? strdup(_msg) : "accounts_accounts_list: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_json, "accounts_accounts_list: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_list: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_json, "accounts_accounts_list: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_list: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_json, "accounts_accounts_list: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_list: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_json, _sv);
+        _ret = PICOMESH_OK(picomesh_json, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_json, "accounts_accounts_list: no impl on this class");
@@ -2109,7 +2470,22 @@ struct picomesh_json_result accounts_accounts_list_all(struct ctx * ctx, struct 
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR(picomesh_json, "accounts_accounts_list_all: remote id unresolved");
-        uint8_t _a[16384];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = 16384;
+        struct picomesh_json_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, 65536);
+        if (!_a || !_wbuf) {
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR(picomesh_json, "accounts_accounts_list_all: wire scratch alloc failed");
+        }
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -2122,24 +2498,24 @@ struct picomesh_json_result accounts_accounts_list_all(struct ctx * ctx, struct 
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, hdrs, _a, _acap);
             if (_hn == 0) {
                 ytelemetry_span_end(&_tsp, 0, "accounts_accounts_list_all: header serialize overflow");
-                return PICOMESH_ERR(picomesh_json, "accounts_accounts_list_all: header serialize overflow");
+                _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_list_all: header serialize overflow");
+                goto _rpc_done;
             }
             _off = _hn;
         }
         {
             uint64_t _h = *(uint64_t *)((char *)obj + sizeof(*obj));
-            if (_off + 8 > sizeof(_a))
-                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_list_all: pack overflow"); return PICOMESH_ERR(picomesh_json, "accounts_accounts_list_all: pack overflow"); }
+            if (_off + 8 > _acap)
+                { ytelemetry_span_end(&_tsp, 0, "accounts_accounts_list_all: pack overflow"); _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_list_all: pack overflow"); goto _rpc_done; }
             memcpy(_a + _off, &_h, 8); _off += 8;
         }
-        uint8_t _wbuf[65536];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, 65536);
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
-        if (_wn < 1) return PICOMESH_ERR(picomesh_json, "accounts_accounts_list_all: short RPC response");
+        if (_wn < 1) { _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_list_all: short RPC response"); goto _rpc_done; }
         if (_wbuf[0] != 0) {
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -2147,17 +2523,22 @@ struct picomesh_json_result accounts_accounts_list_all(struct ctx * ctx, struct 
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR(picomesh_json, _msg[0] ? strdup(_msg) : "accounts_accounts_list_all: remote error (no msg)");
+            _ret = PICOMESH_ERR(picomesh_json, _msg[0] ? strdup(_msg) : "accounts_accounts_list_all: remote error (no msg)");
+            goto _rpc_done;
         }
-        if (_wn < 5) return PICOMESH_ERR(picomesh_json, "accounts_accounts_list_all: truncated string response");
+        if (_wn < 5) { _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_list_all: truncated string response"); goto _rpc_done; }
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR(picomesh_json, "accounts_accounts_list_all: truncated string payload");
+        if (_wn < (size_t)5 + _slen) { _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_list_all: truncated string payload"); goto _rpc_done; }
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR(picomesh_json, "accounts_accounts_list_all: out of memory");
+        if (!_sv) { _ret = PICOMESH_ERR(picomesh_json, "accounts_accounts_list_all: out of memory"); goto _rpc_done; }
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK(picomesh_json, _sv);
+        _ret = PICOMESH_OK(picomesh_json, _sv); goto _rpc_done;
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     } else {
         impl_t fn = class_dispatch_lookup(object_class(obj), _slot);
         if (!fn) return PICOMESH_ERR(picomesh_json, "accounts_accounts_list_all: no impl on this class");

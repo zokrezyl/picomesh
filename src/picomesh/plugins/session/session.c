@@ -76,7 +76,7 @@ static int alloc_token(char *out, size_t cap)
 /* Open relational_storage and ensure this plugin's table exists. */
 static struct picomesh_void_result session_open(struct rel_handle *h, struct yheaders *hdrs, struct object *obj)
 {
-    struct picomesh_void_result o = rel_open(h, "rstore_session");
+    struct picomesh_void_result o = rel_open(h, "rstore_session", "session");
     if (PICOMESH_IS_ERR(o)) return PICOMESH_ERR(picomesh_void, "session: open relational_storage failed", o);
     return rel_ensure_schema(h, hdrs, &sess(obj)->schema_ensured, SESSION_DDL);
 }

@@ -71,6 +71,14 @@ export PICOMESH_JWT_SECRET="${PICOMESH_JWT_SECRET:-picoforge-dev-mesh-secret-cha
 # tracing cost itself. The bottleneck report flags trace_collector if left on.
 export PICOMESH_TELEMETRY="${PICOMESH_TELEMETRY:-off}"
 
+# Error-only tracing on by default. The control parent's env is inherited by
+# every spawned backend (uv_spawn options.env == NULL), so yerror() across the
+# whole mesh is captured. Low overhead — the per-thread async log buffer never
+# serializes workers on a shared sink. Override: YTRACE_LOG_LEVEL=trace for full
+# tracing, YTRACE_DEFAULT_ON=no to mute, YTRACE_FILE=… to redirect off stderr.
+export YTRACE_DEFAULT_ON="${YTRACE_DEFAULT_ON:-yes}"
+export YTRACE_LOG_LEVEL="${YTRACE_LOG_LEVEL:-error}"
+
 PARENT=
 WEBAPP_PID=
 # The webapp is a SIDECAR this script owns (not a mesh service), so the script

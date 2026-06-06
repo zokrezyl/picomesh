@@ -26,6 +26,12 @@ cd "${HERE}"
 
 export PATH="${HERE}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
+# Error-only tracing on by default — the control parent's env is inherited by
+# every spawned backend, so yerror() across the deployed mesh is captured at low
+# overhead. Override: YTRACE_LOG_LEVEL=trace for full tracing, YTRACE_DEFAULT_ON=no.
+export YTRACE_DEFAULT_ON="${YTRACE_DEFAULT_ON:-yes}"
+export YTRACE_LOG_LEVEL="${YTRACE_LOG_LEVEL:-error}"
+
 say() { echo "[run.sh] $*"; }
 say "PID=$$ launcher start (cwd=${HERE})"
 

@@ -606,15 +606,17 @@ def emit_pack_arg(a: dict, slot: str, rid: str, indent: str = "        ") -> str
     signatures, so existing methods stay byte-compatible. */"""
     t = a["type"].strip()
     name = a["name"]
-    # On a pack overflow the client span was already begun; end it (ok=0)
-    # before bailing so the failed call is still recorded.
+    # `_a` is a pooled heap buffer of `_acap` bytes (not a stack array), so the
+    # capacity check uses `_acap`, not sizeof(_a). On a pack overflow the client
+    # span was already begun; end it (ok=0) and bail through the single cleanup
+    # exit so the pooled buffers are returned.
     fail = (f"{{ ytelemetry_span_end(&_tsp, 0, \"{slot}: pack overflow\");"
-            f" return PICOMESH_ERR({rid}, \"{slot}: pack overflow\"); }}")
+            f" _ret = PICOMESH_ERR({rid}, \"{slot}: pack overflow\"); goto _rpc_done; }}")
     if is_string_arg(t):
         return (
             f"{indent}{{\n"
             f"{indent}    uint32_t _slen = (uint32_t)({name} ? strlen({name}) : 0);\n"
-            f"{indent}    if (_off + 4 + _slen > sizeof(_a))\n"
+            f"{indent}    if (_off + 4 + _slen > _acap)\n"
             f"{indent}        {fail}\n"
             f"{indent}    memcpy(_a + _off, &_slen, 4); _off += 4;\n"
             f"{indent}    if (_slen) {{ memcpy(_a + _off, {name}, _slen); _off += _slen; }}\n"
@@ -625,13 +627,13 @@ def emit_pack_arg(a: dict, slot: str, rid: str, indent: str = "        ") -> str
         return (
             f"{indent}{{\n"
             f"{indent}    uint64_t _h = *(uint64_t *)((char *){name} + sizeof(*{name}));\n"
-            f"{indent}    if (_off + 8 > sizeof(_a))\n"
+            f"{indent}    if (_off + 8 > _acap)\n"
             f"{indent}        {fail}\n"
             f"{indent}    memcpy(_a + _off, &_h, 8); _off += 8;\n"
             f"{indent}}}\n"
         )
     return (
-        f"{indent}if (_off + sizeof({name}) > sizeof(_a))\n"
+        f"{indent}if (_off + sizeof({name}) > _acap)\n"
         f"{indent}    {fail}\n"
         f"{indent}memcpy(_a + _off, &{name}, sizeof({name})); _off += sizeof({name});\n"
     )
@@ -786,14 +788,16 @@ def emit_dispatch_body(m: dict) -> str:
     # u8 status + u32 len + up to WIRE_STRING_MAX value bytes. Scalar /
     # error responses fit comfortably in the small buffer.
     wbuf_sz = (1 + 4 + WIRE_STRING_RESP_MAX) if is_string_ret(vt) else (1 + 4 + ERROR_TEXT_MAX)
+    # `_wbuf` is a pooled heap buffer (allocated in the body), so the rpc_call
+    # capacity is the literal size, not sizeof(_wbuf). Every exit sets `_ret`
+    # and `goto _rpc_done` so the pooled _a/_wbuf are returned exactly once.
     timed_rpc = f"""\
-        uint8_t _wbuf[{wbuf_sz}];
         size_t _wn = rpc_call(_s->peer, RPC_OP_CALL, _rid, _a, _off,
-                              _wbuf, sizeof(_wbuf));
+                              _wbuf, {wbuf_sz});
         ytelemetry_span_end(&_tsp, _wn >= 1 && _wbuf[0] == 0, NULL);
 """
     err_parse = f"""\
-        if (_wn < 1) return PICOMESH_ERR({rid}, "{slot_qname}: short RPC response");
+        if (_wn < 1) {{ _ret = PICOMESH_ERR({rid}, "{slot_qname}: short RPC response"); goto _rpc_done; }}
         if (_wbuf[0] != 0) {{
             uint32_t _msg_len = 0;
             if (_wn >= 5) memcpy(&_msg_len, _wbuf + 1, 4);
@@ -801,30 +805,31 @@ def emit_dispatch_body(m: dict) -> str:
             size_t _copy = _msg_len < sizeof(_msg) - 1 ? _msg_len : sizeof(_msg) - 1;
             if (_wn >= 5 + _copy) memcpy(_msg, _wbuf + 5, _copy);
             _msg[_copy] = 0;
-            return PICOMESH_ERR({rid}, _msg[0] ? strdup(_msg) : "{slot_qname}: remote error (no msg)");
+            _ret = PICOMESH_ERR({rid}, _msg[0] ? strdup(_msg) : "{slot_qname}: remote error (no msg)");
+            goto _rpc_done;
         }}
 """
     if vt is None:
-        remote_call = timed_rpc + err_parse + "        return PICOMESH_OK_VOID();\n"
+        remote_call = timed_rpc + err_parse + "        _ret = PICOMESH_OK_VOID(); goto _rpc_done;\n"
     elif is_string_ret(vt):
         # Unpack u32 len + bytes into an owned heap string the caller frees.
         remote_call = timed_rpc + err_parse + f"""\
-        if (_wn < 5) return PICOMESH_ERR({rid}, "{slot_qname}: truncated string response");
+        if (_wn < 5) {{ _ret = PICOMESH_ERR({rid}, "{slot_qname}: truncated string response"); goto _rpc_done; }}
         uint32_t _slen;
         memcpy(&_slen, _wbuf + 1, 4);
-        if (_wn < (size_t)5 + _slen) return PICOMESH_ERR({rid}, "{slot_qname}: truncated string payload");
+        if (_wn < (size_t)5 + _slen) {{ _ret = PICOMESH_ERR({rid}, "{slot_qname}: truncated string payload"); goto _rpc_done; }}
         char *_sv = malloc((size_t)_slen + 1);
-        if (!_sv) return PICOMESH_ERR({rid}, "{slot_qname}: out of memory");
+        if (!_sv) {{ _ret = PICOMESH_ERR({rid}, "{slot_qname}: out of memory"); goto _rpc_done; }}
         if (_slen) memcpy(_sv, _wbuf + 5, _slen);
         _sv[_slen] = 0;
-        return PICOMESH_OK({rid}, _sv);
+        _ret = PICOMESH_OK({rid}, _sv); goto _rpc_done;
 """
     else:
         remote_call = timed_rpc + err_parse + f"""\
-        if (_wn != 1 + sizeof({vt})) return PICOMESH_ERR({rid}, "{slot_qname}: truncated RPC payload");
+        if (_wn != 1 + sizeof({vt})) {{ _ret = PICOMESH_ERR({rid}, "{slot_qname}: truncated RPC payload"); goto _rpc_done; }}
         {vt} _v;
         memcpy(&_v, _wbuf + 1, sizeof(_v));
-        return PICOMESH_OK({rid}, _v);
+        _ret = PICOMESH_OK({rid}, _v); goto _rpc_done;
 """
 
     return f"""\
@@ -845,7 +850,22 @@ def emit_dispatch_body(m: dict) -> str:
         uint32_t _rid = peer_channel_ensure_remote_id(_s->peer, _slot);
         if (_rid == RPC_REMOTE_ID_UNRESOLVED)
             return PICOMESH_ERR({rid}, "{slot_qname}: remote id unresolved");
-        uint8_t _a[{WIRE_ARG_BUFFER_BYTES}];
+        /* Wire scratch comes from THIS THREAD's pool, not the stack: the arg
+         * buffer (_a, _acap bytes) and response buffer (_wbuf) are large
+         * (~16 KiB + up to 64 KiB), and a nested chain of in-process hops would
+         * overflow the fixed-size coroutine stack if these were locals. Every
+         * exit below routes through _rpc_done, which returns both to the pool
+         * exactly once (free(NULL) is a no-op). */
+        struct picomesh_allocator *_pool = picomesh_allocator_thread();
+        size_t _acap = {WIRE_ARG_BUFFER_BYTES};
+        struct {rid}_result _ret;
+        uint8_t *_a = (uint8_t *)picomesh_allocator_alloc(_pool, _acap);
+        uint8_t *_wbuf = (uint8_t *)picomesh_allocator_alloc(_pool, {wbuf_sz});
+        if (!_a || !_wbuf) {{
+            picomesh_allocator_free(_pool, _a);
+            picomesh_allocator_free(_pool, _wbuf);
+            return PICOMESH_ERR({rid}, "{slot_qname}: wire scratch alloc failed");
+        }}
         size_t _off = 0;
         /* Client span for this downstream call. Minted BEFORE the header
          * bag is serialized so the wire carries this span as the remote
@@ -858,15 +878,20 @@ def emit_dispatch_body(m: dict) -> str:
          * into the `hdrs` argument. ytelemetry_client_serialize_headers swaps in
          * this client span's id as parent_span_id across the serialize. */
         {{
-            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, {hdrs_name}, _a, sizeof(_a));
+            size_t _hn = ytelemetry_client_serialize_headers(&_tsp, {hdrs_name}, _a, _acap);
             if (_hn == 0) {{
                 ytelemetry_span_end(&_tsp, 0, "{slot_qname}: header serialize overflow");
-                return PICOMESH_ERR({rid}, "{slot_qname}: header serialize overflow");
+                _ret = PICOMESH_ERR({rid}, "{slot_qname}: header serialize overflow");
+                goto _rpc_done;
             }}
             _off = _hn;
         }}
 {pack_block}\
 {remote_call}\
+    _rpc_done:
+        picomesh_allocator_free(_pool, _a);
+        picomesh_allocator_free(_pool, _wbuf);
+        return _ret;
     }} else {{
         impl_t fn = class_dispatch_lookup(object_class({obj_name}), _slot);
         if (!fn) return PICOMESH_ERR({rid}, "{slot_qname}: no impl on this class");
@@ -885,6 +910,7 @@ def emit_methods_c(model: dict, module: str, out_path: Path):
              '#include <picomesh/yclass/rpc.h>\n',
              '#include <picomesh/yclass/yheaders.h>\n',
              '#include <picomesh/msgpack/msgpack.h>\n',
+             '#include <picomesh/allocator/allocator.h>\n',
              '#include <stdint.h>\n#include <stdlib.h>\n#include <string.h>\n\n']
     for m in model["methods"]:
         params = ", ".join(f"{a['type']} {a['name']}" for a in m["args"])

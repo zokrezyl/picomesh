@@ -14,6 +14,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Per-coroutine stack. Coroutine stacks are fixed-size heap buffers (no
+ * auto-growth, no guard page). The collocated/all-in-one deployment runs the
+ * WHOLE service chain (gateway → token_issuer → password_authn →
+ * sharded_storage → accounts → relational, …) as nested in-process calls on a
+ * SINGLE coroutine stack. That used to overflow 256 KiB because each generated
+ * yrpc stub reserved a ~90 KiB frame (the 64 KiB wire response + 16 KiB arg
+ * buffers were stack locals); the wire buffers now come from a per-thread pool
+ * (see src/picomesh/allocator), so each stub frame is ~8 KiB and a deep chain
+ * fits in 256 KiB with room to spare. */
 #define DEFAULT_STACK_SIZE (256 * 1024)
 
 struct picomesh_coro {
