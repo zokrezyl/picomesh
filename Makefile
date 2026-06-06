@@ -20,7 +20,7 @@ BUILD_DIR_RISCV   := build-linux-riscv64-release
 BUILD_DIR_YEMU    := build-yemu-release
 BUILD_DIR_DEPLOY  := build-deploy
 
-.PHONY: help all build-desktop-release build-desktop-debug build-linux-riscv64-release build-deploy build-yemu-release build-webasm-yemu-release perf-picoforge clean
+.PHONY: help all build-desktop-release build-desktop-debug build-linux-riscv64-release build-deploy build-yemu-release build-webasm-yemu-release perf-picoforge perf-throughput-notracing perf-throughput-tracing clean
 
 # picoforge perf tunables (override on the command line, e.g.
 #   make perf-picoforge DURATION=30 CONNECTIONS=128 GENERATORS=12)
@@ -60,6 +60,34 @@ build-desktop-debug:
 ##                          touches a running dev stack.
 ##                          Tunables: GENERATORS CONNECTIONS DURATION REPOS_PER_WORKER
 perf-picoforge: build-desktop-release
+	GENERATORS=$(GENERATORS) SEED_USERS=$(SEED_USERS) CONNECTIONS=$(CONNECTIONS) \
+	DURATION=$(DURATION) REPOS_PER_WORKER=$(REPOS_PER_WORKER) \
+		bash tests/performance/picoforge/perf-run.sh
+
+# --- Throughput A/B: same load, tracing the ONLY variable -------------------
+# These two targets are deliberately identical except for PICOMESH_TELEMETRY.
+# Run both, compare the `throughput : N req/s` line each prints — the delta IS
+# the cost of per-span trace shipping to trace_collector, nothing else. Same
+# tunables apply (GENERATORS CONNECTIONS DURATION REPOS_PER_WORKER), so to make
+# the comparison meaningful pass the SAME values to both, e.g.:
+#   make perf-throughput-notracing GENERATORS=8 CONNECTIONS=256 DURATION=30
+#   make perf-throughput-tracing   GENERATORS=8 CONNECTIONS=256 DURATION=30
+
+## perf-throughput-notracing  baseline throughput, tracing OFF (PICOMESH_TELEMETRY=off):
+##                          measures raw service cost with no span shipping.
+##                          Same mesh/load as perf-picoforge.
+perf-throughput-notracing: build-desktop-release
+	PICOMESH_TELEMETRY=off \
+	GENERATORS=$(GENERATORS) SEED_USERS=$(SEED_USERS) CONNECTIONS=$(CONNECTIONS) \
+	DURATION=$(DURATION) REPOS_PER_WORKER=$(REPOS_PER_WORKER) \
+		bash tests/performance/picoforge/perf-run.sh
+
+## perf-throughput-tracing    throughput with tracing ON (PICOMESH_TELEMETRY=on):
+##                          every span is batched + shipped to trace_collector.
+##                          Same mesh/load as perf-throughput-notracing — diff
+##                          the two throughputs to read the tracing cost.
+perf-throughput-tracing: build-desktop-release
+	PICOMESH_TELEMETRY=on \
 	GENERATORS=$(GENERATORS) SEED_USERS=$(SEED_USERS) CONNECTIONS=$(CONNECTIONS) \
 	DURATION=$(DURATION) REPOS_PER_WORKER=$(REPOS_PER_WORKER) \
 		bash tests/performance/picoforge/perf-run.sh

@@ -10,6 +10,7 @@
  * durable storage in v1. This process holds no other plugins and reaches
  * no backends. */
 
+#include <stdio.h>
 #include <picomesh/ycore/result.h>
 #include <picomesh/ycore/ytrace.h>
 #include <picomesh/ycore/ytelemetry_store.h>

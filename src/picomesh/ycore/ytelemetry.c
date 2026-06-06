@@ -365,10 +365,59 @@ static size_t ytel_build_span(char *js, size_t cap, const struct ytelemetry_span
 /* Per-worker span batch (an OTel BatchSpanProcessor): finished spans accumulate
  * thread-locally and ship to the collector as ONE array per RPC — one frame,
  * one parse for N spans, instead of one RPC per span. Bounds keep each frame
- * under the yrpc body cap (BUF_MAX). Thread-confined → no lock on the hot path. */
-#define YTEL_BATCH_MAX_SPANS 128
-#define YTEL_BATCH_MAX_BYTES 48000           /* keep the array payload < 64KB BUF_MAX */
-#define YTEL_BATCH_FLUSH_NS  200000000ull    /* 200ms scheduled delay */
+ * under the yrpc body cap (BUF_MAX). Thread-confined → no lock on the hot path.
+ *
+ * The batch ships from two contexts: inline on span_end (a coroutine — its
+ * yielding yloop_write is fine) and from the per-worker flush timer (which the
+ * engine runs INSIDE a spawned coroutine for exactly this reason). The reset
+ * happens before the ship so the two never double-ship or discard each other's
+ * spans across a yield. */
+#define YTEL_BATCH_MAX_SPANS_DEFAULT 128
+/* The generated ingest skel unpacks the string arg into a fixed 4096-byte
+ * stack buffer (rpc.gen.c) and REJECTS the whole call if the arg is >= 4096.
+ * So the shipped array MUST stay under that — not the 64KB yrpc frame cap.
+ * 3500 leaves headroom for the brackets + one trailing span (~1KB max). */
+#define YTEL_BATCH_MAX_BYTES_DEFAULT 3500
+#define YTEL_BATCH_FLUSH_MS_DEFAULT  200     /* scheduled-delay default */
+
+/* Sender batch tunables, resolved ONCE per process and cached (read on the
+ * span hot path). Config keys, under each service's `telemetry:` block:
+ *   telemetry.batch_max_spans  ship after this many spans      (default 128)
+ *   telemetry.batch_max_bytes  ship before the array exceeds this; keep it
+ *                              under the yrpc frame cap         (default 48000)
+ *   telemetry.batch_flush_ms   ship a partial batch this old    (default 200) */
+struct ytel_batch_cfg {
+    int max_spans;
+    size_t max_bytes;
+    uint64_t flush_ns;
+};
+
+static const struct ytel_batch_cfg *ytel_batch_config(void)
+{
+    static struct ytel_batch_cfg cfg;
+    static int loaded = 0;
+    if (!loaded) {
+        cfg.max_spans = YTEL_BATCH_MAX_SPANS_DEFAULT;
+        cfg.max_bytes = YTEL_BATCH_MAX_BYTES_DEFAULT;
+        cfg.flush_ns = (uint64_t)YTEL_BATCH_FLUSH_MS_DEFAULT * 1000000ull;
+        struct picomesh_engine *e = picomesh_active_engine();
+        const struct yconfig *c = e ? picomesh_engine_config(e) : NULL;
+        if (c) {
+            struct yconfig_node_ptr_result r;
+            r = yconfig_get(c, "telemetry.batch_max_spans");
+            if (PICOMESH_IS_OK(r) && r.value) { int64_t v = yconfig_node_as_int(r.value, 0); if (v > 0) cfg.max_spans = (int)v; }
+            else if (PICOMESH_IS_ERR(r)) picomesh_error_destroy(r.error);
+            r = yconfig_get(c, "telemetry.batch_max_bytes");
+            if (PICOMESH_IS_OK(r) && r.value) { int64_t v = yconfig_node_as_int(r.value, 0); if (v > 0) cfg.max_bytes = (size_t)v; }
+            else if (PICOMESH_IS_ERR(r)) picomesh_error_destroy(r.error);
+            r = yconfig_get(c, "telemetry.batch_flush_ms");
+            if (PICOMESH_IS_OK(r) && r.value) { int64_t v = yconfig_node_as_int(r.value, 0); if (v > 0) cfg.flush_ns = (uint64_t)v * 1000000ull; }
+            else if (PICOMESH_IS_ERR(r)) picomesh_error_destroy(r.error);
+        }
+        loaded = 1;
+    }
+    return &cfg;
+}
 
 struct ytel_batch_state {
     char *json;   /* accumulated "{..},{..}" without the enclosing brackets */
@@ -423,18 +472,28 @@ static void ytel_flush_batch(void)
     memcpy(b->body + bo, b->json, b->len); bo += b->len;
     b->body[bo++] = ']';
 
-    rpc_call_oneway(c.peer, RPC_OP_CALL, rid, b->body, bo);
+    /* Reset BEFORE the (possibly yielding) ship. The wire snapshot is already
+     * in b->body, and rpc_call_oneway copies it out synchronously before any
+     * yield — so spans produced while this ship is suspended start a fresh
+     * batch instead of being re-shipped or discarded by this call's reset. */
     b->count = 0;
     b->len = 0;
+    rpc_call_oneway(c.peer, RPC_OP_CALL, rid, b->body, bo);
+}
+
+int ytelemetry_pending_local(void)
+{
+    return ytel_batch.count;
 }
 
 /* Append one finished span to this worker's batch; flush on size/bytes/time. */
 static void ytel_buffer_span(const struct ytelemetry_span *sp, int ok, const char *err,
                              uint64_t dur_ns)
 {
+    const struct ytel_batch_cfg *bc = ytel_batch_config();
     struct ytel_batch_state *b = &ytel_batch;
     if (!b->json) {
-        b->cap = YTEL_BATCH_MAX_BYTES + 2048;
+        b->cap = bc->max_bytes + 2048;
         b->json = malloc(b->cap);
         if (!b->json) { b->cap = 0; return; } /* can't buffer → drop (best-effort) */
         b->last_flush_ns = ytel_mono_ns();
@@ -445,7 +504,7 @@ static void ytel_buffer_span(const struct ytelemetry_span *sp, int ok, const cha
     if (off == 0) return; /* overflow → drop this span */
 
     /* Flush first if appending would exceed the byte budget for one frame. */
-    if (b->count && b->len + 1 + off > YTEL_BATCH_MAX_BYTES) ytel_flush_batch();
+    if (b->count && b->len + 1 + off > bc->max_bytes) ytel_flush_batch();
 
     if (b->len + (b->count ? 1u : 0u) + off <= b->cap) {
         if (b->count) b->json[b->len++] = ',';
@@ -454,9 +513,9 @@ static void ytel_buffer_span(const struct ytelemetry_span *sp, int ok, const cha
         b->count++;
     }
 
-    if (b->count >= YTEL_BATCH_MAX_SPANS) {
+    if (b->count >= bc->max_spans) {
         ytel_flush_batch();
-    } else if (b->count && ytel_mono_ns() - b->last_flush_ns > YTEL_BATCH_FLUSH_NS) {
+    } else if (b->count && ytel_mono_ns() - b->last_flush_ns > bc->flush_ns) {
         ytel_flush_batch();
     }
 }
@@ -469,4 +528,9 @@ void ytelemetry_span_end(struct ytelemetry_span *sp, int ok, const char *err)
     /* Local /_perf aggregate, regardless of collector availability. */
     yspan_record(sp->name, (double)dur / 1000.0);
     ytel_buffer_span(sp, ok, err, dur);
+}
+
+void ytelemetry_flush_local(void)
+{
+    if (ytel_batch.count) ytel_flush_batch();
 }

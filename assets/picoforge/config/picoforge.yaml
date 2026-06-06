@@ -83,6 +83,23 @@ mesh:
 
   services:
 
+    # ---- tracing: sender-side batch knobs (apply to EVERY service) --------
+    # Any service that emits spans batches them per worker and ships the batch
+    # to the trace_collector as one yrpc array (an OTel BatchSpanProcessor).
+    # Read by ytelemetry.c from each node's own `config.telemetry`; all optional
+    # (defaults shown). Set them on a node's `config:` to override there:
+    #
+    #   telemetry:
+    #     enabled: true            # per-service kill-switch                (default true)
+    #     batch_max_spans: 128     # ship after this many spans             (default 128)
+    #     batch_max_bytes: 3500    # ship before the array grows past this;
+    #                              #   MUST stay under the ingest skel's 4096-
+    #                              #   byte string-arg buffer or the whole
+    #                              #   batch is rejected on receive  (default 3500)
+    #     batch_flush_ms: 200      # ship a partial batch this old (a 50ms
+    #                              #   worker timer also flushes idle ones)  (default 200)
+    # ----------------------------------------------------------------------
+
     # registry — service discovery for the mesh. One of only TWO fixed-address
     # nodes (the other is the mesh control parent on `control.port`). The mesh
     # injects this host:port into every child's config as a global `registry:`
@@ -207,13 +224,6 @@ mesh:
           # on KV); they move into those plugins when migrated. accounts,
           # session, and token_issuer own their tables in-plugin.
           schema: |
-            CREATE TABLE IF NOT EXISTS namespaces(
-              id INTEGER PRIMARY KEY,
-              kind TEXT NOT NULL DEFAULT 'user',
-              name TEXT NOT NULL,
-              owner_uid INTEGER NOT NULL,
-              created_at INTEGER NOT NULL DEFAULT 0,
-              UNIQUE(kind, name));
             CREATE TABLE IF NOT EXISTS repos(
               id INTEGER PRIMARY KEY,
               namespace_id INTEGER NOT NULL,
@@ -374,6 +384,9 @@ mesh:
             port: auto
           - service: trace_collector
             port: auto
+          # open/close resolve repo -> namespace to gate by namespace role.
+          - service: git_repo
+            port: auto
 
     git_repo:
       port: auto
@@ -405,6 +418,10 @@ mesh:
             port: auto
           - service: trace_collector
             port: auto
+          # make() verifies the owning namespace exists and records its
+          # namespace_id by calling accounts.ns_resolve (issue #30).
+          - service: accounts
+            port: auto
 
     git_pipeline:
       port: auto
@@ -415,6 +432,10 @@ mesh:
           - service: sharded_storage
             port: auto
           - service: trace_collector
+            port: auto
+          # read_log/job_descriptor resolve the job's repo -> namespace to gate
+          # reads by namespace role (runner-owner OR reporter+), issue #30.
+          - service: git_repo
             port: auto
 
     personal_access_tokens:
@@ -546,24 +567,107 @@ mesh:
               # here for intent/forward-compat).
               _describe: anonymous
               _describe_tree: anonymous
-              # Product reads/writes require a signed-in user; git_repo enforces
-              # resource-level ownership on top of this gate.
+              # Namespace RBAC (issue #30 / docs/security.md). Each repo op
+              # resolves the repo's owning namespace and compares the caller's
+              # INHERITED namespace role (resource_from + role_scope). site_bypass
+              # lets a site:maintainer+ admin manage any repo, opt-in per rule.
               git_repo.git_repo.count_total: authenticated
               git_repo.git_repo.count_for_owner: authenticated
               git_repo.git_repo.list_for_owner: authenticated
-              git_repo.git_repo.read_file: authenticated
-              git_repo.git_repo.read_tree: authenticated
-              git_repo.git_repo.make: authenticated
-              git_repo.git_repo.put_file: authenticated
-              issues.issues.open: authenticated
-              issues.issues.close: authenticated
-              issues.issues.count_open_in_repo: authenticated
-              git_pipeline.git_pipeline.enqueue: authenticated
-              git_pipeline.git_pipeline.enqueue_job: authenticated
-              git_pipeline.git_pipeline.lease: authenticated
+              # Namespace-based repo discovery: reporter+ on the namespace (the
+              # service re-checks). This is how a namespace page lists its repos,
+              # group repos included.
+              git_repo.git_repo.list_for_namespace:
+                required_role: reporter
+                resource_from: "{kwargs.path}"
+                role_scope: namespace_path
+                site_bypass: true
+              git_repo.git_repo.count_for_namespace:
+                required_role: reporter
+                resource_from: "{kwargs.path}"
+                role_scope: namespace_path
+                site_bypass: true
+              # Reads need reporter+ on the repo namespace; a PUBLIC repo is
+              # readable by anyone (allow_public), including anonymous callers.
+              git_repo.git_repo.read_tree:
+                required_role: reporter
+                resource_from: "{kwargs.repo_id}"
+                role_scope: repo_namespace
+                allow_public: true
+                site_bypass: true
+              git_repo.git_repo.read_file:
+                required_role: reporter
+                resource_from: "{kwargs.repo_id}"
+                role_scope: repo_namespace
+                allow_public: true
+                site_bypass: true
+              # Creating a repo needs developer+ on the TARGET namespace path.
+              git_repo.git_repo.make:
+                required_role: developer
+                resource_from: "{kwargs.owner_name}"
+                role_scope: namespace_path
+                site_bypass: true
+              # Pushing content needs developer+ on the repo's owning namespace.
+              git_repo.git_repo.put_file:
+                required_role: developer
+                resource_from: "{kwargs.repo_id}"
+                role_scope: repo_namespace
+                site_bypass: true
+              # Changing visibility needs maintainer+ on the repo's namespace.
+              git_repo.git_repo.set_public:
+                required_role: maintainer
+                resource_from: "{kwargs.repo_id}"
+                role_scope: repo_namespace
+                site_bypass: true
+              # Deleting a repo needs maintainer+ on the repo's namespace (the
+              # service re-checks this too).
+              git_repo.git_repo.delete:
+                required_role: maintainer
+                resource_from: "{kwargs.repo_id}"
+                role_scope: repo_namespace
+                site_bypass: true
+              # Issues + pipelines are scoped to the repo's namespace (issue #30).
+              # Filing/closing an issue + reading issue counts needs reporter+;
+              # triggering a pipeline needs developer+ — resolved to the repo's
+              # namespace. open/count/enqueue take a repo_id directly; close takes
+              # an issue_id, resolved issue_id -> repo_id -> namespace.
+              issues.issues.open:
+                required_role: reporter
+                resource_from: "{kwargs.repo_id}"
+                role_scope: repo_namespace
+                site_bypass: true
+              issues.issues.close:
+                required_role: reporter
+                resource_from: "{kwargs.issue_id}"
+                role_scope: issue_namespace
+                site_bypass: true
+              issues.issues.count_open_in_repo:
+                required_role: reporter
+                resource_from: "{kwargs.repo_id}"
+                role_scope: repo_namespace
+                site_bypass: true
+              git_pipeline.git_pipeline.enqueue:
+                required_role: developer
+                resource_from: "{kwargs.repo_id}"
+                role_scope: repo_namespace
+                site_bypass: true
+              git_pipeline.git_pipeline.enqueue_job:
+                required_role: developer
+                resource_from: "{kwargs.repo_id}"
+                role_scope: repo_namespace
+                site_bypass: true
+              # Legacy lease is a runner op like lease_job — runner-token only
+              # (git_pipeline also re-checks the caller owns the runner id).
+              git_pipeline.git_pipeline.lease:
+                required_group: "site:runner"
               git_pipeline.git_pipeline.count_pending: authenticated
               git_pipeline.git_pipeline.count_running: authenticated
               git_pipeline.git_pipeline.count_done: authenticated
+              # job_descriptor/read_log take a job_id and are read by BOTH the
+              # leasing runner (no repo role) and repo members, so the
+              # "runner-owner OR reporter+ on the repo namespace" decision can't be
+              # expressed as a single policy rule — it is enforced service-local in
+              # git_pipeline (gp_job_readable). The gate here is just authenticated.
               git_pipeline.git_pipeline.job_descriptor: authenticated
               git_pipeline.git_pipeline.read_log: authenticated
               # Runner-only job lifecycle: the caller must hold a runner token
@@ -607,6 +711,36 @@ mesh:
               trace_collector.trace_collector.latency: authenticated
               trace_collector.trace_collector.errors: authenticated
               trace_collector.trace_collector.stats: authenticated
+              # Namespace authority (issue #30). The gate is `authenticated`, but
+              # the SERVICE enforces the real rules: creating a ROOT namespace is
+              # a site-admin (or internal-bootstrap) operation, and creating a
+              # SUBGROUP needs maintainer+ on the parent. Managing members needs
+              # maintainer+ on the namespace (inherited) — owner/site-admin yes,
+              # outsider no. (Policy stays `authenticated` because the per-case
+              # authority depends on the parent path, which the service resolves.)
+              accounts.accounts.ns_create: authenticated
+              accounts.accounts.ns_add_member:
+                required_role: maintainer
+                resource_from: "{kwargs.path}"
+                role_scope: namespace_path
+                site_bypass: true
+              accounts.accounts.ns_remove_member:
+                required_role: maintainer
+                resource_from: "{kwargs.path}"
+                role_scope: namespace_path
+                site_bypass: true
+              # Enumerating the WHOLE namespace tree is a site-admin view (the
+              # admin RBAC page). A single namespace's members can be viewed by a
+              # maintainer of that namespace (the group-management area) or a site
+              # admin.
+              accounts.accounts.ns_list:
+                required_role: owner
+                account_from: site
+              accounts.accounts.ns_members:
+                required_role: maintainer
+                resource_from: "{kwargs.path}"
+                role_scope: namespace_path
+                site_bypass: true
               # Admin surfaces — site-owner only, expressed through the model
               # (replaces the gateway's old raw role:<uid> read).
               accounts.accounts.list:

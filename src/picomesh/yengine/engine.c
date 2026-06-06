@@ -14,6 +14,8 @@
 #include <picomesh/yargv/yargv.h>
 #include <picomesh/ycore/ytrace.h>
 #include <picomesh/ycore/yperf.h>
+#include <picomesh/ycore/ytelemetry.h>
+#include <picomesh/ycore/ytelemetry_store.h>
 #include <picomesh/ycore/result.h>
 
 #include <uthash.h>
@@ -60,6 +62,10 @@ struct picomesh_worker {
      * thread + loop when the service config enables `perf`. NULL when the
      * feature is off. Owned here; destroyed at engine teardown. */
     struct yperf *perf;
+    /* Periodic telemetry-batch flush timer on this worker's loop, so the
+     * span batch (and, on the collector, the ingest arena) never strands a
+     * partial buffer when the worker briefly goes idle. */
+    struct yloop_timer *flush_timer;
     /* Per-worker cached frontend security pipeline (authn chain + authorizer),
      * built once on this worker's first gated request and reused thereafter.
      * Per-worker so it is thread-confined (no locking) and reuses this
@@ -295,6 +301,7 @@ void picomesh_engine_destroy(struct picomesh_engine *e)
             r = next;
         }
         rpc_local_cache_destroy(&e->workers[i].local_instances);
+        if (e->workers[i].flush_timer) yloop_timer_stop(e->workers[i].flush_timer);
         yloop_destroy(e->workers[i].loop);
     }
     free(e->workers);
@@ -815,10 +822,13 @@ size_t picomesh_engine_open_remotes(struct picomesh_engine *e, const char *plugi
     return opened;
 }
 
+static void worker_start_flush_timer(struct picomesh_worker *w);
+
 struct picomesh_void_result picomesh_engine_run(struct picomesh_engine *e)
 {
     if (!e) return PICOMESH_ERR(picomesh_void, "picomesh_engine_run: NULL engine");
     *current_worker_slot() = &e->workers[0];
+    worker_start_flush_timer(&e->workers[0]);
     struct picomesh_void_result r = yloop_run(e->workers[0].loop);
     PICOMESH_RETURN_IF_ERR(picomesh_void, r, "picomesh_engine_run: yloop_run failed");
     return PICOMESH_OK_VOID();
@@ -828,6 +838,30 @@ struct picomesh_void_result picomesh_engine_run(struct picomesh_engine *e)
  * (void *(void *)) — it can't return a Result, so it absorbs setup
  * errors at this boundary (the worker bows out, the rest keep serving).
  * The worker's loop runs until shutdown. */
+/* Long-lived per-worker telemetry-flush coroutine: every 50ms it drains the
+ * collector ingest arena and ships this worker's pending span batch. It runs as
+ * a coroutine (via yloop_sleep_ms) precisely because the batch ship ends in a
+ * yielding write — a bare timer callback could not ship at all, which stranded
+ * batched spans. Sees this worker's thread-local buffers (one coro per loop). */
+static void telemetry_flush_loop(void *arg)
+{
+    struct yloop *loop = arg;
+    for (;;) {
+        yloop_sleep_ms(loop, 50);
+        ytelemetry_store_flush_local();                               /* collector arena (no yield) */
+        if (ytelemetry_pending_local() > 0) ytelemetry_flush_local(); /* sender batch (yields) */
+    }
+}
+
+/* Spawn the flush coroutine on a worker's loop. */
+static void worker_start_flush_timer(struct picomesh_worker *w)
+{
+    struct picomesh_coro_ptr_result cr =
+        picomesh_coro_spawn(telemetry_flush_loop, w->loop, 0, "ytel-flush");
+    if (PICOMESH_IS_ERR(cr)) { picomesh_error_destroy(cr.error); return; }
+    picomesh_coro_resume(cr.value); /* runs to its first yloop_sleep_ms yield */
+}
+
 PICOMESH_EXTERNAL_CALLBACK
 static void *worker_thread_main(void *arg)
 {
@@ -840,6 +874,7 @@ static void *worker_thread_main(void *arg)
         picomesh_error_destroy(sr.error);
         return NULL;
     }
+    worker_start_flush_timer(w);
     struct picomesh_void_result rr = yloop_run(w->loop);
     if (PICOMESH_IS_ERR(rr)) picomesh_error_destroy(rr.error);
     return NULL;
@@ -912,6 +947,7 @@ struct picomesh_void_result picomesh_engine_run_workers(struct picomesh_engine *
     yinfo("run_workers: %zu worker thread(s) serving", e->worker_count);
 
     /* Worker 0 drives this thread's loop until shutdown. */
+    worker_start_flush_timer(&e->workers[0]);
     struct picomesh_void_result rr = yloop_run(e->workers[0].loop);
 
     /* Loop exited (clean shutdown). Nudge the others to stop, then join.

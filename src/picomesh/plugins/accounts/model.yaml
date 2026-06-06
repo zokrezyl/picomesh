@@ -124,6 +124,94 @@ methods:
         type: "struct yheaders *"
       - name: uid
         type: uint32_t
+  - slot: accounts_ns_create
+    domain: accounts
+    owning_class: accounts
+    return_type: struct picomesh_string_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: owner_uid
+        type: uint32_t
+      - name: kind
+        type: "const char *"
+      - name: slug
+        type: "const char *"
+      - name: parent_path
+        type: "const char *"
+  - slot: accounts_ns_add_member
+    domain: accounts
+    owning_class: accounts
+    return_type: struct picomesh_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: path
+        type: "const char *"
+      - name: uid
+        type: uint32_t
+      - name: role
+        type: "const char *"
+  - slot: accounts_ns_resolve
+    domain: accounts
+    owning_class: accounts
+    return_type: struct picomesh_int64_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: path
+        type: "const char *"
+  - slot: accounts_ns_list
+    domain: accounts
+    owning_class: accounts
+    return_type: struct picomesh_json_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+  - slot: accounts_ns_members
+    domain: accounts
+    owning_class: accounts
+    return_type: struct picomesh_json_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: path
+        type: "const char *"
+  - slot: accounts_ns_remove_member
+    domain: accounts
+    owning_class: accounts
+    return_type: struct picomesh_int_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: path
+        type: "const char *"
+      - name: uid
+        type: uint32_t
   - slot: accounts_list
     domain: accounts
     owning_class: accounts
@@ -187,6 +275,24 @@ classes:
       - slot: accounts_groups
         slot_domain: accounts
         impl: accounts_accounts_groups_impl
+      - slot: accounts_ns_create
+        slot_domain: accounts
+        impl: accounts_accounts_ns_create_impl
+      - slot: accounts_ns_add_member
+        slot_domain: accounts
+        impl: accounts_accounts_ns_add_member_impl
+      - slot: accounts_ns_resolve
+        slot_domain: accounts
+        impl: accounts_accounts_ns_resolve_impl
+      - slot: accounts_ns_list
+        slot_domain: accounts
+        impl: accounts_accounts_ns_list_impl
+      - slot: accounts_ns_members
+        slot_domain: accounts
+        impl: accounts_accounts_ns_members_impl
+      - slot: accounts_ns_remove_member
+        slot_domain: accounts
+        impl: accounts_accounts_ns_remove_member_impl
       - slot: accounts_list
         slot_domain: accounts
         impl: accounts_accounts_list_impl

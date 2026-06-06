@@ -19,8 +19,11 @@
 #include <picomesh/yconfig/yconfig.h>
 #include <picomesh/yjson/yjson.h>
 #include <picomesh/yclass/jinvoke.h>
+#include <picomesh/yengine/engine.h>
 #include <picomesh/ysecurity/jwt.h>
 #include <picomesh/ysecurity/jwt_verifier.h>
+#include <picomesh/plugin/git_repo/git_repo.h>
+#include <picomesh/plugin/issues/issues.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -87,6 +90,32 @@ static int groups_best_rank(const struct yjson_value *groups, const char *accoun
     return best;
 }
 
+/* Effective role rank for a NAMESPACE PATH against the claims `groups` array,
+ * honouring inheritance: the highest direct role on the path OR any ancestor.
+ * `acme/platform/api` is checked as itself, then `acme/platform`, then `acme`,
+ * so a parent-namespace grant satisfies a child resource (issue #30). */
+static int groups_effective_rank(const struct yjson_value *groups, const char *path)
+{
+    if (!groups || !path || !*path) return -1;
+    char prefix[256];
+    int best = -1;
+    for (const char *end = path + strlen(path); end > path; ) {
+        size_t len = (size_t)(end - path);
+        if (len < sizeof(prefix)) {
+            memcpy(prefix, path, len);
+            prefix[len] = 0;
+            int rank = groups_best_rank(groups, prefix);
+            if (rank > best) best = rank;
+        }
+        const char *slash = NULL;
+        for (const char *p = end - 1; p >= path; --p)
+            if (*p == '/') { slash = p; break; }
+        if (!slash) break;
+        end = slash;
+    }
+    return best;
+}
+
 /* Resolve `account_from` against the positional `args`, using the method's
  * declared parameter names to honour yaapp's `{kwargs.name}` form. Supports:
  *   site                  -> "site"
@@ -129,7 +158,15 @@ static int resolve_account(const char *account_from, const char *endpoint,
     }
 
     if (index < 0 || !args || !yjson_is_array(args)) return 0;
-    const char *value = yjson_as_string(yjson_array_at(args, (size_t)index), NULL);
+    const struct yjson_value *node = yjson_array_at(args, (size_t)index);
+    const char *value = yjson_as_string(node, NULL);
+    char numbuf[32];
+    if (!value && yjson_is_int(node)) {
+        /* repo_id and other ids arrive as JSON numbers, not strings — stringify
+         * so `{kwargs.repo_id}` resolves the same way a string arg would. */
+        snprintf(numbuf, sizeof(numbuf), "%lld", (long long)yjson_as_int(node, 0));
+        value = numbuf;
+    }
     if (!value || !*value) return 0;
     if (account_part) {
         const char *slash = strchr(value, '/');
@@ -141,6 +178,52 @@ static int resolve_account(const char *account_from, const char *endpoint,
         snprintf(out, cap, "%s", value);
     }
     return 1;
+}
+
+/* Resolve a repo_id to its owning namespace path by calling
+ * git_repo.git_repo.namespace_of over the mesh (issue #30). The gateway, the
+ * only node that runs this authorizer, has git_repo as a remote. Returns 1 and
+ * fills `out` on success; 0 on any failure, so the caller fails closed. The
+ * lookup carries no caller credential — namespace_of returns non-secret repo
+ * metadata, like owner_of. */
+static int resolve_repo_namespace(struct policy_state *state, uint32_t repo_id, char *out, size_t cap)
+{
+    struct ctx c = picomesh_engine_service_ctx(state->engine, "git_repo");
+    struct object_ptr_result o = git_repo_git_repo_create(&c);
+    if (PICOMESH_IS_ERR(o)) { picomesh_error_destroy(o.error); return 0; }
+    struct picomesh_string_result r = git_repo_git_repo_namespace_of(&c, o.value, NULL, repo_id);
+    if (PICOMESH_IS_ERR(r)) { picomesh_error_destroy(r.error); return 0; }
+    int ok = (r.value && r.value[0]) ? 1 : 0;
+    if (ok) snprintf(out, cap, "%s", r.value);
+    free(r.value);
+    return ok;
+}
+
+/* Whether the repo `repo_id` is public, via git_repo.git_repo.is_public.
+ * Returns 1 (public), 0 (private/unknown), or -1 on a backend error (the caller
+ * treats -1 as not-public, i.e. fails closed to the role check). */
+static int resolve_repo_public(struct policy_state *state, uint32_t repo_id)
+{
+    struct ctx c = picomesh_engine_service_ctx(state->engine, "git_repo");
+    struct object_ptr_result o = git_repo_git_repo_create(&c);
+    if (PICOMESH_IS_ERR(o)) { picomesh_error_destroy(o.error); return -1; }
+    struct picomesh_int_result r = git_repo_git_repo_is_public(&c, o.value, NULL, repo_id);
+    if (PICOMESH_IS_ERR(r)) { picomesh_error_destroy(r.error); return -1; }
+    return r.value ? 1 : 0;
+}
+
+/* Resolve an issue_id to the namespace path of its repo by chaining
+ * issues.repo_of -> git_repo.namespace_of (issue #30). Returns 1 and fills out
+ * on success; 0 on any failure (caller fails closed). */
+static int resolve_issue_namespace(struct policy_state *state, uint32_t issue_id, char *out, size_t cap)
+{
+    struct ctx c = picomesh_engine_service_ctx(state->engine, "issues");
+    struct object_ptr_result o = issues_issues_create(&c);
+    if (PICOMESH_IS_ERR(o)) { picomesh_error_destroy(o.error); return 0; }
+    struct picomesh_uint32_result r = issues_issues_repo_of(&c, o.value, NULL, issue_id);
+    if (PICOMESH_IS_ERR(r)) { picomesh_error_destroy(r.error); return 0; }
+    if (r.value == 0) return 0;
+    return resolve_repo_namespace(state, r.value, out, cap);
 }
 
 static struct picomesh_authz_decision policy_authorize(void *state_ptr, const char *endpoint,
@@ -170,10 +253,32 @@ static struct picomesh_authz_decision policy_authorize(void *state_ptr, const ch
     const char *required_role = NULL;
     const char *account_from = "site";
     const char *required_group = NULL;
+    /* role_scope selects HOW the target of the role check is resolved:
+     *   absent / "account"  — `account_from` resolves to a flat slug, checked
+     *                         directly against the role ladder (no inheritance);
+     *                         used for `site` admin gates.
+     *   "repo_namespace"    — `resource_from` resolves to a repo_id; the repo's
+     *                         owning namespace path is fetched and the caller's
+     *                         INHERITED namespace role is compared.
+     *   "namespace_path"    — `resource_from` resolves to a namespace path
+     *                         directly; inherited namespace role is compared. */
+    const char *role_scope = NULL;
+    const char *resource_from = NULL;
+    /* site_bypass: opt-in per rule — a site:maintainer+ caller bypasses the role
+     * check ONLY for rules that set it (admin/repo-management surfaces), never
+     * implicitly for every role-gated endpoint. allow_public: a repo_namespace
+     * read this rule guards is permitted for ANYONE (even anonymous) when the
+     * target repo is public. */
+    int site_bypass = 0;
+    int allow_public = 0;
     if (yconfig_node_kind(rule) == YCONFIG_MAP) {
         required_role = yconfig_node_as_string(yconfig_node_get(rule, "required_role"), NULL);
         account_from = yconfig_node_as_string(yconfig_node_get(rule, "account_from"), "site");
         required_group = yconfig_node_as_string(yconfig_node_get(rule, "required_group"), NULL);
+        role_scope = yconfig_node_as_string(yconfig_node_get(rule, "role_scope"), NULL);
+        resource_from = yconfig_node_as_string(yconfig_node_get(rule, "resource_from"), NULL);
+        site_bypass = yconfig_node_as_int(yconfig_node_get(rule, "site_bypass"), 0) != 0;
+        allow_public = yconfig_node_as_int(yconfig_node_get(rule, "allow_public"), 0) != 0;
     } else {
         required_role = yconfig_node_as_string(rule, NULL);
     }
@@ -184,6 +289,20 @@ static struct picomesh_authz_decision policy_authorize(void *state_ptr, const ch
 
     if (has_role && strcmp(required_role, "anonymous") == 0)
         return decide(1, 0, "anonymous");
+
+    /* Public-repo reads are allowed for anyone — including an anonymous caller
+     * with no JWT — so this must be decided BEFORE the credential requirement
+     * below. Only applies to a repo_namespace rule that opted in via
+     * allow_public. */
+    if (has_role && allow_public && role_scope && strcmp(role_scope, "repo_namespace") == 0) {
+        char id_str[64];
+        if (resolve_account(resource_from ? resource_from : account_from, endpoint, args, id_str, sizeof(id_str))) {
+            uint32_t repo_id = (uint32_t)strtoul(id_str, NULL, 10);
+            if (resolve_repo_public(state, repo_id) == 1)
+                return decide(1, 0, "public repo readable by anyone");
+        }
+        /* Not public (or unresolved): fall through to require auth + role. */
+    }
 
     if (!jwt || !*jwt)
         return decide(0, 401, "authentication required");
@@ -215,9 +334,60 @@ static struct picomesh_authz_decision policy_authorize(void *state_ptr, const ch
         int need = picomesh_role_rank(required_role);
         if (need < 0) { result = decide(0, 403, "policy error: unknown required_role"); goto done; }
 
-        /* Site-level bypass: maintainer+ on the synthetic `site` account. */
-        if (groups_best_rank(groups, "site") >= picomesh_role_rank("maintainer")) {
+        /* Site-level bypass: maintainer+ on the synthetic `site` account — but
+         * ONLY for rules that explicitly opt in (site_bypass: true). An admin
+         * surface gated on `account_from: site` does not need this; it resolves
+         * the role on the site account directly. */
+        if (site_bypass && groups_best_rank(groups, "site") >= picomesh_role_rank("maintainer")) {
             result = decide(1, 0, "site-level bypass");
+            goto done;
+        }
+
+        /* Namespace-scoped checks resolve a repo/namespace and compare the
+         * caller's INHERITED role over the namespace tree (issue #30). */
+        if (role_scope && strcmp(role_scope, "repo_namespace") == 0) {
+            char id_str[64];
+            if (!resolve_account(resource_from ? resource_from : account_from, endpoint, args, id_str, sizeof(id_str))) {
+                result = decide(0, 403, "could not resolve repo_id from call args");
+                goto done;
+            }
+            uint32_t repo_id = (uint32_t)strtoul(id_str, NULL, 10);
+            char ns_path[256];
+            if (!resolve_repo_namespace(state, repo_id, ns_path, sizeof(ns_path))) {
+                result = decide(0, 403, "could not resolve repo namespace");
+                goto done;
+            }
+            result = groups_effective_rank(groups, ns_path) >= need
+                         ? decide(1, 0, "namespace role satisfies requirement")
+                         : decide(0, 403, "insufficient namespace role");
+            goto done;
+        }
+        if (role_scope && strcmp(role_scope, "namespace_path") == 0) {
+            char ns_path[256];
+            if (!resolve_account(resource_from ? resource_from : account_from, endpoint, args, ns_path, sizeof(ns_path))) {
+                result = decide(0, 403, "could not resolve namespace path from call args");
+                goto done;
+            }
+            result = groups_effective_rank(groups, ns_path) >= need
+                         ? decide(1, 0, "namespace role satisfies requirement")
+                         : decide(0, 403, "insufficient namespace role");
+            goto done;
+        }
+        if (role_scope && strcmp(role_scope, "issue_namespace") == 0) {
+            char id_str[64];
+            if (!resolve_account(resource_from ? resource_from : account_from, endpoint, args, id_str, sizeof(id_str))) {
+                result = decide(0, 403, "could not resolve issue_id from call args");
+                goto done;
+            }
+            uint32_t issue_id = (uint32_t)strtoul(id_str, NULL, 10);
+            char ns_path[256];
+            if (!resolve_issue_namespace(state, issue_id, ns_path, sizeof(ns_path))) {
+                result = decide(0, 403, "could not resolve issue namespace");
+                goto done;
+            }
+            result = groups_effective_rank(groups, ns_path) >= need
+                         ? decide(1, 0, "namespace role satisfies requirement")
+                         : decide(0, 403, "insufficient namespace role");
             goto done;
         }
 

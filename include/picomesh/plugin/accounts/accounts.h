@@ -32,6 +32,12 @@ struct picomesh_int64_result accounts_accounts_balance(struct ctx * ctx, struct 
 struct picomesh_size_result accounts_accounts_count(struct ctx * ctx, struct object * obj, struct yheaders * hdrs);
 struct picomesh_int_result accounts_accounts_set_groups(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t uid, const char * groups_csv);
 struct picomesh_string_result accounts_accounts_groups(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t uid);
+struct picomesh_string_result accounts_accounts_ns_create(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t owner_uid, const char * kind, const char * slug, const char * parent_path);
+struct picomesh_int_result accounts_accounts_ns_add_member(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * path, uint32_t uid, const char * role);
+struct picomesh_int64_result accounts_accounts_ns_resolve(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * path);
+struct picomesh_json_result accounts_accounts_ns_list(struct ctx * ctx, struct object * obj, struct yheaders * hdrs);
+struct picomesh_json_result accounts_accounts_ns_members(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * path);
+struct picomesh_int_result accounts_accounts_ns_remove_member(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * path, uint32_t uid);
 struct picomesh_json_result accounts_accounts_list(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, int64_t offset, int64_t limit);
 struct picomesh_json_result accounts_accounts_list_all(struct ctx * ctx, struct object * obj, struct yheaders * hdrs);
 

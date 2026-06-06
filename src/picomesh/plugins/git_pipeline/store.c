@@ -46,6 +46,7 @@
 #include <picomesh/ysecurity/jwt.h>
 #include <picomesh/ysecurity/secret.h>
 #include <picomesh/plugin/sharded_storage/sharded_storage.h>
+#include <picomesh/plugin/git_repo/git_repo.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -204,6 +205,74 @@ static int gp_caller_owns(struct yheaders *hdrs, uint32_t leased_runner)
     return caller.uid == leased_runner;
 }
 
+/* Site admin / internal capability — gates the global job scans. Fail closed. */
+static int gp_caller_site_admin(struct yheaders *hdrs)
+{
+    struct picomesh_authctx caller;
+    picomesh_authctx_from_headers(hdrs, picomesh_active_engine(), &caller);
+    if (!caller.authenticated) return 0;
+    if (picomesh_groups_contains(caller.groups_csv, PICOMESH_GROUP_SYSTEM)) return 1;
+    return picomesh_groups_max_role(caller.groups_csv, "site") >= picomesh_role_rank("maintainer");
+}
+
+/* Read access to a job's metadata/log (issue #30): allowed for the runner that
+ * leased it (it must read its own descriptor/log), OR a verified caller with
+ * reporter+ on the repo's owning namespace (inherited), OR a site admin. This is
+ * the service-local complement to the gateway policy gate — the policy can't
+ * express "runner-owner OR namespace-reporter", so the gate stays `authenticated`
+ * and the resource role is decided here. Anonymous/unknown job → denied. */
+static int gp_job_readable(struct gp_storage *h, struct yheaders *hdrs, uint32_t job_id)
+{
+    uint32_t repo_id = 0, leased_runner = 0; int status = -1;
+    struct picomesh_int_result lr = job_load(h, hdrs, job_id, &repo_id, &leased_runner, &status);
+    if (PICOMESH_IS_ERR(lr)) { picomesh_error_destroy(lr.error); return 0; }
+    if (lr.value == 0) return 0; /* no such job */
+    if (leased_runner != 0 && gp_caller_owns(hdrs, leased_runner)) return 1;
+
+    struct picomesh_authctx caller;
+    picomesh_authctx_from_headers(hdrs, picomesh_active_engine(), &caller);
+    if (!caller.authenticated) return 0;
+    if (picomesh_groups_contains(caller.groups_csv, PICOMESH_GROUP_SYSTEM)) return 1; /* trusted internal */
+    if (picomesh_groups_max_role(caller.groups_csv, "site") >= picomesh_role_rank("maintainer")) return 1;
+
+    /* Resolve repo -> namespace path and compare the caller's inherited role. */
+    struct picomesh_engine *e = picomesh_active_engine();
+    if (!e) return 0;
+    struct ctx c = picomesh_engine_service_ctx(e, "git_repo");
+    struct object_ptr_result o = git_repo_git_repo_create(&c);
+    if (PICOMESH_IS_ERR(o)) { picomesh_error_destroy(o.error); return 0; }
+    struct picomesh_string_result np = git_repo_git_repo_namespace_of(&c, o.value, NULL, repo_id);
+    if (PICOMESH_IS_ERR(np)) { picomesh_error_destroy(np.error); return 0; }
+    int ok = np.value && np.value[0] &&
+             picomesh_groups_effective_role(caller.groups_csv, np.value) >= picomesh_role_rank("reporter");
+    free(np.value);
+    return ok;
+}
+
+/* Write authz for a repo-scoped pipeline op (issue #30): when the caller is a
+ * VERIFIED principal (JWT present), require `min_role`+ on the repo's namespace
+ * (inherited) or a site admin. A NULL/anonymous caller is the trusted in-process
+ * path (left to the gateway boundary). Returns 1 if allowed. */
+static int gp_caller_can_write(struct yheaders *hdrs, uint32_t repo_id, const char *min_role)
+{
+    struct picomesh_authctx caller;
+    picomesh_authctx_from_headers(hdrs, picomesh_active_engine(), &caller);
+    if (!caller.authenticated) return 0; /* fail closed */
+    if (picomesh_groups_contains(caller.groups_csv, PICOMESH_GROUP_SYSTEM)) return 1; /* trusted internal */
+    if (picomesh_groups_max_role(caller.groups_csv, "site") >= picomesh_role_rank("maintainer")) return 1;
+    struct picomesh_engine *e = picomesh_active_engine();
+    if (!e) return 0;
+    struct ctx c = picomesh_engine_service_ctx(e, "git_repo");
+    struct object_ptr_result o = git_repo_git_repo_create(&c);
+    if (PICOMESH_IS_ERR(o)) { picomesh_error_destroy(o.error); return 0; }
+    struct picomesh_string_result np = git_repo_git_repo_namespace_of(&c, o.value, NULL, repo_id);
+    if (PICOMESH_IS_ERR(np)) { picomesh_error_destroy(np.error); return 0; }
+    int ok = np.value && np.value[0] &&
+             picomesh_groups_effective_role(caller.groups_csv, np.value) >= picomesh_role_rank(min_role);
+    free(np.value);
+    return ok;
+}
+
 /* Claim the next queued job for runner_id via FIFO CAS, adjusting counters and
  * recording the lease expiry. OK value: job_id (0 if no job is queued). Shared
  * by `lease` (returns the id) and `lease_job` (returns the descriptor). */
@@ -339,6 +408,8 @@ struct picomesh_uint32_result git_pipeline_git_pipeline_enqueue_impl(struct ctx 
                                                            uint32_t repo_id)
 {
     (void)ctx; (void)obj;
+    if (!gp_caller_can_write(hdrs, repo_id, "developer"))
+        return PICOMESH_ERR(picomesh_uint32, "git_pipeline_enqueue: forbidden (insufficient namespace role)");
     struct gp_storage_result sr = gp_open();
     if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_uint32, "git_pipeline_enqueue: storage open failed", sr);
     struct gp_storage h = sr.value;
@@ -360,6 +431,8 @@ struct picomesh_uint32_result git_pipeline_git_pipeline_enqueue_job_impl(struct 
                                                            const char *pipeline_path, int64_t timeout_seconds)
 {
     (void)ctx; (void)obj;
+    if (!gp_caller_can_write(hdrs, repo_id, "developer"))
+        return PICOMESH_ERR(picomesh_uint32, "git_pipeline_enqueue_job: forbidden (insufficient namespace role)");
     struct gp_storage_result sr = gp_open();
     if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_uint32, "git_pipeline_enqueue_job: storage open failed", sr);
     struct gp_storage h = sr.value;
@@ -395,6 +468,11 @@ struct picomesh_uint32_result git_pipeline_git_pipeline_lease_impl(struct ctx *c
                                                          uint32_t runner_id)
 {
     (void)ctx; (void)obj;
+    /* Leasing is a runner operation: the caller's runner token must match the
+     * runner_id it leases as, so a plain signed-in user cannot claim jobs as a
+     * runner and starve real runners (issue #30). Mirrors lease_job. */
+    if (!gp_caller_owns(hdrs, runner_id))
+        return PICOMESH_ERR(picomesh_uint32, "git_pipeline_lease: caller is not this runner");
     struct gp_storage_result sr = gp_open();
     if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_uint32, "git_pipeline_lease: storage open failed", sr);
     struct gp_storage h = sr.value;
@@ -431,6 +509,8 @@ struct picomesh_json_result git_pipeline_git_pipeline_job_descriptor_impl(struct
     struct gp_storage_result sr = gp_open();
     if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_json, "git_pipeline_job_descriptor: storage open failed", sr);
     struct gp_storage h = sr.value;
+    if (!gp_job_readable(&h, hdrs, job_id))
+        return PICOMESH_ERR(picomesh_json, "git_pipeline_job_descriptor: forbidden (insufficient namespace role)");
     return gp_descriptor_json(&h, hdrs, job_id);
 }
 
@@ -476,6 +556,8 @@ struct picomesh_string_result git_pipeline_git_pipeline_read_log_impl(struct ctx
     struct gp_storage_result sr = gp_open();
     if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_string, "git_pipeline_read_log: storage open failed", sr);
     struct gp_storage h = sr.value;
+    if (!gp_job_readable(&h, hdrs, job_id))
+        return PICOMESH_ERR(picomesh_string, "git_pipeline_read_log: forbidden (insufficient namespace role)");
     struct picomesh_string_result r = gp_aux_get(&h, hdrs, job_id, "log");
     if (PICOMESH_IS_ERR(r)) return PICOMESH_ERR(picomesh_string, "git_pipeline_read_log: read failed", r);
     if (!r.value) { char *empty = strdup(""); return empty ? PICOMESH_OK(picomesh_string, empty)
@@ -491,6 +573,17 @@ struct picomesh_int_result git_pipeline_git_pipeline_complete_impl(struct ctx *c
     struct gp_storage_result sr = gp_open();
     if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_int, "git_pipeline_complete: storage open failed", sr);
     struct gp_storage h = sr.value;
+    /* Completing a job mutates its state, so it is gated (FAIL CLOSED, issue
+     * #30): the runner that leased it, OR maintainer+ on the repo's namespace
+     * (or a site admin / trusted internal capability). A credential-less caller
+     * is denied. */
+    uint32_t repo_id = 0, leased_runner = 0; int st = -1;
+    struct picomesh_int_result jl = job_load(&h, hdrs, job_id, &repo_id, &leased_runner, &st);
+    if (PICOMESH_IS_ERR(jl)) return PICOMESH_ERR(picomesh_int, "git_pipeline_complete: load failed", jl);
+    if (jl.value == 0) return PICOMESH_OK(picomesh_int, 0); /* no such job */
+    int by_runner = leased_runner != 0 && gp_caller_owns(hdrs, leased_runner);
+    if (!by_runner && !gp_caller_can_write(hdrs, repo_id, "maintainer"))
+        return PICOMESH_ERR(picomesh_int, "git_pipeline_complete: forbidden (insufficient namespace role)");
     return gp_transition(&h, hdrs, job_id, status);
 }
 
@@ -613,6 +706,9 @@ struct picomesh_json_result git_pipeline_git_pipeline_list_impl(struct ctx *ctx,
                                                          int64_t offset, int64_t limit)
 {
     (void)ctx; (void)obj;
+    /* A global cross-repo job scan — site admin only (fail closed, issue #30). */
+    if (!gp_caller_site_admin(hdrs))
+        return PICOMESH_ERR(picomesh_json, "git_pipeline_list: forbidden (site admin only)");
     struct gp_storage_result sr = gp_open();
     if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_json, "git_pipeline_list: storage open failed", sr);
     struct gp_storage h = sr.value;
@@ -625,6 +721,8 @@ struct picomesh_json_result git_pipeline_git_pipeline_list_all_impl(struct ctx *
                                                                     struct yheaders *hdrs)
 {
     (void)ctx; (void)obj;
+    if (!gp_caller_site_admin(hdrs))
+        return PICOMESH_ERR(picomesh_json, "git_pipeline_list_all: forbidden (site admin only)");
     struct gp_storage_result sr = gp_open();
     if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_json, "git_pipeline_list_all: storage open failed", sr);
     struct gp_storage h = sr.value;

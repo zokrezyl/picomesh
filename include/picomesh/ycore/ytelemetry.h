@@ -90,6 +90,15 @@ size_t ytelemetry_client_serialize_headers(const struct ytelemetry_span *sp,
  * status=error; `err` (optional) is a short message. */
 void ytelemetry_span_end(struct ytelemetry_span *sp, int ok, const char *err);
 
+/* Ship the calling thread's pending span batch to the collector now. Ends in a
+ * yielding write, so the caller MUST be a coroutine (the engine runs the
+ * periodic flush inside a spawned coro for this reason). No-op if empty. */
+void ytelemetry_flush_local(void);
+
+/* Number of spans buffered in the calling thread's batch (lets the flush timer
+ * skip spawning a coroutine when there is nothing to ship). */
+int ytelemetry_pending_local(void);
+
 #ifdef __cplusplus
 }
 #endif

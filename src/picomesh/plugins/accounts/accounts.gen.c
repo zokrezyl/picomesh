@@ -20,6 +20,18 @@ static accounts_accounts_set_groups_fn _accounts_accounts_accounts_accounts_set_
 __attribute__((unused))
 static accounts_accounts_groups_fn _accounts_accounts_accounts_accounts_groups_check = accounts_accounts_groups_impl;
 __attribute__((unused))
+static accounts_accounts_ns_create_fn _accounts_accounts_accounts_accounts_ns_create_check = accounts_accounts_ns_create_impl;
+__attribute__((unused))
+static accounts_accounts_ns_add_member_fn _accounts_accounts_accounts_accounts_ns_add_member_check = accounts_accounts_ns_add_member_impl;
+__attribute__((unused))
+static accounts_accounts_ns_resolve_fn _accounts_accounts_accounts_accounts_ns_resolve_check = accounts_accounts_ns_resolve_impl;
+__attribute__((unused))
+static accounts_accounts_ns_list_fn _accounts_accounts_accounts_accounts_ns_list_check = accounts_accounts_ns_list_impl;
+__attribute__((unused))
+static accounts_accounts_ns_members_fn _accounts_accounts_accounts_accounts_ns_members_check = accounts_accounts_ns_members_impl;
+__attribute__((unused))
+static accounts_accounts_ns_remove_member_fn _accounts_accounts_accounts_accounts_ns_remove_member_check = accounts_accounts_ns_remove_member_impl;
+__attribute__((unused))
 static accounts_accounts_list_fn _accounts_accounts_accounts_accounts_list_check = accounts_accounts_list_impl;
 __attribute__((unused))
 static accounts_accounts_list_all_fn _accounts_accounts_accounts_accounts_list_all_check = accounts_accounts_list_all_impl;
@@ -45,6 +57,12 @@ struct class_ptr_result accounts_accounts_class_get(void)
         {"accounts", "accounts_count", (method_id_t)accounts_accounts_count, (impl_t)accounts_accounts_count_impl},
         {"accounts", "accounts_set_groups", (method_id_t)accounts_accounts_set_groups, (impl_t)accounts_accounts_set_groups_impl},
         {"accounts", "accounts_groups", (method_id_t)accounts_accounts_groups, (impl_t)accounts_accounts_groups_impl},
+        {"accounts", "accounts_ns_create", (method_id_t)accounts_accounts_ns_create, (impl_t)accounts_accounts_ns_create_impl},
+        {"accounts", "accounts_ns_add_member", (method_id_t)accounts_accounts_ns_add_member, (impl_t)accounts_accounts_ns_add_member_impl},
+        {"accounts", "accounts_ns_resolve", (method_id_t)accounts_accounts_ns_resolve, (impl_t)accounts_accounts_ns_resolve_impl},
+        {"accounts", "accounts_ns_list", (method_id_t)accounts_accounts_ns_list, (impl_t)accounts_accounts_ns_list_impl},
+        {"accounts", "accounts_ns_members", (method_id_t)accounts_accounts_ns_members, (impl_t)accounts_accounts_ns_members_impl},
+        {"accounts", "accounts_ns_remove_member", (method_id_t)accounts_accounts_ns_remove_member, (impl_t)accounts_accounts_ns_remove_member_impl},
         {"accounts", "accounts_list", (method_id_t)accounts_accounts_list, (impl_t)accounts_accounts_list_impl},
         {"accounts", "accounts_list_all", (method_id_t)accounts_accounts_list_all, (impl_t)accounts_accounts_list_all_impl},
     };

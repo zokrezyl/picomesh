@@ -213,6 +213,71 @@ _short_body:
     return _resp_max >= 1 ? 1 : 0;
 }
 
+static size_t git_repo_git_repo_namespace_of_skel(const void *_body, size_t _body_len,
+                          void *_resp, size_t _resp_max)
+{
+    size_t _off = 0;
+    struct ctx _local = {0};
+    /* The framework header section is first on every CALL body — parse
+     * it back into the `hdrs` argument before the packed business args. */
+    struct yheaders *_hdrs = NULL;
+    {
+        size_t _hconsumed = 0;
+        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
+        if (!_hdrs) goto _short_body;
+        _off = _hconsumed;
+    }
+    struct object *_obj = NULL;
+    {
+        if (_off + 8 > _body_len) goto _short_body;
+        uint64_t _h;
+        memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
+        _obj = (struct object *)rpc_handle_resolve(_h);
+    }
+    uint32_t _v1 = 0;
+    if (_off + sizeof(_v1) > _body_len) goto _short_body;
+    memcpy(&_v1, (const uint8_t *)_body + _off, sizeof(_v1));
+    _off += sizeof(_v1);
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.git_repo_git_repo_namespace_of");
+    struct picomesh_string_result _r = git_repo_git_repo_namespace_of(&_local, _obj, _hdrs, _v1);
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
+    yheaders_free(_hdrs); _hdrs = NULL;
+    if (_resp_max < 1) return 0;
+    if (PICOMESH_IS_ERR(_r)) {
+        char _errbuf[8192] = {0};
+        picomesh_error_snprint(_errbuf, sizeof(_errbuf), _r.error);
+        const char *_msg = _errbuf[0] ? _errbuf : (_r.error.msg ? _r.error.msg : "(no msg)");
+        uint32_t _ml = (uint32_t)strlen(_msg);
+        if (_resp_max <= 5) _ml = 0;
+        else if (_ml > _resp_max - 5) _ml = (uint32_t)(_resp_max - 5);
+        if (_resp_max < 1 + 4 + _ml) {
+            picomesh_error_destroy(_r.error);
+            ((uint8_t *)_resp)[0] = 1;
+            return _resp_max >= 1 ? 1 : 0;
+        }
+        ((uint8_t *)_resp)[0] = 1;
+        memcpy((uint8_t *)_resp + 1, &_ml, 4);
+        memcpy((uint8_t *)_resp + 5, _msg, _ml);
+        picomesh_error_destroy(_r.error);
+        return 1 + 4 + _ml;
+    }
+    {
+        const char *_sv = _r.value ? _r.value : "";
+        uint32_t _svlen = (uint32_t)strlen(_sv);
+        if (_resp_max < 1 + 4 + (size_t)_svlen) { free(_r.value); return 0; }
+        ((uint8_t *)_resp)[0] = 0;
+        memcpy((uint8_t *)_resp + 1, &_svlen, 4);
+        if (_svlen) memcpy((uint8_t *)_resp + 5, _sv, _svlen);
+        free(_r.value);
+        return 1 + 4 + (size_t)_svlen;
+    }
+_short_body:
+    yheaders_free(_hdrs);
+    if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
+    return _resp_max >= 1 ? 1 : 0;
+}
+
 static size_t git_repo_git_repo_count_for_owner_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
@@ -386,6 +451,142 @@ static size_t git_repo_git_repo_list_for_owner_skel(const void *_body, size_t _b
         free(_r.value);
         return 1 + 4 + (size_t)_svlen;
     }
+_short_body:
+    yheaders_free(_hdrs);
+    if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
+    return _resp_max >= 1 ? 1 : 0;
+}
+
+static size_t git_repo_git_repo_list_for_namespace_skel(const void *_body, size_t _body_len,
+                          void *_resp, size_t _resp_max)
+{
+    size_t _off = 0;
+    struct ctx _local = {0};
+    /* The framework header section is first on every CALL body — parse
+     * it back into the `hdrs` argument before the packed business args. */
+    struct yheaders *_hdrs = NULL;
+    {
+        size_t _hconsumed = 0;
+        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
+        if (!_hdrs) goto _short_body;
+        _off = _hconsumed;
+    }
+    struct object *_obj = NULL;
+    {
+        if (_off + 8 > _body_len) goto _short_body;
+        uint64_t _h;
+        memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
+        _obj = (struct object *)rpc_handle_resolve(_h);
+    }
+    char _s1[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s1)) goto _short_body;
+        if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
+        _s1[_slen] = 0; _off += _slen;
+    }
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.git_repo_git_repo_list_for_namespace");
+    struct picomesh_string_result _r = git_repo_git_repo_list_for_namespace(&_local, _obj, _hdrs, _s1);
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
+    yheaders_free(_hdrs); _hdrs = NULL;
+    if (_resp_max < 1) return 0;
+    if (PICOMESH_IS_ERR(_r)) {
+        char _errbuf[8192] = {0};
+        picomesh_error_snprint(_errbuf, sizeof(_errbuf), _r.error);
+        const char *_msg = _errbuf[0] ? _errbuf : (_r.error.msg ? _r.error.msg : "(no msg)");
+        uint32_t _ml = (uint32_t)strlen(_msg);
+        if (_resp_max <= 5) _ml = 0;
+        else if (_ml > _resp_max - 5) _ml = (uint32_t)(_resp_max - 5);
+        if (_resp_max < 1 + 4 + _ml) {
+            picomesh_error_destroy(_r.error);
+            ((uint8_t *)_resp)[0] = 1;
+            return _resp_max >= 1 ? 1 : 0;
+        }
+        ((uint8_t *)_resp)[0] = 1;
+        memcpy((uint8_t *)_resp + 1, &_ml, 4);
+        memcpy((uint8_t *)_resp + 5, _msg, _ml);
+        picomesh_error_destroy(_r.error);
+        return 1 + 4 + _ml;
+    }
+    {
+        const char *_sv = _r.value ? _r.value : "";
+        uint32_t _svlen = (uint32_t)strlen(_sv);
+        if (_resp_max < 1 + 4 + (size_t)_svlen) { free(_r.value); return 0; }
+        ((uint8_t *)_resp)[0] = 0;
+        memcpy((uint8_t *)_resp + 1, &_svlen, 4);
+        if (_svlen) memcpy((uint8_t *)_resp + 5, _sv, _svlen);
+        free(_r.value);
+        return 1 + 4 + (size_t)_svlen;
+    }
+_short_body:
+    yheaders_free(_hdrs);
+    if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
+    return _resp_max >= 1 ? 1 : 0;
+}
+
+static size_t git_repo_git_repo_count_for_namespace_skel(const void *_body, size_t _body_len,
+                          void *_resp, size_t _resp_max)
+{
+    size_t _off = 0;
+    struct ctx _local = {0};
+    /* The framework header section is first on every CALL body — parse
+     * it back into the `hdrs` argument before the packed business args. */
+    struct yheaders *_hdrs = NULL;
+    {
+        size_t _hconsumed = 0;
+        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
+        if (!_hdrs) goto _short_body;
+        _off = _hconsumed;
+    }
+    struct object *_obj = NULL;
+    {
+        if (_off + 8 > _body_len) goto _short_body;
+        uint64_t _h;
+        memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
+        _obj = (struct object *)rpc_handle_resolve(_h);
+    }
+    char _s1[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s1)) goto _short_body;
+        if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
+        _s1[_slen] = 0; _off += _slen;
+    }
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.git_repo_git_repo_count_for_namespace");
+    struct picomesh_size_result _r = git_repo_git_repo_count_for_namespace(&_local, _obj, _hdrs, _s1);
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
+    yheaders_free(_hdrs); _hdrs = NULL;
+    if (_resp_max < 1) return 0;
+    if (PICOMESH_IS_ERR(_r)) {
+        char _errbuf[8192] = {0};
+        picomesh_error_snprint(_errbuf, sizeof(_errbuf), _r.error);
+        const char *_msg = _errbuf[0] ? _errbuf : (_r.error.msg ? _r.error.msg : "(no msg)");
+        uint32_t _ml = (uint32_t)strlen(_msg);
+        if (_resp_max <= 5) _ml = 0;
+        else if (_ml > _resp_max - 5) _ml = (uint32_t)(_resp_max - 5);
+        if (_resp_max < 1 + 4 + _ml) {
+            picomesh_error_destroy(_r.error);
+            ((uint8_t *)_resp)[0] = 1;
+            return _resp_max >= 1 ? 1 : 0;
+        }
+        ((uint8_t *)_resp)[0] = 1;
+        memcpy((uint8_t *)_resp + 1, &_ml, 4);
+        memcpy((uint8_t *)_resp + 5, _msg, _ml);
+        picomesh_error_destroy(_r.error);
+        return 1 + 4 + _ml;
+    }
+    if (_resp_max < 1 + sizeof(_r.value)) return 0;
+    ((uint8_t *)_resp)[0] = 0;
+    memcpy((uint8_t *)_resp + 1, &_r.value, sizeof(_r.value));
+    return 1 + sizeof(_r.value);
 _short_body:
     yheaders_free(_hdrs);
     if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
@@ -991,6 +1192,27 @@ static int git_repo_git_repo_owner_of_jinvoke(struct ctx *ctx, struct object *ob
     return 0;
 }
 
+static int git_repo_git_repo_namespace_of_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
+{
+    uint32_t arg0 = (uint32_t)yjson_as_int(yjson_array_at(args, 0), 0);
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_string_result call_result = git_repo_git_repo_namespace_of(call_ctx, obj, hdrs, arg0);
+    if (PICOMESH_IS_ERR(call_result)) {
+        char chain[8192] = {0};
+        picomesh_error_snprint(chain, sizeof(chain), call_result.error);
+        snprintf(err, err_cap, "%s: %s", "git_repo_git_repo_namespace_of",
+                 chain[0] ? chain : (call_result.error.msg ? call_result.error.msg : "<no message>"));
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    yjson_writer_string(result, call_result.value ? call_result.value : "");
+    free(call_result.value);
+    return 0;
+}
+
 static int git_repo_git_repo_count_for_owner_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
@@ -1048,6 +1270,47 @@ static int git_repo_git_repo_list_for_owner_jinvoke(struct ctx *ctx, struct obje
     }
     yjson_writer_string(result, call_result.value ? call_result.value : "");
     free(call_result.value);
+    return 0;
+}
+
+static int git_repo_git_repo_list_for_namespace_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
+{
+    const char *arg0 = yjson_as_string(yjson_array_at(args, 0), "");
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_string_result call_result = git_repo_git_repo_list_for_namespace(call_ctx, obj, hdrs, arg0);
+    if (PICOMESH_IS_ERR(call_result)) {
+        char chain[8192] = {0};
+        picomesh_error_snprint(chain, sizeof(chain), call_result.error);
+        snprintf(err, err_cap, "%s: %s", "git_repo_git_repo_list_for_namespace",
+                 chain[0] ? chain : (call_result.error.msg ? call_result.error.msg : "<no message>"));
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    yjson_writer_string(result, call_result.value ? call_result.value : "");
+    free(call_result.value);
+    return 0;
+}
+
+static int git_repo_git_repo_count_for_namespace_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
+{
+    const char *arg0 = yjson_as_string(yjson_array_at(args, 0), "");
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_size_result call_result = git_repo_git_repo_count_for_namespace(call_ctx, obj, hdrs, arg0);
+    if (PICOMESH_IS_ERR(call_result)) {
+        char chain[8192] = {0};
+        picomesh_error_snprint(chain, sizeof(chain), call_result.error);
+        snprintf(err, err_cap, "%s: %s", "git_repo_git_repo_count_for_namespace",
+                 chain[0] ? chain : (call_result.error.msg ? call_result.error.msg : "<no message>"));
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    yjson_writer_int(result, (int64_t)call_result.value);
     return 0;
 }
 
@@ -1315,6 +1578,41 @@ static int git_repo_git_repo_owner_of_minvoke(struct ctx *ctx, struct object *ob
     return 0;
 }
 
+static int git_repo_git_repo_namespace_of_minvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          cmp_ctx_t *_mr, uint32_t _argc, cmp_ctx_t *_mw,
+                          char *_err, size_t _err_cap)
+{
+    (void)_mr;
+    if (_argc != 1u) {
+        snprintf(_err, _err_cap, "git_repo_git_repo_namespace_of: expected 1 arg(s), got %u", _argc);
+        return -1;
+    }
+    uint32_t _v0;
+    {
+        uint64_t _u;
+        if (!cmp_read_uinteger(_mr, &_u)) { snprintf(_err, _err_cap, "repo_id: expected unsigned int (%s)", cmp_strerror(_mr)); return -1; }
+        if (_u > UINT32_MAX) { snprintf(_err, _err_cap, "repo_id: value %llu out of range for uint32_t", (unsigned long long)_u); return -1; }
+        _v0 = (uint32_t)_u;
+    }
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_string_result call_result = git_repo_git_repo_namespace_of(call_ctx, obj, hdrs, _v0);
+    if (PICOMESH_IS_ERR(call_result)) {
+        char chain[8192] = {0};
+        picomesh_error_snprint(chain, sizeof(chain), call_result.error);
+        snprintf(_err, _err_cap, "%s: %s", "git_repo_git_repo_namespace_of",
+                 chain[0] ? chain : (call_result.error.msg ? call_result.error.msg : "<no message>"));
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    {
+        const char *_sv = call_result.value ? call_result.value : "";
+        cmp_write_str(_mw, _sv, (uint32_t)strlen(_sv));
+        free(call_result.value);
+    }
+    return 0;
+}
+
 static int git_repo_git_repo_count_for_owner_minvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                           cmp_ctx_t *_mr, uint32_t _argc, cmp_ctx_t *_mw,
                           char *_err, size_t _err_cap)
@@ -1402,6 +1700,74 @@ static int git_repo_git_repo_list_for_owner_minvoke(struct ctx *ctx, struct obje
         cmp_write_str(_mw, _sv, (uint32_t)strlen(_sv));
         free(call_result.value);
     }
+    return 0;
+}
+
+static int git_repo_git_repo_list_for_namespace_minvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          cmp_ctx_t *_mr, uint32_t _argc, cmp_ctx_t *_mw,
+                          char *_err, size_t _err_cap)
+{
+    (void)_mr;
+    if (_argc != 1u) {
+        snprintf(_err, _err_cap, "git_repo_git_repo_list_for_namespace: expected 1 arg(s), got %u", _argc);
+        return -1;
+    }
+    char _v0[4096];
+    {
+        uint32_t _sz = (uint32_t)sizeof(_v0);
+        if (!cmp_read_str(_mr, _v0, &_sz)) {
+            snprintf(_err, _err_cap, "path: expected str arg (%s)", cmp_strerror(_mr));
+            return -1;
+        }
+    }
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_string_result call_result = git_repo_git_repo_list_for_namespace(call_ctx, obj, hdrs, _v0);
+    if (PICOMESH_IS_ERR(call_result)) {
+        char chain[8192] = {0};
+        picomesh_error_snprint(chain, sizeof(chain), call_result.error);
+        snprintf(_err, _err_cap, "%s: %s", "git_repo_git_repo_list_for_namespace",
+                 chain[0] ? chain : (call_result.error.msg ? call_result.error.msg : "<no message>"));
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    {
+        const char *_sv = call_result.value ? call_result.value : "";
+        cmp_write_str(_mw, _sv, (uint32_t)strlen(_sv));
+        free(call_result.value);
+    }
+    return 0;
+}
+
+static int git_repo_git_repo_count_for_namespace_minvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          cmp_ctx_t *_mr, uint32_t _argc, cmp_ctx_t *_mw,
+                          char *_err, size_t _err_cap)
+{
+    (void)_mr;
+    if (_argc != 1u) {
+        snprintf(_err, _err_cap, "git_repo_git_repo_count_for_namespace: expected 1 arg(s), got %u", _argc);
+        return -1;
+    }
+    char _v0[4096];
+    {
+        uint32_t _sz = (uint32_t)sizeof(_v0);
+        if (!cmp_read_str(_mr, _v0, &_sz)) {
+            snprintf(_err, _err_cap, "path: expected str arg (%s)", cmp_strerror(_mr));
+            return -1;
+        }
+    }
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_size_result call_result = git_repo_git_repo_count_for_namespace(call_ctx, obj, hdrs, _v0);
+    if (PICOMESH_IS_ERR(call_result)) {
+        char chain[8192] = {0};
+        picomesh_error_snprint(chain, sizeof(chain), call_result.error);
+        snprintf(_err, _err_cap, "%s: %s", "git_repo_git_repo_count_for_namespace",
+                 chain[0] ? chain : (call_result.error.msg ? call_result.error.msg : "<no message>"));
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    cmp_write_uinteger(_mw, (uint64_t)call_result.value);
     return 0;
 }
 
@@ -1731,9 +2097,12 @@ static const struct git_repo_jinvoke_row git_repo_jinvoke_rows[] = {
     {"git_repo_git_repo_make", git_repo_git_repo_make_jinvoke},
     {"git_repo_git_repo_delete", git_repo_git_repo_delete_jinvoke},
     {"git_repo_git_repo_owner_of", git_repo_git_repo_owner_of_jinvoke},
+    {"git_repo_git_repo_namespace_of", git_repo_git_repo_namespace_of_jinvoke},
     {"git_repo_git_repo_count_for_owner", git_repo_git_repo_count_for_owner_jinvoke},
     {"git_repo_git_repo_count_total", git_repo_git_repo_count_total_jinvoke},
     {"git_repo_git_repo_list_for_owner", git_repo_git_repo_list_for_owner_jinvoke},
+    {"git_repo_git_repo_list_for_namespace", git_repo_git_repo_list_for_namespace_jinvoke},
+    {"git_repo_git_repo_count_for_namespace", git_repo_git_repo_count_for_namespace_jinvoke},
     {"git_repo_git_repo_read_tree", git_repo_git_repo_read_tree_jinvoke},
     {"git_repo_git_repo_read_file", git_repo_git_repo_read_file_jinvoke},
     {"git_repo_git_repo_put_file", git_repo_git_repo_put_file_jinvoke},
@@ -1760,9 +2129,12 @@ static const struct git_repo_minvoke_row git_repo_minvoke_rows[] = {
     {"git_repo_git_repo_make", git_repo_git_repo_make_minvoke},
     {"git_repo_git_repo_delete", git_repo_git_repo_delete_minvoke},
     {"git_repo_git_repo_owner_of", git_repo_git_repo_owner_of_minvoke},
+    {"git_repo_git_repo_namespace_of", git_repo_git_repo_namespace_of_minvoke},
     {"git_repo_git_repo_count_for_owner", git_repo_git_repo_count_for_owner_minvoke},
     {"git_repo_git_repo_count_total", git_repo_git_repo_count_total_minvoke},
     {"git_repo_git_repo_list_for_owner", git_repo_git_repo_list_for_owner_minvoke},
+    {"git_repo_git_repo_list_for_namespace", git_repo_git_repo_list_for_namespace_minvoke},
+    {"git_repo_git_repo_count_for_namespace", git_repo_git_repo_count_for_namespace_minvoke},
     {"git_repo_git_repo_read_tree", git_repo_git_repo_read_tree_minvoke},
     {"git_repo_git_repo_read_file", git_repo_git_repo_read_file_minvoke},
     {"git_repo_git_repo_put_file", git_repo_git_repo_put_file_minvoke},
@@ -1794,11 +2166,20 @@ static const struct jinvoke_param git_repo_git_repo_delete_params[] = {
 static const struct jinvoke_param git_repo_git_repo_owner_of_params[] = {
     {"repo_id", "uint32_t"}
 };
+static const struct jinvoke_param git_repo_git_repo_namespace_of_params[] = {
+    {"repo_id", "uint32_t"}
+};
 static const struct jinvoke_param git_repo_git_repo_count_for_owner_params[] = {
     {"owner_id", "uint32_t"}
 };
 static const struct jinvoke_param git_repo_git_repo_list_for_owner_params[] = {
     {"owner_id", "uint32_t"}
+};
+static const struct jinvoke_param git_repo_git_repo_list_for_namespace_params[] = {
+    {"path", "const char *"}
+};
+static const struct jinvoke_param git_repo_git_repo_count_for_namespace_params[] = {
+    {"path", "const char *"}
 };
 static const struct jinvoke_param git_repo_git_repo_read_tree_params[] = {
     {"repo_id", "uint32_t"},
@@ -1835,9 +2216,12 @@ static const struct git_repo_params_row git_repo_params_rows[] = {
     {"git_repo_git_repo_make", {git_repo_git_repo_make_params, 3}},
     {"git_repo_git_repo_delete", {git_repo_git_repo_delete_params, 1}},
     {"git_repo_git_repo_owner_of", {git_repo_git_repo_owner_of_params, 1}},
+    {"git_repo_git_repo_namespace_of", {git_repo_git_repo_namespace_of_params, 1}},
     {"git_repo_git_repo_count_for_owner", {git_repo_git_repo_count_for_owner_params, 1}},
     {"git_repo_git_repo_count_total", {NULL, 0}},
     {"git_repo_git_repo_list_for_owner", {git_repo_git_repo_list_for_owner_params, 1}},
+    {"git_repo_git_repo_list_for_namespace", {git_repo_git_repo_list_for_namespace_params, 1}},
+    {"git_repo_git_repo_count_for_namespace", {git_repo_git_repo_count_for_namespace_params, 1}},
     {"git_repo_git_repo_read_tree", {git_repo_git_repo_read_tree_params, 3}},
     {"git_repo_git_repo_read_file", {git_repo_git_repo_read_file_params, 3}},
     {"git_repo_git_repo_put_file", {git_repo_git_repo_put_file_params, 6}},
@@ -1871,9 +2255,12 @@ static const struct git_repo_skel_row git_repo_skel_rows[] = {
     {"git_repo_git_repo_make", git_repo_git_repo_make_skel},
     {"git_repo_git_repo_delete", git_repo_git_repo_delete_skel},
     {"git_repo_git_repo_owner_of", git_repo_git_repo_owner_of_skel},
+    {"git_repo_git_repo_namespace_of", git_repo_git_repo_namespace_of_skel},
     {"git_repo_git_repo_count_for_owner", git_repo_git_repo_count_for_owner_skel},
     {"git_repo_git_repo_count_total", git_repo_git_repo_count_total_skel},
     {"git_repo_git_repo_list_for_owner", git_repo_git_repo_list_for_owner_skel},
+    {"git_repo_git_repo_list_for_namespace", git_repo_git_repo_list_for_namespace_skel},
+    {"git_repo_git_repo_count_for_namespace", git_repo_git_repo_count_for_namespace_skel},
     {"git_repo_git_repo_read_tree", git_repo_git_repo_read_tree_skel},
     {"git_repo_git_repo_read_file", git_repo_git_repo_read_file_skel},
     {"git_repo_git_repo_put_file", git_repo_git_repo_put_file_skel},

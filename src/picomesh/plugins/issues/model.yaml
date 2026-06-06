@@ -90,6 +90,19 @@ methods:
         type: "struct object *"
       - name: hdrs
         type: "struct yheaders *"
+  - slot: issues_repo_of
+    domain: issues
+    owning_class: issues
+    return_type: struct picomesh_uint32_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: issue_id
+        type: uint32_t
 classes:
   - name: issues
     domain: issues
@@ -121,3 +134,6 @@ classes:
       - slot: issues_list_all
         slot_domain: issues
         impl: issues_issues_list_all_impl
+      - slot: issues_repo_of
+        slot_domain: issues
+        impl: issues_issues_repo_of_impl

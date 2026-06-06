@@ -45,12 +45,31 @@ char *picomesh_jwt_encode(const char *claims_json, const char *secret);
  * or an expired token. */
 struct picomesh_string_result picomesh_jwt_verify(const char *jwt, const char *secret, int64_t now);
 
+/* The reserved INTERNAL-capability group. The gateway (which holds the signing
+ * secret) mints a short-lived JWT carrying this group for its own trusted
+ * bootstrap operations (creating a new user's namespace, the first-user `site`
+ * namespace, the /repos/new repo). It is NEVER issued to a client and never
+ * derived from a user's memberships, so a backend can treat it as the explicit
+ * "trusted internal caller" capability — replacing the unsafe "no JWT means
+ * trusted" assumption with a signed, verifiable marker. */
+#define PICOMESH_GROUP_SYSTEM "system:internal"
+
+/* 1 if the comma-separated `groups_csv` contains the exact membership `group`. */
+int picomesh_groups_contains(const char *groups_csv, const char *group);
+
 /* Role ladder: rank of a role name, or -1 if unknown. */
 int picomesh_role_rank(const char *role);
 
 /* Highest role rank held for `account` within a comma-separated groups list
  * ("<account>:<role>,..."). Returns -1 if the account is absent. */
 int picomesh_groups_max_role(const char *groups_csv, const char *account);
+
+/* Effective role rank for `namespace_path`, honouring namespace inheritance:
+ * the highest direct role held on the namespace OR any of its ancestors. The
+ * path is walked from the full namespace up to its root (`acme/platform/api` ->
+ * `acme/platform` -> `acme`), so a membership on a parent namespace applies to
+ * a child resource. Returns -1 when no applicable membership is held. */
+int picomesh_groups_effective_role(const char *groups_csv, const char *namespace_path);
 
 /* Verified auth context extracted from a JWT. */
 struct picomesh_authctx {

@@ -116,6 +116,22 @@ else
     echo "note: $WEBAPP not built — skipping webapp (it ships with build-desktop-release)"
 fi
 
+# Bootstrap the site-owner BEFORE any load connects. The FIRST account to ever
+# register becomes the deployment admin — same convention as mesh-up.sh's
+# `root`/`rootpw`. The perf connections self-register their own users, so
+# without this the admin is claimed by whichever generator wins the race and
+# there is no known login for the parallel webapp (:$SIDE). Register against the
+# gateway (the auth boundary) so `root`/`rootpw` is the admin you can sign in
+# with at the UI while the load runs. Done here, before the generators launch,
+# so root is guaranteed first.
+rc=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
+        -XPOST "http://127.0.0.1:$GW/register" \
+        --data-urlencode 'username=root' --data-urlencode 'password=rootpw')
+case "$rc" in
+    2??|303) echo "bootstrap site-owner registered: root / rootpw (HTTP $rc)";;
+    *)       echo "WARN: root bootstrap register returned HTTP $rc (admin login may be unavailable)";;
+esac
+
 # Per-node CPU snapshot from /proc (whole process, all threads incl the libuv
 # pool) — no `perf` tool or privileges needed. comm is "picomesh" (no spaces),
 # so /proc/<pid>/stat fields 14+15 (utime+stime jiffies) parse cleanly; ctxsw

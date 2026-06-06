@@ -41,6 +41,7 @@
 #include <picomesh/ysecurity/jwt.h>
 #include <picomesh/ysecurity/secret.h>
 #include <picomesh/plugin/sharded_storage/sharded_storage.h>
+#include <picomesh/plugin/accounts/accounts.h>
 
 #include <git2.h>
 #include <pthread.h>
@@ -64,9 +65,14 @@
  * no per-object cached table to fragment.
  *
  * Storage layout in the `git_repo` context:
- *   repo:<rid>        → "<owner_id>\t<owner_name>\t<repo_name>\t<is_public>"
+ *   repo:<rid>        → "<owner_id>\t<owner_name>\t<repo_name>\t<is_public>\t<namespace_id>"
  *   count             → total live repos (decimal)
  *   owner:<owner_id>  → newline-separated repo names that uid owns
+ *
+ * `owner_name` is the repo's owning NAMESPACE PATH (personal `alice` or nested
+ * group `acme/platform`); `namespace_id` is the canonical id of that namespace
+ * in the accounts `namespaces` table — the repo's reference into the namespace
+ * tree (issue #30). Older rows without the 5th field fall back to hash(path).
  */
 #define GIT_REPO_CTX "git_repo"
 
@@ -95,12 +101,27 @@ static struct gr_storage_result gr_open(void)
     return PICOMESH_OK(gr_storage, h);
 }
 
+/* Resolve the owning namespace PATH to its canonical id via the accounts
+ * service (issue #30). The namespaces table is the authority: a repo can only be
+ * created under a namespace that already exists. Returns the id (>0) on success,
+ * 0 when no such namespace exists; a backend error propagates. */
+static struct picomesh_int64_result gr_resolve_namespace(struct yheaders *hdrs, const char *path)
+{
+    struct picomesh_engine *e = picomesh_active_engine();
+    if (!e) return PICOMESH_ERR(picomesh_int64, "git_repo: no active engine for namespace resolve");
+    struct ctx c = picomesh_engine_service_ctx(e, "accounts");
+    struct object_ptr_result o = accounts_accounts_create(&c);
+    if (PICOMESH_IS_ERR(o)) return PICOMESH_ERR(picomesh_int64, "git_repo: accounts unreachable", o);
+    return accounts_accounts_ns_resolve(&c, o.value, hdrs, path);
+}
+
 /* A parsed repo metadata row. */
 struct repo_rec {
     uint32_t owner_id;
     char     owner_name[REPO_NAME_MAX];
     char     repo_name[REPO_NAME_MAX];
     int      is_public;
+    uint32_t namespace_id;   /* canonical id of the owning namespace (issue #30) */
 };
 
 /* Load repo:<rid> into *out. OK value: 1 = present (parsed into *out),
@@ -118,23 +139,64 @@ static struct picomesh_int_result repo_load(struct gr_storage *h, struct yheader
     char *t2 = t1 ? strchr(t1 + 1, '\t') : NULL;
     char *t3 = t2 ? strchr(t2 + 1, '\t') : NULL;
     if (!t1 || !t2 || !t3) { free(s); return PICOMESH_OK(picomesh_int, 0); }
+    char *t4 = strchr(t3 + 1, '\t');   /* optional 5th field: namespace_id */
     *t1 = *t2 = *t3 = 0;
+    if (t4) *t4 = 0;
     memset(out, 0, sizeof(*out));
     out->owner_id = (uint32_t)strtoul(s, NULL, 10);
     snprintf(out->owner_name, sizeof(out->owner_name), "%s", t1 + 1);
     snprintf(out->repo_name,  sizeof(out->repo_name),  "%s", t2 + 1);
     out->is_public = atoi(t3 + 1) ? 1 : 0;
+    /* Older rows predate namespace_id — derive it from the path so the field is
+     * always populated (the id is the deterministic hash of the path). */
+    out->namespace_id = t4 ? (uint32_t)strtoul(t4 + 1, NULL, 10) : picomesh_fnv1a32(out->owner_name);
+    if (!out->namespace_id) out->namespace_id = picomesh_fnv1a32(out->owner_name);
     free(s);
     return PICOMESH_OK(picomesh_int, 1);
+}
+
+/* Resource-level namespace RBAC check (issue #30). Returns 1 iff the verified
+ * caller (identity + roles from the JWT in `hdrs`) holds at least
+ * `required_role` on `ns_path` — counting role inheritance from parent
+ * namespaces — OR is a site admin (site:maintainer+). Anonymous or invalid auth
+ * yields 0 (fail closed). This intentionally mirrors the gateway policy gate as
+ * defense-in-depth: a backend never trusts that it was only reached through the
+ * boundary. The personal-namespace owner holds `owner` (>= every role), so the
+ * common single-owner repo keeps working. */
+static int repo_caller_has_role(struct yheaders *hdrs, const char *ns_path, const char *required_role)
+{
+    struct picomesh_authctx caller;
+    picomesh_authctx_from_headers(hdrs, picomesh_active_engine(), &caller);
+    if (!caller.authenticated) return 0; /* fail closed */
+    if (picomesh_groups_contains(caller.groups_csv, PICOMESH_GROUP_SYSTEM)) return 1; /* trusted internal */
+    if (picomesh_groups_max_role(caller.groups_csv, "site") >= picomesh_role_rank("maintainer"))
+        return 1;
+    return picomesh_groups_effective_role(caller.groups_csv, ns_path) >= picomesh_role_rank(required_role);
+}
+
+/* Visibility gate for the per-owner repo listings (issue #30): a signed-in
+ * caller may enumerate ONLY their OWN repos (caller uid == owner_id), or a site
+ * admin / trusted internal capability may enumerate anyone's. This stops a
+ * private repo's names/counts leaking across namespaces to any signed-in user.
+ * Fail closed: no credential → denied. (A future refinement can widen this to
+ * public repos plus namespaces where the caller holds reporter+.) */
+static int repo_caller_may_list(struct yheaders *hdrs, uint32_t owner_id)
+{
+    struct picomesh_authctx caller;
+    picomesh_authctx_from_headers(hdrs, picomesh_active_engine(), &caller);
+    if (!caller.authenticated) return 0;
+    if (caller.uid == owner_id) return 1;
+    if (picomesh_groups_contains(caller.groups_csv, PICOMESH_GROUP_SYSTEM)) return 1;
+    return picomesh_groups_max_role(caller.groups_csv, "site") >= picomesh_role_rank("maintainer");
 }
 
 /* Write the canonical repo row; propagates a failed write. */
 static struct picomesh_void_result repo_store_row(struct gr_storage *h, struct yheaders *hdrs, uint32_t rid, const struct repo_rec *rec)
 {
-    char k[40], v[160];
+    char k[40], v[192];
     snprintf(k, sizeof(k), "repo:%u", rid);
-    snprintf(v, sizeof(v), "%u\t%s\t%s\t%d",
-             rec->owner_id, rec->owner_name, rec->repo_name, rec->is_public);
+    snprintf(v, sizeof(v), "%u\t%s\t%s\t%d\t%u",
+             rec->owner_id, rec->owner_name, rec->repo_name, rec->is_public, rec->namespace_id);
     struct picomesh_int_result r = sharded_storage_db_set(&h->c, h->obj, hdrs, GIT_REPO_CTX, k, v);
     if (PICOMESH_IS_ERR(r)) return PICOMESH_ERR(picomesh_void, "git_repo: repo write failed", r);
     return PICOMESH_OK_VOID();
@@ -261,6 +323,79 @@ static struct picomesh_void_result owner_list_remove(struct gr_storage *h, struc
     return PICOMESH_ERR(picomesh_void, "git_repo: owner index remove contended out");
 }
 
+/* ---- per-NAMESPACE-PATH repo index (issue #30) -------------------------- *
+ * The owner index above keys by owner uid, so a GROUP repo created as
+ * make(<admin uid>, "acme", "api") is filed under the admin's uid, and the
+ * group's namespace page (which knows only the path "acme") can't find it.
+ * This parallel index keys by the repo's owning NAMESPACE PATH ("ns:<path>"),
+ * so a namespace's repos — personal or group — are enumerable by path. Same
+ * newline-joined value + CAS-retry shape as the owner index, generalised over an
+ * arbitrary key. */
+static struct picomesh_string_result repo_index_get(struct gr_storage *h, struct yheaders *hdrs, const char *key)
+{
+    struct picomesh_string_result r = sharded_storage_db_get(&h->c, h->obj, hdrs, GIT_REPO_CTX, key);
+    if (PICOMESH_IS_ERR(r)) return PICOMESH_ERR(picomesh_string, "git_repo: index read failed", r);
+    return r;
+}
+
+static struct picomesh_void_result repo_index_add(struct gr_storage *h, struct yheaders *hdrs,
+                                                  const char *key, const char *name)
+{
+    for (int attempt = 0; attempt < 128; ++attempt) {
+        struct picomesh_string_result lr = repo_index_get(h, hdrs, key);
+        if (PICOMESH_IS_ERR(lr)) return PICOMESH_ERR(picomesh_void, "git_repo: index read failed", lr);
+        char *list = lr.value;
+        const char *cur = list ? list : "";
+        if (name_in_list(cur, name)) { free(list); return PICOMESH_OK_VOID(); }
+        size_t need = strlen(cur) + strlen(name) + 2;
+        char *nl = malloc(need);
+        if (!nl) { free(list); return PICOMESH_ERR(picomesh_void, "git_repo: index out of memory"); }
+        snprintf(nl, need, "%s%s\n", cur, name);
+        struct picomesh_int_result cas = gr_cas(h, hdrs, key, cur, nl);
+        free(nl);
+        free(list);
+        if (PICOMESH_IS_ERR(cas)) return PICOMESH_ERR(picomesh_void, "git_repo: index CAS failed", cas);
+        if (cas.value) return PICOMESH_OK_VOID();
+    }
+    return PICOMESH_ERR(picomesh_void, "git_repo: index append contended out");
+}
+
+static struct picomesh_void_result repo_index_remove(struct gr_storage *h, struct yheaders *hdrs,
+                                                     const char *key, const char *name)
+{
+    for (int attempt = 0; attempt < 128; ++attempt) {
+        struct picomesh_string_result lr = repo_index_get(h, hdrs, key);
+        if (PICOMESH_IS_ERR(lr)) return PICOMESH_ERR(picomesh_void, "git_repo: index read failed", lr);
+        char *list = lr.value;
+        if (!list || !*list) { free(list); return PICOMESH_OK_VOID(); }
+        size_t cap = strlen(list) + 1;
+        char *nl = malloc(cap);
+        if (!nl) { free(list); return PICOMESH_ERR(picomesh_void, "git_repo: index out of memory"); }
+        nl[0] = 0;
+        size_t len = 0, rn = strlen(name);
+        for (const char *p = list; *p; ) {
+            const char *e = strchr(p, '\n');
+            size_t llen = e ? (size_t)(e - p) : strlen(p);
+            if (llen > 0 && !(llen == rn && memcmp(p, name, rn) == 0))
+                len += (size_t)snprintf(nl + len, cap - len, "%.*s\n", (int)llen, p);
+            if (!e) break;
+            p = e + 1;
+        }
+        struct picomesh_int_result cas = gr_cas(h, hdrs, key, list, nl);
+        free(nl);
+        free(list);
+        if (PICOMESH_IS_ERR(cas)) return PICOMESH_ERR(picomesh_void, "git_repo: index CAS failed", cas);
+        if (cas.value) return PICOMESH_OK_VOID();
+    }
+    return PICOMESH_ERR(picomesh_void, "git_repo: index remove contended out");
+}
+
+/* "ns:<namespace-path>" storage key for the per-namespace repo index. */
+static void ns_index_key(char *out, size_t cap, const char *path)
+{
+    snprintf(out, cap, "ns:%s", path);
+}
+
 /* Resolve `git_repo.repos_dir` from yconfig; default is a per-host tmp
  * tree. The pointer is owned by yconfig (stable for the process life). */
 /* The bare-repo root is REQUIRED config — no hardcoded default. A silent
@@ -345,6 +480,28 @@ static int path_segment_ok(const char *s)
             return 0;
     }
     return 1;
+}
+
+/* Validate a namespace PATH: one or more `/`-joined segments, each a valid
+ * path segment. A repo's owning namespace may be a personal namespace
+ * (`alice`) or a nested group namespace (`acme/platform`), so `owner_name`
+ * is a path, not a single segment. Empty or trailing/double-slash is rejected. */
+static int path_ok(const char *s)
+{
+    if (!s || !*s) return 0;
+    char buf[256];
+    if (strlen(s) >= sizeof(buf)) return 0;
+    snprintf(buf, sizeof(buf), "%s", s);
+    int segments = 0;
+    for (char *tok = strtok(buf, "/"); tok; tok = strtok(NULL, "/")) {
+        if (!path_segment_ok(tok)) return 0;
+        ++segments;
+    }
+    /* strtok collapses adjacent slashes, so re-check the raw form has no
+     * leading/trailing/double slash that would let two paths alias. */
+    size_t len = strlen(s);
+    if (s[0] == '/' || s[len - 1] == '/' || strstr(s, "//")) return 0;
+    return segments > 0;
 }
 
 /* Deterministic repo id: FNV-1a of "<owner_name>/<repo_name>" → uint32,
@@ -842,8 +999,38 @@ struct picomesh_uint32_result git_repo_git_repo_make_impl(struct ctx *ctx, struc
                                                       const char *repo_name)
 {
     (void)ctx; (void)obj;
-    if (!path_segment_ok(owner_name) || !path_segment_ok(repo_name))
+    /* owner_name is the owning NAMESPACE PATH — a personal namespace (`alice`)
+     * or a nested group namespace (`acme/platform`). repo_name is a single
+     * segment. */
+    if (!path_ok(owner_name) || !path_segment_ok(repo_name))
         return PICOMESH_ERR(picomesh_uint32, "git_repo_make: invalid owner_name/repo_name");
+    /* A repo may NOT be named after a URL route word (issues/runs/edit/new/
+     * settings): the webapp resolves `<namespace>/<repo>/<verb>` by treating a
+     * trailing route word as the verb, so a repo with such a name would be
+     * unbrowseable in a nested namespace (issue #30). */
+    {
+        static const char *const reserved[] = {"issues", "runs", "edit", "new", "settings"};
+        for (size_t i = 0; i < sizeof(reserved) / sizeof(reserved[0]); ++i)
+            if (strcmp(repo_name, reserved[i]) == 0)
+                return PICOMESH_ERR(picomesh_uint32, "git_repo_make: reserved repo name");
+    }
+
+    /* The owning namespace must already exist in the canonical namespaces table
+     * (issue #30): a repo references a real namespace_id, it does not implicitly
+     * create one. Resolved BEFORE any on-disk work so a bad request creates
+     * nothing. */
+    struct picomesh_int64_result nsr = gr_resolve_namespace(hdrs, owner_name);
+    if (PICOMESH_IS_ERR(nsr)) return PICOMESH_ERR(picomesh_uint32, "git_repo_make: namespace resolve failed", nsr);
+    if (nsr.value <= 0) return PICOMESH_ERR(picomesh_uint32, "git_repo_make: owning namespace does not exist");
+    uint32_t namespace_id = (uint32_t)nsr.value;
+
+    /* Service-local authz (FAIL CLOSED, issue #30): require developer+ on the
+     * target namespace, a site admin, or the trusted internal capability (the
+     * gateway's /repos/new bootstrap, which presents a signed system token). A
+     * credential-less caller is denied — the backend never assumes it was only
+     * reached through the boundary. */
+    if (!repo_caller_has_role(hdrs, owner_name, "developer"))
+        return PICOMESH_ERR(picomesh_uint32, "git_repo_make: forbidden (insufficient namespace role)");
 
     /* Id is derived from the names (FNV-1a, see repo_hash) so the gateway and
      * every service agree on it without a lookup. */
@@ -858,8 +1045,19 @@ struct picomesh_uint32_result git_repo_git_repo_make_impl(struct ctx *ctx, struc
     struct repo_rec existing;
     struct picomesh_int_result dup = repo_load(&h, hdrs, repo_id, &existing);
     if (PICOMESH_IS_ERR(dup)) return PICOMESH_ERR(picomesh_uint32, "git_repo_make: duplicate check failed", dup);
-    if (dup.value)
+    if (dup.value) {
+        /* The repo already exists. A PRIOR create may have committed the repo
+         * row but failed before updating an index (the owner/namespace indexes
+         * are written after the row). Repair them idempotently so the namespace
+         * page lists the repo on a retry, then report the duplicate. */
+        char full_dup[192];
+        snprintf(full_dup, sizeof(full_dup), "%s/%s", existing.owner_name, existing.repo_name);
+        (void)owner_list_add(&h, hdrs, existing.owner_id, full_dup);
+        char nsk_dup[200];
+        ns_index_key(nsk_dup, sizeof(nsk_dup), existing.owner_name);
+        (void)repo_index_add(&h, hdrs, nsk_dup, existing.repo_name);
         return PICOMESH_ERR(picomesh_uint32, "git_repo_make: repo already exists");
+    }
 
     /* On-disk bare repo (libgit2) FIRST: if it fails, no metadata has been
      * written, so there is nothing to roll back (an orphaned on-disk dir is
@@ -900,13 +1098,13 @@ struct picomesh_uint32_result git_repo_git_repo_make_impl(struct ctx *ctx, struc
      * creates of the same repo can't double-count or duplicate the index
      * entry. The earlier repo_load check is a best-effort fast reject; this
      * is the authoritative atomic guard. */
-    struct repo_rec rec = {.owner_id = owner_id, .is_public = 0};
+    struct repo_rec rec = {.owner_id = owner_id, .is_public = 0, .namespace_id = namespace_id};
     snprintf(rec.owner_name, sizeof(rec.owner_name), "%s", owner_name);
     snprintf(rec.repo_name,  sizeof(rec.repo_name),  "%s", repo_name);
-    char rk[40], rv[160];
+    char rk[40], rv[192];
     snprintf(rk, sizeof(rk), "repo:%u", repo_id);
-    snprintf(rv, sizeof(rv), "%u\t%s\t%s\t%d",
-             rec.owner_id, rec.owner_name, rec.repo_name, rec.is_public);
+    snprintf(rv, sizeof(rv), "%u\t%s\t%s\t%d\t%u",
+             rec.owner_id, rec.owner_name, rec.repo_name, rec.is_public, rec.namespace_id);
     struct picomesh_int_result ins =
         sharded_storage_db_put_if_absent(&h.c, h.obj, hdrs, GIT_REPO_CTX, rk, rv);
     if (PICOMESH_IS_ERR(ins))
@@ -915,8 +1113,19 @@ struct picomesh_uint32_result git_repo_git_repo_make_impl(struct ctx *ctx, struc
         return PICOMESH_ERR(picomesh_uint32, "git_repo_make: repo already exists");
     struct picomesh_int64_result cinc = gr_incr(&h, hdrs, "count", 1);
     if (PICOMESH_IS_ERR(cinc)) return PICOMESH_ERR(picomesh_uint32, "git_repo_make: bump count failed", cinc);
-    struct picomesh_void_result oadd = owner_list_add(&h, hdrs, owner_id, repo_name);
+    /* The owner index keys by the creator's uid but stores the repo's FULL PATH
+     * (<namespace>/<repo>), so "your repositories" links resolve correctly even
+     * for a repo created in a GROUP namespace (where the path != the username). */
+    char full_path[192];
+    snprintf(full_path, sizeof(full_path), "%s/%s", owner_name, repo_name);
+    struct picomesh_void_result oadd = owner_list_add(&h, hdrs, owner_id, full_path);
     if (PICOMESH_IS_ERR(oadd)) return PICOMESH_ERR(picomesh_uint32, "git_repo_make: owner index append failed", oadd);
+    /* Also index by the owning NAMESPACE PATH (value = bare repo name, since the
+     * path is the key) so the repo is enumerable from its namespace page. */
+    char nsk[200];
+    ns_index_key(nsk, sizeof(nsk), owner_name);
+    struct picomesh_void_result nsadd = repo_index_add(&h, hdrs, nsk, repo_name);
+    if (PICOMESH_IS_ERR(nsadd)) return PICOMESH_ERR(picomesh_uint32, "git_repo_make: namespace index append failed", nsadd);
     return PICOMESH_OK(picomesh_uint32, repo_id);
 }
 
@@ -933,6 +1142,12 @@ struct picomesh_int_result git_repo_git_repo_delete_impl(struct ctx *ctx, struct
     struct picomesh_int_result lr = repo_load(&h, hdrs, repo_id, &rec);
     if (PICOMESH_IS_ERR(lr)) return PICOMESH_ERR(picomesh_int, "git_repo_delete: load failed", lr);
     if (lr.value == 0) return PICOMESH_OK(picomesh_int, 0);  /* no such repo */
+
+    /* Deleting a repo is a maintainer-grade operation on its namespace
+     * (inherited), or a site admin / trusted internal capability (issue #30).
+     * Fail closed: a credential-less caller is denied. */
+    if (!repo_caller_has_role(hdrs, rec.owner_name, "maintainer"))
+        return PICOMESH_ERR(picomesh_int, "git_repo_delete: forbidden (insufficient namespace role)");
 
     /* The row delete is the AUTHORITATIVE point: db_del returns 1 only for
      * the caller that actually removed it. Gate the on-disk rm, the count
@@ -953,8 +1168,14 @@ struct picomesh_int_result git_repo_git_repo_delete_impl(struct ctx *ctx, struct
 
     struct picomesh_int64_result cdec = gr_incr(&h, hdrs, "count", -1);
     if (PICOMESH_IS_ERR(cdec)) return PICOMESH_ERR(picomesh_int, "git_repo_delete: count update failed", cdec);
-    struct picomesh_void_result orem = owner_list_remove(&h, hdrs, rec.owner_id, rec.repo_name);
+    char full_del[192];
+    snprintf(full_del, sizeof(full_del), "%s/%s", rec.owner_name, rec.repo_name);
+    struct picomesh_void_result orem = owner_list_remove(&h, hdrs, rec.owner_id, full_del);
     if (PICOMESH_IS_ERR(orem)) return PICOMESH_ERR(picomesh_int, "git_repo_delete: owner index update failed", orem);
+    char nsk[200];
+    ns_index_key(nsk, sizeof(nsk), rec.owner_name);
+    struct picomesh_void_result nsrem = repo_index_remove(&h, hdrs, nsk, rec.repo_name);
+    if (PICOMESH_IS_ERR(nsrem)) return PICOMESH_ERR(picomesh_int, "git_repo_delete: namespace index update failed", nsrem);
     return PICOMESH_OK(picomesh_int, 1);
 }
 
@@ -972,11 +1193,34 @@ struct picomesh_uint32_result git_repo_git_repo_owner_of_impl(struct ctx *ctx, s
     return PICOMESH_OK(picomesh_uint32, lr.value ? rec.owner_id : 0);
 }
 
+/* The repo's owning NAMESPACE PATH (issue #30). For a personal repo this is the
+ * owner's username (`alice`); for a group repo it is the group path
+ * (`acme/platform`). The policy authorizer resolves repo_id → this path, then
+ * computes the caller's inherited namespace role against it. Returns "" for an
+ * unknown repo (the authorizer fails such a lookup closed). */
+PICOMESH_CLASS_ANNOTATE("override@git_repo:git_repo:git_repo_namespace_of")
+struct picomesh_string_result git_repo_git_repo_namespace_of_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                                                                  uint32_t repo_id)
+{
+    (void)ctx; (void)obj;
+    struct gr_storage_result sr = gr_open();
+    if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_string, "git_repo_namespace_of: storage open failed", sr);
+    struct gr_storage h = sr.value;
+    struct repo_rec rec;
+    struct picomesh_int_result lr = repo_load(&h, hdrs, repo_id, &rec);
+    if (PICOMESH_IS_ERR(lr)) return PICOMESH_ERR(picomesh_string, "git_repo_namespace_of: load failed", lr);
+    char *out = strdup(lr.value ? rec.owner_name : "");
+    if (!out) return PICOMESH_ERR(picomesh_string, "git_repo_namespace_of: out of memory");
+    return PICOMESH_OK(picomesh_string, out);
+}
+
 PICOMESH_CLASS_ANNOTATE("override@git_repo:git_repo:git_repo_count_for_owner")
 struct picomesh_size_result git_repo_git_repo_count_for_owner_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                              uint32_t owner_id)
 {
     (void)ctx; (void)obj;
+    if (!repo_caller_may_list(hdrs, owner_id))
+        return PICOMESH_ERR(picomesh_size, "git_repo_count_for_owner: forbidden (cannot list another namespace)");
     struct gr_storage_result sr = gr_open();
     if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_size, "git_repo_count_for_owner: storage open failed", sr);
     struct gr_storage h = sr.value;
@@ -1012,6 +1256,8 @@ struct picomesh_string_result git_repo_git_repo_list_for_owner_impl(struct ctx *
                                                               struct yheaders *hdrs, uint32_t owner_id)
 {
     (void)ctx; (void)obj;
+    if (!repo_caller_may_list(hdrs, owner_id))
+        return PICOMESH_ERR(picomesh_string, "git_repo_list_for_owner: forbidden (cannot list another namespace)");
     struct gr_storage_result sr = gr_open();
     if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_string, "git_repo_list_for_owner: storage open failed", sr);
     struct gr_storage h = sr.value;
@@ -1026,6 +1272,54 @@ struct picomesh_string_result git_repo_git_repo_list_for_owner_impl(struct ctx *
         if (!list) return PICOMESH_ERR(picomesh_string, "git_repo_list_for_owner: out of memory");
     }
     return PICOMESH_OK(picomesh_string, list);
+}
+
+/* The repo names owned by NAMESPACE PATH `path`, newline-separated (issue #30).
+ * This is the namespace-based discovery the webapp namespace page uses, so a
+ * group's repos (filed under the creator's uid in the owner index) are still
+ * found by path. Read authz: reporter+ on the namespace (inherited) or a site
+ * admin — fail closed. */
+PICOMESH_CLASS_ANNOTATE("override@git_repo:git_repo:git_repo_list_for_namespace")
+struct picomesh_string_result git_repo_git_repo_list_for_namespace_impl(struct ctx *ctx, struct object *obj,
+                                                                        struct yheaders *hdrs, const char *path)
+{
+    (void)ctx; (void)obj;
+    if (!path_ok(path)) return PICOMESH_ERR(picomesh_string, "git_repo_list_for_namespace: invalid namespace path");
+    if (!repo_caller_has_role(hdrs, path, "reporter"))
+        return PICOMESH_ERR(picomesh_string, "git_repo_list_for_namespace: forbidden (insufficient namespace role)");
+    struct gr_storage_result sr = gr_open();
+    if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_string, "git_repo_list_for_namespace: storage open failed", sr);
+    struct gr_storage h = sr.value;
+    char nsk[200];
+    ns_index_key(nsk, sizeof(nsk), path);
+    struct picomesh_string_result lr = repo_index_get(&h, hdrs, nsk);
+    if (PICOMESH_IS_ERR(lr)) return PICOMESH_ERR(picomesh_string, "git_repo_list_for_namespace: read failed", lr);
+    char *list = lr.value ? lr.value : strdup("");
+    if (!list) return PICOMESH_ERR(picomesh_string, "git_repo_list_for_namespace: out of memory");
+    return PICOMESH_OK(picomesh_string, list);
+}
+
+/* Count of repos owned by NAMESPACE PATH `path` (same authz as the listing). */
+PICOMESH_CLASS_ANNOTATE("override@git_repo:git_repo:git_repo_count_for_namespace")
+struct picomesh_size_result git_repo_git_repo_count_for_namespace_impl(struct ctx *ctx, struct object *obj,
+                                                                      struct yheaders *hdrs, const char *path)
+{
+    (void)ctx; (void)obj;
+    if (!path_ok(path)) return PICOMESH_ERR(picomesh_size, "git_repo_count_for_namespace: invalid namespace path");
+    if (!repo_caller_has_role(hdrs, path, "reporter"))
+        return PICOMESH_ERR(picomesh_size, "git_repo_count_for_namespace: forbidden (insufficient namespace role)");
+    struct gr_storage_result sr = gr_open();
+    if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_size, "git_repo_count_for_namespace: storage open failed", sr);
+    struct gr_storage h = sr.value;
+    char nsk[200];
+    ns_index_key(nsk, sizeof(nsk), path);
+    struct picomesh_string_result lr = repo_index_get(&h, hdrs, nsk);
+    if (PICOMESH_IS_ERR(lr)) return PICOMESH_ERR(picomesh_size, "git_repo_count_for_namespace: read failed", lr);
+    char *list = lr.value;
+    size_t n = 0;
+    for (const char *p = list; p && *p; ++p) if (*p == '\n') n++;
+    free(list);
+    return PICOMESH_OK(picomesh_size, n);
 }
 
 /* ---- tree/blob/commit public methods ------------------------------ */
@@ -1045,12 +1339,13 @@ struct picomesh_string_result git_repo_git_repo_read_tree_impl(struct ctx *ctx, 
     struct picomesh_int_result lr = repo_load(&h, hdrs, repo_id, &rec);
     if (PICOMESH_IS_ERR(lr)) return PICOMESH_ERR(picomesh_string, "git_repo_read_tree: load failed", lr);
     if (lr.value == 0) return PICOMESH_ERR(picomesh_string, "git_repo_read_tree: no such repo");
-    /* Read authz: public repos are world-readable; private ones only by
-     * the owner. uid comes from the trusted hdrs prefix the gateway set
-     * from the session (NULL hdrs ⇒ in-process caller ⇒ uid 0). */
-    uint32_t uid = hdrs ? yheaders_get_u32(hdrs, "uid", 0) : 0;
-    if (!rec.is_public && uid != rec.owner_id)
-        return PICOMESH_ERR(picomesh_string, "git_repo_read_tree: forbidden (private repo)");
+    /* Read authz (resource-level, namespace RBAC — issue #30): a public repo is
+     * world-readable; a private one needs at least `reporter` on the repo's
+     * owning namespace (inherited from parent namespaces), or a site admin.
+     * Identity + roles come from the verified JWT the gateway placed in the
+     * headers, not a bare uid. */
+    if (!rec.is_public && !repo_caller_has_role(hdrs, rec.owner_name, "reporter"))
+        return PICOMESH_ERR(picomesh_string, "git_repo_read_tree: forbidden (insufficient namespace role)");
     if (!ensure_libgit2()) return PICOMESH_ERR(picomesh_string, "git_repo_read_tree: libgit2 init failed");
 
     struct git_read_work w;
@@ -1081,10 +1376,10 @@ struct picomesh_string_result git_repo_git_repo_read_file_impl(struct ctx *ctx, 
     struct picomesh_int_result lr = repo_load(&h, hdrs, repo_id, &rec);
     if (PICOMESH_IS_ERR(lr)) return PICOMESH_ERR(picomesh_string, "git_repo_read_file: load failed", lr);
     if (lr.value == 0) return PICOMESH_ERR(picomesh_string, "git_repo_read_file: no such repo");
-    /* Same read authz as read_tree: public → anyone, private → owner only. */
-    uint32_t uid = hdrs ? yheaders_get_u32(hdrs, "uid", 0) : 0;
-    if (!rec.is_public && uid != rec.owner_id)
-        return PICOMESH_ERR(picomesh_string, "git_repo_read_file: forbidden (private repo)");
+    /* Same read authz as read_tree: public → anyone, private → reporter+ on the
+     * repo's namespace (inherited) or a site admin. */
+    if (!rec.is_public && !repo_caller_has_role(hdrs, rec.owner_name, "reporter"))
+        return PICOMESH_ERR(picomesh_string, "git_repo_read_file: forbidden (insufficient namespace role)");
     if (!ensure_libgit2()) return PICOMESH_ERR(picomesh_string, "git_repo_read_file: libgit2 init failed");
 
     struct git_read_work w;
@@ -1118,17 +1413,13 @@ struct picomesh_string_result git_repo_git_repo_put_file_impl(struct ctx *ctx, s
     struct picomesh_int_result lr = repo_load(&h, hdrs, repo_id, &rec);
     if (PICOMESH_IS_ERR(lr)) return PICOMESH_ERR(picomesh_string, "git_repo_put_file: load failed", lr);
     if (lr.value == 0) return PICOMESH_ERR(picomesh_string, "git_repo_put_file: no such repo");
-    /* Write authz (resource-level, on top of the gateway's policy gate): the
-     * verified caller must own the repo, OR hold a site-admin role. Identity
-     * comes from the JWT the gateway placed in the headers — a backend trusts
-     * the signed claims (uid + groups), not a bare uid. A site
-     * owner/maintainer may write any repo; anonymous (uid 0) is always refused. */
-    struct picomesh_authctx caller;
-    picomesh_authctx_from_headers(hdrs, picomesh_active_engine(), &caller);
-    int site_admin = caller.authenticated &&
-        picomesh_groups_max_role(caller.groups_csv, "site") >= picomesh_role_rank("maintainer");
-    if (caller.uid == 0 || (caller.uid != rec.owner_id && !site_admin))
-        return PICOMESH_ERR(picomesh_string, "git_repo_put_file: forbidden (not repo owner)");
+    /* Write authz (resource-level namespace RBAC, on top of the gateway policy
+     * gate — issue #30): the verified caller must hold at least `developer` on
+     * the repo's owning namespace (inherited from parent namespaces), OR be a
+     * site admin. Roles come from the signed JWT claims the gateway placed in
+     * the headers, never a bare uid; anonymous is always refused. */
+    if (!repo_caller_has_role(hdrs, rec.owner_name, "developer"))
+        return PICOMESH_ERR(picomesh_string, "git_repo_put_file: forbidden (insufficient namespace role)");
     if (!ensure_libgit2()) return PICOMESH_ERR(picomesh_string, "git_repo_put_file: libgit2 init failed");
 
     struct git_put_work w;
@@ -1184,9 +1475,10 @@ struct picomesh_int_result git_repo_git_repo_set_public_impl(struct ctx *ctx, st
     struct picomesh_int_result lr = repo_load(&h, hdrs, repo_id, &rec);
     if (PICOMESH_IS_ERR(lr)) return PICOMESH_ERR(picomesh_int, "git_repo_set_public: load failed", lr);
     if (lr.value == 0) return PICOMESH_ERR(picomesh_int, "git_repo_set_public: no such repo");
-    uint32_t uid = hdrs ? yheaders_get_u32(hdrs, "uid", 0) : 0;
-    if (uid == 0 || uid != rec.owner_id)
-        return PICOMESH_ERR(picomesh_int, "git_repo_set_public: forbidden (not repo owner)");
+    /* Changing visibility is a maintainer-grade operation on the repo's
+     * namespace (inherited), or a site admin (issue #30). */
+    if (!repo_caller_has_role(hdrs, rec.owner_name, "maintainer"))
+        return PICOMESH_ERR(picomesh_int, "git_repo_set_public: forbidden (insufficient namespace role)");
     rec.is_public = is_public ? 1 : 0;
     struct picomesh_void_result w = repo_store_row(&h, hdrs, repo_id, &rec);
     if (PICOMESH_IS_ERR(w)) return PICOMESH_ERR(picomesh_int, "git_repo_set_public: write failed", w);

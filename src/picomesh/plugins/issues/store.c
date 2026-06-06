@@ -20,8 +20,12 @@
 #include <picomesh/ycore/result.h>
 #include <picomesh/ycore/ytrace.h>
 #include <picomesh/yclass/class.h>
+#include <picomesh/yclass/yheaders.h>
 #include <picomesh/yengine/engine.h>
+#include <picomesh/ysecurity/jwt.h>
+#include <picomesh/ysecurity/secret.h>
 #include <picomesh/plugin/sharded_storage/sharded_storage.h>
+#include <picomesh/plugin/git_repo/git_repo.h>
 
 #include <stdint.h>
 #include <stdio.h>
@@ -118,11 +122,45 @@ static struct picomesh_void_result issue_store(struct is_storage *h, struct yhea
     return PICOMESH_OK_VOID();
 }
 
+/* Repo-scoped issue authz (issue #30): when the caller is a VERIFIED principal
+ * (JWT present), require `min_role`+ on the repo's owning namespace (inherited)
+ * or a site admin. A NULL/anonymous caller is the trusted in-process path.
+ * Returns 1 if allowed. */
+static int is_caller_can(struct yheaders *hdrs, uint32_t repo_id, const char *min_role)
+{
+    struct picomesh_authctx caller;
+    picomesh_authctx_from_headers(hdrs, picomesh_active_engine(), &caller);
+    if (!caller.authenticated) return 0; /* fail closed */
+    if (picomesh_groups_contains(caller.groups_csv, PICOMESH_GROUP_SYSTEM)) return 1; /* trusted internal */
+    if (picomesh_groups_max_role(caller.groups_csv, "site") >= picomesh_role_rank("maintainer")) return 1;
+    struct picomesh_engine *e = picomesh_active_engine();
+    if (!e) return 0;
+    struct ctx c = picomesh_engine_service_ctx(e, "git_repo");
+    struct object_ptr_result o = git_repo_git_repo_create(&c);
+    if (PICOMESH_IS_ERR(o)) { picomesh_error_destroy(o.error); return 0; }
+    struct picomesh_string_result np = git_repo_git_repo_namespace_of(&c, o.value, NULL, repo_id);
+    if (PICOMESH_IS_ERR(np)) { picomesh_error_destroy(np.error); return 0; }
+    int ok = np.value && np.value[0] &&
+             picomesh_groups_effective_role(caller.groups_csv, np.value) >= picomesh_role_rank(min_role);
+    free(np.value);
+    return ok;
+}
+
 PICOMESH_CLASS_ANNOTATE("override@issues:issues:issues_open")
 struct picomesh_uint32_result issues_issues_open_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                   uint32_t repo_id, uint32_t author_id)
 {
     (void)ctx; (void)obj;
+    /* Filing an issue needs reporter+ on the repo namespace (service-local
+     * defense-in-depth on top of the gateway policy gate). */
+    if (!is_caller_can(hdrs, repo_id, "reporter"))
+        return PICOMESH_ERR(picomesh_uint32, "issues_open: forbidden (insufficient namespace role)");
+    /* The author is the AUTHENTICATED caller, not a client-supplied id — a
+     * reporter must not be able to file an issue as someone else. The arg is
+     * honoured only for the trusted in-process (NULL-JWT) path. */
+    struct picomesh_authctx caller;
+    picomesh_authctx_from_headers(hdrs, picomesh_active_engine(), &caller);
+    if (caller.authenticated) author_id = caller.uid;
     struct is_storage_result sr = is_open_storage();
     if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_uint32, "issues_open: storage open failed", sr);
     struct is_storage h = sr.value;
@@ -155,6 +193,9 @@ struct picomesh_int_result issues_issues_close_impl(struct ctx *ctx, struct obje
     struct picomesh_int_result lr = issue_load(&h, hdrs, issue_id, &repo_id, &author_id, &closed);
     if (PICOMESH_IS_ERR(lr)) return PICOMESH_ERR(picomesh_int, "issues_close: load failed", lr);
     if (lr.value == 0 || closed) return PICOMESH_OK(picomesh_int, 0);  /* absent or already closed */
+    /* Closing needs reporter+ on the repo namespace (service-local). */
+    if (!is_caller_can(hdrs, repo_id, "reporter"))
+        return PICOMESH_ERR(picomesh_int, "issues_close: forbidden (insufficient namespace role)");
     /* Flip closed 0→1 atomically. issue_store writes a canonical
      * "<repo>\t<author>\t<closed>" row, so the expected bytes are exactly
      * reconstructable. A clean CAS mismatch (value 0) means another caller
@@ -173,6 +214,16 @@ struct picomesh_int_result issues_issues_close_impl(struct ctx *ctx, struct obje
     return PICOMESH_OK(picomesh_int, 1);
 }
 
+/* Site admin / internal capability — gates the global issue scans. Fail closed. */
+static int issues_caller_site_admin(struct yheaders *hdrs)
+{
+    struct picomesh_authctx caller;
+    picomesh_authctx_from_headers(hdrs, picomesh_active_engine(), &caller);
+    if (!caller.authenticated) return 0;
+    if (picomesh_groups_contains(caller.groups_csv, PICOMESH_GROUP_SYSTEM)) return 1;
+    return picomesh_groups_max_role(caller.groups_csv, "site") >= picomesh_role_rank("maintainer");
+}
+
 PICOMESH_CLASS_ANNOTATE("override@issues:issues:issues_status")
 struct picomesh_int_result issues_issues_status_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                                                  uint32_t issue_id)
@@ -181,10 +232,13 @@ struct picomesh_int_result issues_issues_status_impl(struct ctx *ctx, struct obj
     struct is_storage_result sr = is_open_storage();
     if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_int, "issues_status: storage open failed", sr);
     struct is_storage h = sr.value;
-    int closed = 0;
-    struct picomesh_int_result lr = issue_load(&h, hdrs, issue_id, NULL, NULL, &closed);
+    uint32_t repo_id = 0; int closed = 0;
+    struct picomesh_int_result lr = issue_load(&h, hdrs, issue_id, &repo_id, NULL, &closed);
     if (PICOMESH_IS_ERR(lr)) return PICOMESH_ERR(picomesh_int, "issues_status: load failed", lr);
     if (lr.value == 0) return PICOMESH_OK(picomesh_int, 0);  /* unknown issue */
+    /* Reading an issue's status needs reporter+ on the repo's namespace. */
+    if (!is_caller_can(hdrs, repo_id, "reporter"))
+        return PICOMESH_ERR(picomesh_int, "issues_status: forbidden (insufficient namespace role)");
     return PICOMESH_OK(picomesh_int, closed ? 2 : 1);
 }
 
@@ -193,6 +247,9 @@ struct picomesh_size_result issues_issues_count_open_in_repo_impl(struct ctx *ct
                                                               uint32_t repo_id)
 {
     (void)ctx; (void)obj;
+    /* The open-issue count is repo-scoped: reporter+ on the repo's namespace. */
+    if (!is_caller_can(hdrs, repo_id, "reporter"))
+        return PICOMESH_ERR(picomesh_size, "issues_count_open: forbidden (insufficient namespace role)");
     struct is_storage_result sr = is_open_storage();
     if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_size, "issues_count_open: storage open failed", sr);
     struct is_storage h = sr.value;
@@ -223,6 +280,9 @@ struct picomesh_json_result issues_issues_list_impl(struct ctx *ctx, struct obje
                                                    int64_t offset, int64_t limit)
 {
     (void)ctx; (void)obj;
+    /* A global cross-repo scan — site admin only (fail closed). */
+    if (!issues_caller_site_admin(hdrs))
+        return PICOMESH_ERR(picomesh_json, "issues_list: forbidden (site admin only)");
     struct is_storage_result sr = is_open_storage();
     if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_json, "issues_list: storage open failed", sr);
     struct is_storage h = sr.value;
@@ -235,10 +295,33 @@ struct picomesh_json_result issues_issues_list_all_impl(struct ctx *ctx, struct 
                                                         struct yheaders *hdrs)
 {
     (void)ctx; (void)obj;
+    if (!issues_caller_site_admin(hdrs))
+        return PICOMESH_ERR(picomesh_json, "issues_list_all: forbidden (site admin only)");
     struct is_storage_result sr = is_open_storage();
     if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_json, "issues_list_all: storage open failed", sr);
     struct is_storage h = sr.value;
     return sharded_storage_db_list_all(&h.c, h.obj, hdrs, ISSUES_CTX, "issue:");
+}
+
+/* The repo an issue belongs to (0 if the issue does not exist). Lets the
+ * authorizer resolve issue_id -> repo_id -> namespace and gate issue operations
+ * by the repo's namespace role (issue #30). The issue row is
+ * "<repo_id>\t<author_id>\t<closed>", so repo_id is the first field. */
+PICOMESH_CLASS_ANNOTATE("override@issues:issues:issues_repo_of")
+struct picomesh_uint32_result issues_issues_repo_of_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                                                         uint32_t issue_id)
+{
+    (void)ctx; (void)obj;
+    struct is_storage_result sr = is_open_storage();
+    if (PICOMESH_IS_ERR(sr)) return PICOMESH_ERR(picomesh_uint32, "issues_repo_of: storage open failed", sr);
+    struct is_storage h = sr.value;
+    char k[40];
+    snprintf(k, sizeof(k), "issue:%u", issue_id);
+    struct picomesh_string_result r = sharded_storage_db_get(&h.c, h.obj, hdrs, ISSUES_CTX, k);
+    if (PICOMESH_IS_ERR(r)) return PICOMESH_ERR(picomesh_uint32, "issues_repo_of: read failed", r);
+    uint32_t repo_id = (r.value && r.value[0]) ? (uint32_t)strtoul(r.value, NULL, 10) : 0;
+    free(r.value);
+    return PICOMESH_OK(picomesh_uint32, repo_id);
 }
 
 #include "store.gen.c"

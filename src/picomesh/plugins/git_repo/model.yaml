@@ -42,6 +42,19 @@ methods:
         type: "struct yheaders *"
       - name: repo_id
         type: uint32_t
+  - slot: git_repo_namespace_of
+    domain: git_repo
+    owning_class: git_repo
+    return_type: struct picomesh_string_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: repo_id
+        type: uint32_t
   - slot: git_repo_count_for_owner
     domain: git_repo
     owning_class: git_repo
@@ -79,6 +92,32 @@ methods:
         type: "struct yheaders *"
       - name: owner_id
         type: uint32_t
+  - slot: git_repo_list_for_namespace
+    domain: git_repo
+    owning_class: git_repo
+    return_type: struct picomesh_string_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: path
+        type: "const char *"
+  - slot: git_repo_count_for_namespace
+    domain: git_repo
+    owning_class: git_repo
+    return_type: struct picomesh_size_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: path
+        type: "const char *"
   - slot: git_repo_read_tree
     domain: git_repo
     owning_class: git_repo
@@ -209,6 +248,9 @@ classes:
       - slot: git_repo_owner_of
         slot_domain: git_repo
         impl: git_repo_git_repo_owner_of_impl
+      - slot: git_repo_namespace_of
+        slot_domain: git_repo
+        impl: git_repo_git_repo_namespace_of_impl
       - slot: git_repo_count_for_owner
         slot_domain: git_repo
         impl: git_repo_git_repo_count_for_owner_impl
@@ -218,6 +260,12 @@ classes:
       - slot: git_repo_list_for_owner
         slot_domain: git_repo
         impl: git_repo_git_repo_list_for_owner_impl
+      - slot: git_repo_list_for_namespace
+        slot_domain: git_repo
+        impl: git_repo_git_repo_list_for_namespace_impl
+      - slot: git_repo_count_for_namespace
+        slot_domain: git_repo
+        impl: git_repo_git_repo_count_for_namespace_impl
       - slot: git_repo_read_tree
         slot_domain: git_repo
         impl: git_repo_git_repo_read_tree_impl

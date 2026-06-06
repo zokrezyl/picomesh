@@ -321,6 +321,100 @@ holder of the opaque secret can retrieve a JWT. Prefer one of these designs:
 - allow public invocation only if the deployment explicitly accepts that
   behavior.
 
+## Authorization Domain Model
+
+Picoforge authorization should be role-based over namespaces, not only
+owner-id checks on individual repos. The GitLab-compatible model is:
+
+```text
+namespace:
+  id
+  parent_id nullable
+  slug
+  kind: user | group
+
+repo:
+  id
+  namespace_id
+  name
+
+namespace_member:
+  namespace_id
+  uid
+  role: guest | reporter | developer | maintainer | owner
+```
+
+A namespace is the ownership container for repos. A user gets a personal
+namespace when the account is created:
+
+```text
+alice/demo
+```
+
+Groups are also namespaces:
+
+```text
+acme/api
+```
+
+Group namespaces may contain sub-namespaces:
+
+```text
+acme/platform/api
+acme/platform/backend/auth-service
+```
+
+So the repo's full path is:
+
+```text
+<namespace-path>/<repo-name>
+```
+
+GitHub-style ownership is a constrained case of the same model: repos usually
+attach only to a root user/org namespace (`owner/repo`), while teams provide
+permission grouping. GitLab-style ownership allows nested group namespaces in
+the repo path. Both shapes can use the same RBAC evaluator.
+
+Role inheritance follows the namespace tree. To authorize an action on a repo,
+resolve the repo's namespace, walk from that namespace to its parents, and
+compute the caller's effective role as the highest applicable membership. A
+direct membership on a child namespace may grant a more specific role than an
+ancestor. The first implementation can use monotonic max-role semantics; if
+deny rules or inheritance locks are needed later, they must be added explicitly.
+
+```text
+effective_role(uid, namespace):
+  max(
+    direct membership on namespace,
+    inherited membership on parent namespaces,
+    explicit site bypass when configured
+  )
+```
+
+Examples:
+
+```text
+alice owns namespace alice
+alice/demo requires developer to push
+alice has alice:owner
+owner >= developer
+=> allowed
+
+bob is acme:developer
+acme/platform/api requires reporter to read
+developer >= reporter
+=> allowed through inherited acme membership
+
+carol has no role on acme or acme/platform
+acme/platform/api requires reporter to read
+=> denied
+```
+
+Site-level administration is separate from namespace membership. A deployment
+may choose to let `site:maintainer` or `site:owner` bypass normal namespace
+checks, but that bypass must be explicit in the authorizer and should be used
+only for administrative operations.
+
 ## Authorization
 
 Authorization answers: "may this caller invoke this endpoint with these
@@ -350,13 +444,19 @@ security:
         required_role: owner
         account_from: site
 
+      # Repo content reads require at least reporter on the repo namespace.
+      # The authorizer should resolve repo_id -> namespace_id -> namespace path
+      # and compare the caller's effective namespace role.
       git_repo.git_repo.read_tree:
         required_role: reporter
-        account_from: "{kwargs.name:account}"
+        resource_from: "{kwargs.repo_id}"
+        role_scope: repo_namespace
 
+      # Repo writes require at least developer on the repo namespace.
       git_repo.git_repo.put_file:
         required_role: developer
-        account_from: "{kwargs.name:account}"
+        resource_from: "{kwargs.repo_id}"
+        role_scope: repo_namespace
 
       mesh.mesh.reconcile:
         required_role: owner
@@ -369,7 +469,8 @@ Rule evaluation:
 2. No JWT and rule is not anonymous: deny.
 3. Verify JWT signature and expiry.
 4. `authenticated`: allow any valid JWT.
-5. Role-gated rule: compare JWT groups against required role and account.
+5. Role-gated rule: resolve the target namespace/resource, compute the caller's
+   effective role there, and compare it with the required role.
 
 Roles use a monotonic ladder:
 
@@ -377,10 +478,10 @@ Roles use a monotonic ladder:
 guest < reporter < developer < maintainer < owner
 ```
 
-The JWT `groups` claim stores memberships as strings:
+The JWT `groups` claim stores namespace memberships as strings:
 
 ```text
-<account-slug>:<role>
+<namespace-path>:<role>
 ```
 
 Examples:
@@ -389,29 +490,34 @@ Examples:
 site:owner
 alice:owner
 acme:maintainer
-project-team:developer
+acme/platform:developer
 ```
 
 Site-level administrators can be represented by `site:maintainer` or
 `site:owner`, depending on deployment policy. The site-level bypass must be
 explicit in the authorizer.
 
-The yaapp policy authorizer supports account resolution against kwargs:
+The yaapp policy authorizer supports account resolution against kwargs. Picoforge
+should generalize this to resource resolution, because most repo APIs take a
+`repo_id`, not a namespace path:
 
 | Form | Resolves to |
 |---|---|
 | `site` | literal `site` |
 | `{kwargs.name}` | the whole value of `kwargs["name"]` |
-| `{kwargs.name:account}` | account part before `/` |
+| `{kwargs.name:account}` | namespace/account part before `/` |
+| `{kwargs.repo_id}` + `role_scope: repo_namespace` | repo's owning namespace |
 
 Picomesh may also support positional `args` while its JSON API remains
 positional, but the design target should preserve the yaapp-style named
-argument form as the cleaner policy language.
+argument form as the cleaner policy language. The final policy language should
+name resources precisely enough that endpoint policy does not have to fall back
+to ad hoc service-local owner checks.
 
 ## Where Groups Come From
 
 Groups are minted into the JWT at login and refresh time. The token issuer
-must call the canonical accounts/users service to load memberships.
+must call the canonical accounts/users service to load namespace memberships.
 
 This implies point-in-time claims:
 
@@ -422,9 +528,9 @@ This implies point-in-time claims:
 - already-issued access JWTs remain valid until expiry unless JWT revocation is
   added.
 
-For Picoforge, the current `accounts` plugin is only a partial user/account
-authority. The target accounts/users service must own users, account
-memberships, groups, roles, and credential links.
+For Picoforge, the current `accounts` plugin is only a partial user/namespace
+authority. The target accounts/users service must own users, namespaces,
+namespace memberships, roles, and credential links.
 
 ## Current Picomesh Implementation Gaps
 
@@ -440,9 +546,9 @@ Known mismatches:
   invoking — no per-frontend auth code.
 - The yhttp authenticator code knows PAT and runner internals instead of using
   generic `bearer_opaque_token` entries with configured `lookup` service paths.
-- `src/picomesh/ysecurity/secret.c` is low-level helper code but currently
-  contains a dangerous policy behavior: an invalid JWT can fall back to
-  `yheaders["uid"]`. Invalid JWT must fail closed.
+- `src/picomesh/ysecurity/secret.c` must remain low-level helper code. It now
+  fails closed on absent/invalid JWTs; keep it that way and do not reintroduce
+  any `yheaders["uid"]` fallback or other policy decision there.
 - Browser login/session composition is currently partly in gateway routes. The
   yaapp shape puts server-side login composition in `session.start`, which calls
   `token_issuer.login`, stores the JWT, and returns only the opaque cookie.
@@ -452,6 +558,133 @@ Known mismatches:
   of the JWT/authz pipeline.
 - The policy language currently supports only a subset of yaapp account
   resolution.
+- Namespace RBAC is implemented (issue #30). The `accounts` service owns the
+  canonical namespace tree (`namespaces`) and membership authority
+  (`namespace_members`) with the GitLab role ladder; a personal namespace is
+  created per user at register, group and nested sub-namespaces via
+  `accounts.ns_create`, and grants via `accounts.ns_add_member`. The token
+  issuer mints memberships into the JWT `groups` claim. The policy authorizer
+  resolves a repo to its owning namespace (`role_scope: repo_namespace`) or a
+  namespace path (`role_scope: namespace_path`) and compares the caller's
+  INHERITED role (parent-namespace grants apply to child resources), with the
+  explicit `site:maintainer+` bypass. git_repo's resource-level checks were
+  narrowed to the same namespace effective-role model. Picoforge policy
+  role-gates repo reads AND writes (`read_tree`/`read_file` at `reporter`,
+  `put_file`/`make` at `developer`, `set_public` at `maintainer`) over the
+  repo's namespace. Public repos are readable by anyone — including anonymous
+  callers — via an explicit `allow_public` rule flag. The site-admin bypass is
+  opt-in per policy rule (`site_bypass: true`), never implicit for every
+  role-gated endpoint. `accounts.ns_create` is hardened against privilege
+  escalation (owner is the verified caller; the owner grant happens only when
+  the namespace is freshly created; the reserved `site` namespace and subgroups
+  the caller can't administer are refused). `accounts.ns_add_member` and
+  `git_repo.make` reject targets that do not exist in the canonical namespaces
+  table, and a repo row records its `namespace_id`. Namespace slugs are
+  validated to the strict `[A-Za-z0-9._-]` segment grammar so a slug can never
+  smuggle a second `<path>:<role>` into the comma/colon-delimited groups claim.
+  Root-namespace creation by an external caller is a site-admin operation
+  (anti-squatting); a personal namespace whose name is already a namespace is
+  refused at register so an account is never stranded without ownership;
+  subgroups require maintainer+ on the parent. `git_repo.make` and `delete`
+  carry service-local namespace checks. Issue and pipeline operations are
+  namespace-scoped too: `issues.open`/`count_open_in_repo` and
+  `git_pipeline.enqueue*` resolve repo_id→namespace at the gate; `issues.close`
+  resolves issue_id→repo→namespace; and `git_pipeline.job_descriptor`/`read_log`
+  are enforced service-local (the leasing runner OR reporter+ on the repo
+  namespace), since that compound rule can't be expressed in policy alone.
+  `git_pipeline.lease`/`lease_job` are runner-token-only (policy group + a
+  service-local owner check). Every repo-scoped write (`issues.open`/`close`,
+  `git_pipeline.enqueue`/`enqueue_job`, `git_repo.make`/`put_file`/`set_public`/
+  `delete`) carries a service-local namespace-role check in addition to the
+  gateway policy gate, so a backend reached off the gateway path still enforces
+  RBAC; `issues.open` records the authenticated caller as the issue author,
+  never a client-supplied id. The personal namespace is created (mandatorily,
+  fail-closed, idempotent-for-owner) BEFORE the account-completion marker at
+  register, so a completed account always owns its `<username>` namespace.
+  `/repos/new` creates the repo first and only mirrors/redirects on success,
+  never leaving stale registry metadata.
+
+  Trust is FAIL-CLOSED, not "no JWT means trusted". Every repo/issue/pipeline/
+  namespace mutation denies a credential-less caller. The gateway's own
+  bootstrap operations (creating a new user's personal namespace, the first-user
+  `site` namespace, the `/repos/new` repo) present an explicit, gateway-signed
+  `system:internal` capability JWT (`PICOMESH_GROUP_SYSTEM`) that backends
+  recognise as the trusted-internal marker — it is never issued to a client and
+  never derived from a user's memberships. The first-user `site` bootstrap is
+  fail-closed (registration fails if it can't be created). Per-owner repo
+  listings (`count_for_owner`/`list_for_owner`) are scoped to the caller's own
+  namespace or a site admin, so private repo names/counts don't leak across
+  namespaces. Note: the namespace authz checks make a nested `namespace_of`
+  resolve RPC; under the pre-existing intermittent mesh "short RPC response"
+  transport flake a legitimate caller can be transiently denied (fail-closed) —
+  the transport flake itself is tracked separately. `git_pipeline.complete` is
+  guarded service-local (the leasing runner OR maintainer+ on the repo
+  namespace), and `git_repo.delete` is policy-gated (maintainer on
+  repo_namespace, site_bypass) plus the service-local check.
+
+  Operator/console surfaces (`*.list`/`*.list_all`, `issues.status`) are NOT in
+  the gateway policy, so they are default-DENIED on the public gateway. They are
+  reachable only on the loopback operator console/bridge — an intentionally
+  network-isolated, app-agnostic tool — and by trusted intra-mesh calls. They
+  are scoped by that network boundary rather than per-resource RBAC, because
+  gating the generic console with namespace roles would break it; the public
+  edge stays fail-closed.
+
+  The low-level signing oracle is closed: `token_issuer.mint` (used only by the
+  runner-token exchange, and fronted unauthenticated by the loopback operator
+  bridge) REFUSES to mint any privilege-granting claim — `system:internal`, a
+  `site:<ladder-role>` admin membership, or any `<namespace>:<role>` ladder
+  membership — so a caller reaching the bridge cannot forge a signed JWT that
+  bypasses RBAC. Non-privileged runner tokens (`site:runner,runner:<id>`) stay
+  mintable.
+
+  The first-user `site` bootstrap is created BEFORE the account-completion
+  marker (`accounts_register`), keyed on `count == 0` (no completed accounts
+  yet). A completed account therefore always implies the bootstrap ran — there
+  is no window where the account exists but `site:owner` is missing and nothing
+  needs rolling back. A backend failure aborts the registration fail-closed; a
+  concurrent first registrant that loses the race for `site` continues as a
+  regular user.
+
+  Acceptance tests for issue #30 live in two places: the integration pytest
+  suite `tests/integration/picoforge/test_rbac.py` (18 tests over an isolated
+  mesh — the six issue acceptance cases, plus the bypass-class regressions, the
+  mint-forgery guard, and first-user bootstrap) and the `[5e]`/`[5f]` blocks of
+  `tools/picoforge/mesh-up.sh` (the full end-to-end smoke).
+
+  The Picoforge webapp is namespace-based, not owner-uid-based. Repos carry a
+  per-namespace-path index ("ns:<path>") so a namespace page lists its repos —
+  group repos included — via `git_repo.list_for_namespace`/`count_for_namespace`
+  (reporter+ on the namespace). `/_whoami` returns the caller's namespace
+  memberships (path+role, never a JWT), which drives the repo-creation namespace
+  picker (any namespace the user can push to) and a non-admin `/groups` area
+  where namespace owners/maintainers manage members and subgroups; site admins
+  use the same UI under `/admin/namespaces`. RBAC mutation forms surface the
+  gateway's error instead of silently redirecting, and `accounts.ns_add_member`
+  refuses a uid with no registered account (so a grant can't pre-authorize a
+  future username). Nested namespaces are addressable: the webapp repo-path
+  parser resolves `<namespace-path>/<repo>[/<verb>]` from the right (a trailing
+  known verb delimits the repo from a multi-segment namespace), so
+  `/acme/platform/svc` is the repo `svc` in `acme/platform`. The repo-creation
+  namespace field is free text (with the user's pushable namespaces as
+  suggestions) so an INHERITED subgroup can be entered; `/groups` likewise lets a
+  maintainer jump to an inherited subgroup by path. `accounts.ns_list` and
+  `accounts.ns_members` are fail-closed in-service (site-admin / maintainer-on-
+  namespace), not only at the gateway; `ns_members` joins the username so the
+  management UI works for non-admin maintainers without an admin roster fetch.
+  `git_repo.make` idempotently repairs the owner/namespace indexes when a
+  duplicate is detected, so a partial-failure retry still lists the repo. The
+  owner index stores each repo's FULL PATH (`<namespace>/<repo>`), so a group
+  repo created by a user links to its namespace URL (e.g. `/acme/bobweb`) on
+  `/repos`, search, and the issue dashboard — not `/<username>/<repo>`. Repo
+  names and namespace slugs may not be URL route words (`issues`, `runs`,
+  `edit`, `new`, `settings`; namespaces also reserve `repos`/`admin`/`groups`/…),
+  so the `<namespace>/<repo>/<verb>` parse stays unambiguous and a personal
+  namespace can't shadow a top-level route. The repo-scoped issue reads
+  (`count_open_in_repo`, `status`) are namespace-role-gated service-local, and
+  the unbounded cross-repo scans (`issues`/`git_pipeline` `list`/`list_all`) are
+  site-admin-only service-local (fail-closed) — they are operator/bridge
+  surfaces, default-denied at the public gateway.
 - PAT support is not yet real opaque-token auth. Sequential numeric ids are not
   acceptable bearer credentials.
 - Password verification remains demo-grade and must be replaced before treating
@@ -461,31 +694,35 @@ Known mismatches:
 
 1. Keep `ysecurity` as a low-level library only. Remove policy decisions and
    any invalid-JWT fallback behavior from it.
-2. Move the auth pipeline into the CORE invoke boundary (not a frontend), so
+2. Implement the namespace tree and namespace membership authority: user
+   namespaces, group namespaces, optional nested sub-namespaces, repo ownership
+   by namespace, and effective-role resolution through parent namespaces.
+3. Move the auth pipeline into the CORE invoke boundary (not a frontend), so
    yhttp, yrpc/msgpack, bridges, and future frontends share it by carrying
    headers and invoking — no per-frontend auth code. Boundary vs internal vs
    trusting is each node's own `security` config.
-3. Implement configured authenticator modules:
+4. Implement configured authenticator modules:
    `session_cookie`, `bearer_jwt_token`, and generic
    `bearer_opaque_token`.
-4. Make opaque authenticators call configured lookup service paths and verify
+5. Make opaque authenticators call configured lookup service paths and verify
    returned JWTs.
-5. Implement a configured authorizer. The first target should be the
-   yaapp-compatible `policy` authorizer. If Picomesh wants authz as a mesh
-   plugin/service instead, define that contract explicitly.
-6. Move browser login/session composition to the `session` service shape:
+6. Implement a configured authorizer. The first target should be the
+   yaapp-compatible `policy` authorizer, extended with resource resolution such
+   as `repo_id -> namespace -> effective role`. If Picomesh wants authz as a
+   mesh plugin/service instead, define that contract explicitly.
+7. Move browser login/session composition to the `session` service shape:
    `session.start -> token_issuer.login -> store JWT under sid -> Set-Cookie`.
-7. Redesign `session` rows with idle timeout, absolute lifetime, refresh token,
+8. Redesign `session` rows with idle timeout, absolute lifetime, refresh token,
    and logout deletion.
-8. Replace numeric PATs with random opaque tokens stored by hash and exchanged
+9. Replace numeric PATs with random opaque tokens stored by hash and exchanged
    for JWTs by the PAT service.
-9. Pass verified JWT/auth context through local and remote calls. Backend
-   resource checks must use verified auth context or fail closed.
-10. Replace demo password hashing with a real password KDF and per-password
+10. Pass verified JWT/auth context through local and remote calls. Backend
+    resource checks must use verified auth context or fail closed.
+11. Replace demo password hashing with a real password KDF and per-password
     salt.
-11. Add tests for both success and failure: missing credential, malformed
+12. Add tests for both success and failure: missing credential, malformed
     credential, expired session/JWT, absent policy entry, anonymous endpoint,
-    and valid cookie/PAT/runner token flows.
+    namespace role inheritance, and valid cookie/PAT/runner token flows.
 
 ## Security Properties
 

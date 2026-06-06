@@ -194,6 +194,21 @@ struct picomesh_string_result picomesh_jwt_verify(const char *jwt, const char *s
     return PICOMESH_OK(picomesh_string, payload_json);
 }
 
+int picomesh_groups_contains(const char *groups_csv, const char *group)
+{
+    if (!groups_csv || !group || !*group) return 0;
+    size_t glen = strlen(group);
+    const char *cursor = groups_csv;
+    while (*cursor) {
+        const char *comma = strchr(cursor, ',');
+        size_t span = comma ? (size_t)(comma - cursor) : strlen(cursor);
+        if (span == glen && memcmp(cursor, group, glen) == 0) return 1;
+        if (!comma) break;
+        cursor = comma + 1;
+    }
+    return 0;
+}
+
 int picomesh_role_rank(const char *role)
 {
     if (!role) return -1;
@@ -231,6 +246,36 @@ int picomesh_groups_max_role(const char *groups_csv, const char *account)
         }
         if (!comma) break;
         cursor = comma + 1;
+    }
+    return best;
+}
+
+int picomesh_groups_effective_role(const char *groups_csv, const char *namespace_path)
+{
+    if (!groups_csv || !namespace_path || !*namespace_path) return -1;
+    /* Namespace inheritance: a membership on any ancestor namespace applies to
+     * a child. Walk the path from the full namespace up to its root, taking the
+     * highest direct role found at any level. `acme/platform/api` is checked as
+     * `acme/platform/api`, then `acme/platform`, then `acme`. The membership
+     * strings in the claim are "<namespace-path>:<role>", so an ancestor
+     * grant like `acme:developer` satisfies a child resource. Monotonic
+     * max-role semantics — no deny rules or inheritance locks yet. */
+    char prefix[256];
+    int best = -1;
+    for (const char *end = namespace_path + strlen(namespace_path); end > namespace_path; ) {
+        size_t len = (size_t)(end - namespace_path);
+        if (len < sizeof(prefix)) {
+            memcpy(prefix, namespace_path, len);
+            prefix[len] = 0;
+            int rank = picomesh_groups_max_role(groups_csv, prefix);
+            if (rank > best) best = rank;
+        }
+        /* Step up to the parent: drop the last `/`-delimited segment. */
+        const char *slash = NULL;
+        for (const char *p = end - 1; p >= namespace_path; --p)
+            if (*p == '/') { slash = p; break; }
+        if (!slash) break;
+        end = slash;
     }
     return best;
 }

@@ -551,6 +551,7 @@ out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/admin/re
 expect_contains 'webapp GET /admin/repos'                 "$out" '<h1>Repositories</h1>'
 out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/admin/tokens")
 expect_contains 'webapp GET /admin/tokens'                "$out" '<h1>Tokens</h1>'
+# The admin RBAC (Namespaces) area is exercised after [5e] provisions a group.
 
 # New GitLab-like shell additions (gh#10): repo settings tab, services
 # health page, cross-repo dashboards, and the dedicated new-repo form —
@@ -730,6 +731,14 @@ echo "[5d] runner agent (docs/runner-agent.md) — token → register → lease 
 # tokens; alice (regular user) triggers builds; the runner executes them.
 JSONH='Content-Type: application/json'
 
+# enqueue_job is now namespace-role-gated (developer+ on the repo's namespace,
+# issue #30), so jobs must target a REAL repo the caller can build. alice owns
+# /alice/website (created above); its deterministic repo_id is the FNV-1a of
+# "alice/website" (same hash the gateway/git_repo use).
+PIPE_REPO=$(python3 -c 'h=2166136261
+for c in b"alice/website": h=((h^c)*16777619)&0xffffffff
+print(h or 1)')
+
 # Admin (site-owner root) mints a runner token. create_token is owner-gated.
 ct=$(curl -sS --max-time 10 -b $ROOT_COOKIES -XPOST "http://127.0.0.1:${WEB}/_rpc" \
      -H "$JSONH" -d '{"path":"runner_agent.runner_agent.create_token","args":["ci-runner-1","linux,x86_64"]}')
@@ -757,7 +766,7 @@ code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b $SIDE_COOKIES -X
 
 # A user (alice) enqueues a CI job with execution metadata; the runner leases it.
 ej=$(curl -sS --max-time 10 -b $SIDE_COOKIES -XPOST "http://127.0.0.1:${WEB}/_rpc" \
-     -H "$JSONH" -d '{"path":"git_pipeline.git_pipeline.enqueue_job","args":[1,"refs/heads/main","",60]}')
+     -H "$JSONH" -d '{"path":"git_pipeline.git_pipeline.enqueue_job","args":['"$PIPE_REPO"',"refs/heads/main","",60]}')
 expect_contains 'user enqueue_job returns a job id' "$ej" '"result":[1-9][0-9]*'
 JOB_ID=$(printf '%s' "$ej" | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"])' 2>/dev/null)
 
@@ -799,7 +808,7 @@ curl -sS --max-time 10 -o /dev/null -XPOST "http://127.0.0.1:${WEB}/_rpc" \
      -H "Authorization: Bearer ${RUNNER_TOKEN2}" -H "$JSONH" \
      -d "{\"path\":\"runner_agent.runner_agent.register\",\"args\":[${RUNNER_ID2},\"ci-runner-2\",\"linux\",\"0.1.0\",\"smoke-host\"]}"
 ej2=$(curl -sS --max-time 10 -b $SIDE_COOKIES -XPOST "http://127.0.0.1:${WEB}/_rpc" \
-      -H "$JSONH" -d '{"path":"git_pipeline.git_pipeline.enqueue_job","args":[1,"refs/heads/dev","",60]}')
+      -H "$JSONH" -d '{"path":"git_pipeline.git_pipeline.enqueue_job","args":['"$PIPE_REPO"',"refs/heads/dev","",60]}')
 JOB_ID2=$(printf '%s' "$ej2" | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"])' 2>/dev/null)
 curl -sS --max-time 10 -o /dev/null -XPOST "http://127.0.0.1:${WEB}/_rpc" \
      -H "Authorization: Bearer ${RUNNER_TOKEN2}" -H "$JSONH" \
@@ -818,11 +827,256 @@ expect_contains 'runner2 complete_job (own job) → 1' "$cj2" '"result":1'
 # Drive the REAL runner-agent.py once, end to end: a fresh job is queued, the
 # agent leases it, runs the stub build, streams logs, and completes it.
 curl -sS --max-time 10 -o /dev/null -b $SIDE_COOKIES -XPOST "http://127.0.0.1:${WEB}/_rpc" \
-     -H "$JSONH" -d '{"path":"git_pipeline.git_pipeline.enqueue_job","args":[1,"refs/heads/agent","",60]}'
+     -H "$JSONH" -d '{"path":"git_pipeline.git_pipeline.enqueue_job","args":['"$PIPE_REPO"',"refs/heads/agent","",60]}'
 PICOFORGE_RUNNER_TOKEN="$RUNNER_TOKEN" python3 tools/picoforge/runner-agent/runner-agent.py \
     --gateway "http://127.0.0.1:${WEB}" --runner-id "$RUNNER_ID" --once \
     > $RUNNER_LOG 2>&1
 expect_contains 'runner-agent.py drives a job to completion' "$(cat $RUNNER_LOG)" 'completed job'
+
+echo
+echo "[5e] namespace RBAC (issue #30) — group roles, inheritance, site bypass"
+# Everything goes through the gateway /_rpc with the actor's session cookie,
+# exactly like a real client. Roles are minted into the JWT at login from the
+# canonical namespace_members table (point-in-time claims).
+gw_rpc()   { curl -sS --max-time 10 -b "$1" -XPOST "http://127.0.0.1:${WEB}/_rpc" -H 'Content-Type: application/json' -d "$2"; }
+gw_code()  { curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b "$1" -XPOST "http://127.0.0.1:${WEB}/_rpc" -H 'Content-Type: application/json' -d "$2"; }
+rb_uid()   { curl -sS --max-time 10 -b "$1" "http://127.0.0.1:${WEB}/_whoami" | python3 -c 'import sys,json;print(json.load(sys.stdin)["uid"])' 2>/dev/null; }
+rb_result(){ python3 -c 'import sys,json;print(json.load(sys.stdin).get("result",""))' 2>/dev/null; }
+
+# RBAC actors: bob (→developer), erin (→reporter), dave (no role).
+for u in bob erin dave; do
+    curl -sS --max-time 10 -o /dev/null -c "$LOG_DIR/rb-$u.txt" -XPOST "http://127.0.0.1:${WEB}/register" \
+         --data-urlencode "username=$u" --data-urlencode "password=pw-$u"
+done
+# NB: EUID/UID/GID are reserved readonly shell variables — never assign them.
+RUID=$(rb_uid $ROOT_COOKIES); AUID=$(rb_uid $SIDE_COOKIES)
+BOB_UID=$(rb_uid $LOG_DIR/rb-bob.txt); ERIN_UID=$(rb_uid $LOG_DIR/rb-erin.txt); DAVE_UID=$(rb_uid $LOG_DIR/rb-dave.txt)
+
+# (1) Personal-namespace owner manages her own repo: alice creates a repo in HER
+# namespace (developer+ on namespace_path "alice" — she owns it) and pushes a
+# file. Exercises role_scope namespace_path (make) + repo_namespace (put_file).
+amk=$(gw_rpc $SIDE_COOKIES '{"path":"git_repo.git_repo.make","args":['"$AUID"',"alice","rbacrepo"]}')
+# (uses AUID; bob/erin/dave uids: BOB_UID/ERIN_UID/DAVE_UID)
+ARID=$(printf '%s' "$amk" | rb_result)
+expect_contains 'rbac: personal-ns owner creates own repo' "$amk" '"result":[1-9]'
+apush=$(gw_rpc $SIDE_COOKIES '{"path":"git_repo.git_repo.put_file","args":['"$ARID"',"README.md","hi","init","alice","a@x"]}')
+expect_contains 'rbac: personal-ns owner pushes own repo' "$apush" '"result":"[0-9a-f]'
+
+# Root (site owner) builds a group with members, a subgroup, and two repos.
+gw_rpc $ROOT_COOKIES '{"path":"accounts.accounts.ns_create","args":['"$RUID"',"group","acme",""]}' >/dev/null
+mem=$(gw_rpc $ROOT_COOKIES '{"path":"accounts.accounts.ns_add_member","args":["acme",'"$BOB_UID"',"developer"]}')
+expect_contains 'rbac: site-admin grants a group membership' "$mem" '"result":1'
+gw_rpc $ROOT_COOKIES '{"path":"accounts.accounts.ns_add_member","args":["acme",'"$ERIN_UID"',"reporter"]}' >/dev/null
+gw_rpc $ROOT_COOKIES '{"path":"accounts.accounts.ns_create","args":['"$RUID"',"group","platform","acme"]}' >/dev/null
+GAPI=$(gw_rpc $ROOT_COOKIES '{"path":"git_repo.git_repo.make","args":['"$RUID"',"acme","api"]}' | rb_result)
+GSVC=$(gw_rpc $ROOT_COOKIES '{"path":"git_repo.git_repo.make","args":['"$RUID"',"acme/platform","svc"]}' | rb_result)
+
+# Re-login bob/erin so their JWTs pick up the memberships just granted.
+curl -sS --max-time 10 -o /dev/null -c "$LOG_DIR/rb-bob.txt"  -XPOST "http://127.0.0.1:${WEB}/login" --data-urlencode 'username=bob'  --data-urlencode 'password=pw-bob'
+curl -sS --max-time 10 -o /dev/null -c "$LOG_DIR/rb-erin.txt" -XPOST "http://127.0.0.1:${WEB}/login" --data-urlencode 'username=erin' --data-urlencode 'password=pw-erin'
+
+# (2) Group developer can push a group repo.
+bpush=$(gw_rpc $LOG_DIR/rb-bob.txt '{"path":"git_repo.git_repo.put_file","args":['"$GAPI"',"a.txt","x","c","bob","b@x"]}')
+expect_contains 'rbac: group developer pushes group repo' "$bpush" '"result":"[0-9a-f]'
+
+# (3) Group reporter can read but NOT push.
+rcode=$(gw_code $LOG_DIR/rb-erin.txt '{"path":"git_repo.git_repo.read_tree","args":['"$GAPI"',"",""]}')
+[ "$rcode" = "200" ] && note_pass "rbac: group reporter reads group repo (200)" \
+                     || note_fail "rbac: reporter read returned $rcode (want 200)"
+wcode=$(gw_code $LOG_DIR/rb-erin.txt '{"path":"git_repo.git_repo.put_file","args":['"$GAPI"',"z.txt","x","c","erin","e@x"]}')
+[ "$wcode" = "403" ] && note_pass "rbac: group reporter cannot push (403)" \
+                     || note_fail "rbac: reporter push returned $wcode (want 403)"
+
+# (4) Inherited parent-namespace role applies to a subgroup repo: bob is
+# developer on acme, so he pushes acme/platform/svc with no direct grant there.
+ipush=$(gw_rpc $LOG_DIR/rb-bob.txt '{"path":"git_repo.git_repo.put_file","args":['"$GSVC"',"s.txt","x","c","bob","b@x"]}')
+expect_contains 'rbac: inherited parent role applies to subgroup repo' "$ipush" '"result":"[0-9a-f]'
+
+# (5) A user with no namespace role is denied.
+dcode=$(gw_code $LOG_DIR/rb-dave.txt '{"path":"git_repo.git_repo.put_file","args":['"$GAPI"',"d.txt","x","c","dave","d@x"]}')
+[ "$dcode" = "403" ] && note_pass "rbac: user with no namespace role denied (403)" \
+                     || note_fail "rbac: no-role push returned $dcode (want 403)"
+
+# (6) Site owner/maintainer bypass works for namespace-gated writes.
+spush=$(gw_rpc $ROOT_COOKIES '{"path":"git_repo.git_repo.put_file","args":['"$GAPI"',"r.txt","x","c","root","r@x"]}')
+expect_contains 'rbac: site-owner bypass pushes any repo' "$spush" '"result":"[0-9a-f]'
+
+# (7) ns_add_member is itself role-gated: a non-member (dave) cannot grant roles.
+ncode=$(gw_code $LOG_DIR/rb-dave.txt '{"path":"accounts.accounts.ns_add_member","args":["acme",'"$DAVE_UID"',"owner"]}')
+[ "$ncode" = "403" ] && note_pass "rbac: non-member cannot grant namespace roles (403)" \
+                     || note_fail "rbac: outsider ns_add_member returned $ncode (want 403)"
+
+# (8) Public repos are world-readable (allow_public) — even anonymously; a
+# private repo refuses an anonymous read. alice flips her repo public first.
+gw_rpc $SIDE_COOKIES '{"path":"git_repo.git_repo.set_public","args":['"$ARID"',1]}' >/dev/null
+anoncfg='-XPOST http://127.0.0.1:'"${WEB}"'/_rpc -H Content-Type:application/json'
+pubcode=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' $anoncfg -d '{"path":"git_repo.git_repo.read_tree","args":['"$ARID"',"",""]}')
+[ "$pubcode" = "200" ] && note_pass "rbac: anonymous reads a PUBLIC repo (200)" \
+                       || note_fail "rbac: anonymous public read returned $pubcode (want 200)"
+privcode=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' $anoncfg -d '{"path":"git_repo.git_repo.read_tree","args":['"$GAPI"',"",""]}')
+[ "$privcode" = "401" ] && note_pass "rbac: anonymous denied on a PRIVATE repo (401)" \
+                        || note_fail "rbac: anonymous private read returned $privcode (want 401)"
+
+# (9) Canonical authority: a grant on a NONEXISTENT namespace is rejected, and a
+# repo cannot be created under a namespace that was never created.
+gcode=$(gw_code $ROOT_COOKIES '{"path":"accounts.accounts.ns_add_member","args":["ghost",'"$BOB_UID"',"developer"]}')
+[ "$gcode" = "500" ] && note_pass "rbac: grant on nonexistent namespace rejected (500)" \
+                     || note_fail "rbac: grant on ghost namespace returned $gcode (want 500)"
+mcode=$(gw_code $ROOT_COOKIES '{"path":"git_repo.git_repo.make","args":['"$RUID"',"ghostns","r"]}')
+[ "$mcode" = "500" ] && note_pass "rbac: repo under nonexistent namespace rejected (500)" \
+                     || note_fail "rbac: make under ghost namespace returned $mcode (want 500)"
+
+# (10) Claim injection: a slug with comma/colon cannot smuggle a second
+# "<path>:<role>" into the groups claim — rejected by the strict slug grammar.
+icode=$(gw_code $ROOT_COOKIES '{"path":"accounts.accounts.ns_create","args":['"$RUID"',"group","evil,site",""]}')
+[ "$icode" = "500" ] && note_pass "rbac: comma/colon slug injection rejected (500)" \
+                     || note_fail "rbac: injection slug returned $icode (want 500)"
+
+# (11) Anti-squat: a regular (non site-admin) user cannot create a ROOT namespace,
+# so they can't grab a name and strand a future user without ownership.
+scode=$(gw_code $LOG_DIR/rb-bob.txt '{"path":"accounts.accounts.ns_create","args":['"$BOB_UID"',"group","bobsquat",""]}')
+[ "$scode" = "500" ] && note_pass "rbac: non-admin cannot create a root namespace (500)" \
+                     || note_fail "rbac: non-admin root ns_create returned $scode (want 500)"
+
+# (12) Pipeline log reads are namespace-scoped (git_pipeline enforces it): the
+# repo owner can read a job's log; a no-role user cannot (private repo). JOB_ID
+# was run against alice's private repo in [5d].
+if [ -n "${JOB_ID:-}" ]; then
+    alog=$(gw_code $SIDE_COOKIES '{"path":"git_pipeline.git_pipeline.read_log","args":['"$JOB_ID"']}')
+    [ "$alog" = "200" ] && note_pass "rbac: repo owner reads a job log (200)" \
+                        || note_fail "rbac: owner read_log returned $alog (want 200)"
+    dlog=$(gw_code $LOG_DIR/rb-dave.txt '{"path":"git_pipeline.git_pipeline.read_log","args":['"$JOB_ID"']}')
+    [ "$dlog" = "500" ] && note_pass "rbac: no-role user denied a private repo's job log (500)" \
+                        || note_fail "rbac: no-role read_log returned $dlog (want 500)"
+fi
+
+# (13) Legacy lease is a runner-only operation: a signed-in non-runner cannot
+# claim queued jobs (which would starve real runners).
+lcode=$(gw_code $SIDE_COOKIES '{"path":"git_pipeline.git_pipeline.lease","args":[1]}')
+[ "$lcode" = "403" ] && note_pass "rbac: non-runner cannot lease jobs (403)" \
+                     || note_fail "rbac: non-runner lease returned $lcode (want 403)"
+
+# (14) A signed-in user cannot enqueue a pipeline on a repo they have no role on
+# (acme/api is the group repo; dave has no acme role).
+ecode=$(gw_code $LOG_DIR/rb-dave.txt '{"path":"git_pipeline.git_pipeline.enqueue_job","args":['"$GAPI"',"refs/heads/x","",60]}')
+[ "$ecode" = "403" ] && note_pass "rbac: no-role user cannot enqueue a pipeline (403)" \
+                     || note_fail "rbac: no-role enqueue_job returned $ecode (want 403)"
+
+# (15) Per-owner repo listings don't leak across namespaces: the owner lists
+# their own repos; a different signed-in user is denied (no private-name leak).
+olist=$(gw_code $SIDE_COOKIES '{"path":"git_repo.git_repo.list_for_owner","args":['"$AUID"']}')
+[ "$olist" = "200" ] && note_pass "rbac: owner lists own repos (200)" \
+                     || note_fail "rbac: owner list_for_owner returned $olist (want 200)"
+xlist=$(gw_code $LOG_DIR/rb-dave.txt '{"path":"git_repo.git_repo.list_for_owner","args":['"$AUID"']}')
+[ "$xlist" = "500" ] && note_pass "rbac: cross-namespace repo listing denied (500)" \
+                     || note_fail "rbac: cross-namespace list_for_owner returned $xlist (want 500)"
+
+# (16) Repo deletion is maintainer-gated on the repo's namespace.
+twid=$(gw_rpc $SIDE_COOKIES '{"path":"git_repo.git_repo.make","args":['"$AUID"',"alice","throwaway"]}' | rb_result)
+ddel=$(gw_code $LOG_DIR/rb-dave.txt '{"path":"git_repo.git_repo.delete","args":['"$twid"']}')
+[ "$ddel" = "403" ] && note_pass "rbac: non-member cannot delete a repo (403)" \
+                    || note_fail "rbac: non-member delete returned $ddel (want 403)"
+adel=$(gw_rpc $SIDE_COOKIES '{"path":"git_repo.git_repo.delete","args":['"$twid"']}')
+expect_contains 'rbac: repo owner can delete own repo' "$adel" '"result":1'
+
+# (17) Legacy git_pipeline.complete is default-denied at the gateway (absent
+# from policy) AND guarded service-local (runner-owner or maintainer+).
+ccode=$(gw_code $LOG_DIR/rb-dave.txt '{"path":"git_pipeline.git_pipeline.complete","args":[1,0]}')
+[ "$ccode" = "403" ] && note_pass "rbac: legacy complete default-denied at gateway (403)" \
+                     || note_fail "rbac: legacy complete returned $ccode (want 403)"
+
+# (18) token_issuer.mint is fronted UNAUTHENTICATED by the loopback bridge, so it
+# must refuse to forge a privilege-granting JWT (system:internal / site:owner) —
+# otherwise it's an RBAC bypass. A non-privileged runner token stays mintable.
+mforge=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -XPOST "http://127.0.0.1:${BRIDGE}/_rpc" \
+         -H 'Content-Type: application/json' -d '{"path":"token_issuer.token_issuer.mint","args":[9999,"x","system:internal",0]}')
+[ "$mforge" = "500" ] && note_pass "rbac: mint refuses to forge a system:internal JWT (500)" \
+                      || note_fail "rbac: mint system:internal via bridge returned $mforge (want 500)"
+mrun=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -XPOST "http://127.0.0.1:${BRIDGE}/_rpc" \
+       -H 'Content-Type: application/json' -d '{"path":"token_issuer.token_issuer.mint","args":[9999,"r","site:runner,runner:9999",0]}')
+[ "$mrun" = "200" ] && note_pass "rbac: mint still issues a non-privileged runner token (200)" \
+                    || note_fail "rbac: mint runner token returned $mrun (want 200)"
+
+echo
+echo "[5f] webapp admin RBAC management (issue #30) — namespaces + role members"
+# The site-admin RBAC UI in the picoforge webapp ($SIDE). root (site owner) is
+# signed in via $ROOT_COOKIES; the acme group + its members were provisioned in
+# [5e] through the gateway, so the admin pages must surface them.
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/admin/namespaces")
+expect_contains 'webapp GET /admin/namespaces (RBAC admin)'  "$out" '<h1>Namespaces</h1>'
+expect_contains 'admin sidebar has a Namespaces entry'       "$out" 'href="/admin/namespaces"'
+expect_contains 'admin/namespaces lists the site namespace'  "$out" '/admin/namespaces/site'
+expect_contains 'admin/namespaces lists the acme group'      "$out" '/admin/namespaces/acme'
+expect_contains 'admin/namespaces has a create-group form'   "$out" 'action="/admin/namespaces/create"'
+# Drill into the acme group: it must show its members (bob is a developer).
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/admin/namespaces/acme")
+expect_contains 'webapp namespace detail shows the members panel' "$out" 'Grant a role'
+expect_contains 'namespace detail shows a member role'            "$out" 'developer'
+# Create a group through the webapp form, then grant bob a role through it.
+curl -sS --max-time 10 -o /dev/null -b $ROOT_COOKIES -XPOST "http://127.0.0.1:${SIDE}/admin/namespaces/create" \
+     --data-urlencode 'slug=webgroup' --data-urlencode 'parent=' >/dev/null
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/admin/namespaces")
+expect_contains 'webapp create-group form created a namespace' "$out" '/admin/namespaces/webgroup'
+curl -sS --max-time 10 -o /dev/null -b $ROOT_COOKIES -XPOST "http://127.0.0.1:${SIDE}/admin/namespaces/add_member" \
+     --data-urlencode 'path=webgroup' --data-urlencode "uid=${BOB_UID}" --data-urlencode 'role=maintainer' >/dev/null
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/admin/namespaces/webgroup")
+expect_contains 'webapp grant-role form added a member (maintainer)' "$out" 'maintainer'
+# Revoke it again through the webapp form.
+curl -sS --max-time 10 -o /dev/null -b $ROOT_COOKIES -XPOST "http://127.0.0.1:${SIDE}/admin/namespaces/remove_member" \
+     --data-urlencode 'path=webgroup' --data-urlencode "uid=${BOB_UID}" >/dev/null
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/admin/namespaces/webgroup")
+# After revoke the members table holds only the owner (root); bob (the only
+# non-owner) is gone, so no 'maintainer' role row remains in the table.
+mcount=$(printf '%s' "$out" | grep -o "maintainer" | wc -l)
+[ "$mcount" -le 1 ] && note_pass "webapp revoke-role form removed the member" \
+                    || note_fail "webapp revoke did not remove the member (maintainer count=$mcount)"
+# A non-admin (alice) is refused the RBAC admin area.
+code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/admin/namespaces")
+[ "$code" = "403" ] && note_pass "webapp /admin/namespaces refuses a non-admin (403)" \
+                    || note_fail "non-admin /admin/namespaces returned $code (want 403)"
+
+# Namespace-based repo discovery: the GROUP namespace page lists the group's
+# repos (acme/api was created under the acme namespace in [5e]). Before this,
+# the page hashed the account into a uid and found nothing for group repos.
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/acme")
+expect_contains 'webapp group namespace page lists group repos' "$out" '/acme/api'
+# Repo creation offers a NAMESPACE picker (not just personal). bob is a
+# developer on acme, so his /repos/new must offer the acme namespace.
+out=$(curl -sS --max-time 10 -b $LOG_DIR/rb-bob.txt "http://127.0.0.1:${SIDE}/repos/new")
+expect_contains 'webapp /repos/new has a namespace field'    "$out" 'name="namespace"'
+expect_contains 'namespace picker suggests a group bob can push to' "$out" 'value="acme"'
+# bob creates a repo in the acme GROUP through the webapp form.
+curl -sS --max-time 10 -o /dev/null -b $LOG_DIR/rb-bob.txt -XPOST "http://127.0.0.1:${SIDE}/repos/new" \
+     --data-urlencode 'namespace=acme' --data-urlencode 'name=bobweb' >/dev/null
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/acme")
+expect_contains 'group repo created via webapp shows on the namespace page' "$out" '/acme/bobweb'
+# The group repo must list at its NAMESPACE URL on bob's own /repos page (the
+# owner index stores the full path), not at /bob/bobweb.
+out=$(curl -sS --max-time 10 -b $LOG_DIR/rb-bob.txt "http://127.0.0.1:${SIDE}/repos")
+expect_contains "bob's /repos links the group repo at its namespace path" "$out" 'href="/acme/bobweb"'
+# A repo may not be named after a route word (would be unbrowseable nested).
+rcode=$(gw_code $ROOT_COOKIES '{"path":"git_repo.git_repo.make","args":['"$RUID"',"acme","settings"]}')
+[ "$rcode" = "500" ] && note_pass "rbac: reserved repo name 'settings' rejected (500)" \
+                     || note_fail "rbac: reserved repo name returned $rcode (want 500)"
+# Non-admin group management: root owns acme, so /groups lists it and the
+# manage page works; a nested subgroup's repos are discoverable there. Roles are
+# point-in-time JWT claims, so re-login root to pick up the acme ownership it was
+# granted (via ns_create) after its earlier webapp login.
+curl -sS --max-time 10 -o /dev/null -c $ROOT_COOKIES -XPOST "http://127.0.0.1:${SIDE}/login" \
+     --data-urlencode 'username=root' --data-urlencode 'password=rootpw' >/dev/null
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/groups")
+expect_contains 'webapp /groups lists a namespace the user owns' "$out" '/groups/acme'
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/groups/acme/platform")
+expect_contains 'webapp /groups subgroup page lists nested repos' "$out" 'acme/platform/svc'
+# Nested-namespace repos are NAVIGABLE: /acme/platform/svc resolves to repo
+# 'svc' in namespace 'acme/platform' (not parsed as acct=acme/repo=platform).
+code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/acme/platform/svc")
+[ "$code" = "200" ] && note_pass "webapp navigates to a nested-namespace repo (200)" \
+                    || note_fail "nested repo /acme/platform/svc returned $code (want 200)"
+# A non-maintainer (alice) is refused a group management page.
+code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/groups/acme")
+[ "$code" = "403" ] && note_pass "webapp /groups/<ns> refuses a non-maintainer (403)" \
+                    || note_fail "non-maintainer /groups/acme returned $code (want 403)"
 
 echo
 # Persistence proof. The security/rel-db refactor split storage in two:

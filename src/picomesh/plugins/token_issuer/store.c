@@ -246,8 +246,45 @@ struct picomesh_json_result token_issuer_token_issuer_refresh_impl(struct ctx *c
     return out;
 }
 
-/* Low-level mint: a signed access JWT for an already-resolved identity (the
- * gateway's bearer-opaque/runner path). Minting stays in the issuer. */
+/* 1 if `groups_csv` contains a privilege-granting membership that the low-level
+ * mint must never forge: the reserved `system:internal` capability, or any
+ * "<account>:<role>" whose role is on the authorization LADDER (guest..owner).
+ * Runner tokens (e.g. "site:runner,runner:<id>") carry no ladder role, so they
+ * pass; an attempt to mint "system:internal", "site:owner", or "acme:owner"
+ * does not. */
+static int ti_groups_privileged(const char *groups_csv)
+{
+    if (!groups_csv) return 0;
+    if (picomesh_groups_contains(groups_csv, PICOMESH_GROUP_SYSTEM)) return 1;
+    const char *cursor = groups_csv;
+    while (*cursor) {
+        const char *comma = strchr(cursor, ',');
+        size_t span = comma ? (size_t)(comma - cursor) : strlen(cursor);
+        const char *colon = memchr(cursor, ':', span);
+        if (colon) {
+            char role[32];
+            size_t role_len = span - (size_t)(colon - cursor) - 1;
+            if (role_len < sizeof(role)) {
+                memcpy(role, colon + 1, role_len);
+                role[role_len] = 0;
+                if (picomesh_role_rank(role) >= 0) return 1; /* a ladder-role membership */
+            }
+        }
+        if (!comma) break;
+        cursor = comma + 1;
+    }
+    return 0;
+}
+
+/* Low-level mint: a signed access JWT for an already-resolved identity. Its ONLY
+ * legitimate caller is the runner-token exchange (runner_agent.exchange), which
+ * mints non-privileged runner tokens. Because the RBAC model trusts signed JWT
+ * groups, this endpoint must never forge a privilege-granting claim — otherwise
+ * any caller that reaches it (it is default-denied on the public gateway, but
+ * fronted unauthenticated by the loopback operator bridge) could mint itself a
+ * `system:internal` capability or a `site:owner`/namespace-owner membership and
+ * bypass authorization entirely. So it REJECTS any ladder-role or system
+ * membership in `groups_csv`. (issue #30) */
 PICOMESH_CLASS_ANNOTATE("override@token_issuer:token_issuer:token_issuer_mint")
 struct picomesh_string_result token_issuer_token_issuer_mint_impl(struct ctx *ctx, struct object *obj,
                                                                   struct yheaders *hdrs,
@@ -255,6 +292,8 @@ struct picomesh_string_result token_issuer_token_issuer_mint_impl(struct ctx *ct
                                                                   const char *groups_csv, int64_t ttl_seconds)
 {
     (void)ctx; (void)obj; (void)hdrs;
+    if (ti_groups_privileged(groups_csv))
+        return PICOMESH_ERR(picomesh_string, "token_issuer_mint: refusing to mint a privilege-granting token");
     if (ttl_seconds <= 0) ttl_seconds = picomesh_security_access_ttl(picomesh_active_engine());
     return ti_mint_access(uid, username, groups_csv ? groups_csv : "", ttl_seconds);
 }

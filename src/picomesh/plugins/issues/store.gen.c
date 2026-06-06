@@ -15,6 +15,8 @@ __attribute__((unused))
 static issues_issues_list_fn _issues_issues_issues_issues_list_check = issues_issues_list_impl;
 __attribute__((unused))
 static issues_issues_list_all_fn _issues_issues_issues_issues_list_all_check = issues_issues_list_all_impl;
+__attribute__((unused))
+static issues_issues_repo_of_fn _issues_issues_issues_issues_repo_of_check = issues_issues_repo_of_impl;
 
 struct class_ptr_result issues_issues_class_get(void)
 {
@@ -35,6 +37,7 @@ struct class_ptr_result issues_issues_class_get(void)
         {"issues", "issues_count_total", (method_id_t)issues_issues_count_total, (impl_t)issues_issues_count_total_impl},
         {"issues", "issues_list", (method_id_t)issues_issues_list, (impl_t)issues_issues_list_impl},
         {"issues", "issues_list_all", (method_id_t)issues_issues_list_all, (impl_t)issues_issues_list_all_impl},
+        {"issues", "issues_repo_of", (method_id_t)issues_issues_repo_of, (impl_t)issues_issues_repo_of_impl},
     };
     struct class_ptr_result _r =
         class_register(&desc, ops, sizeof(ops) / sizeof(ops[0]),

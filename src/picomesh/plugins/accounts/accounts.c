@@ -25,6 +25,8 @@
 #include <picomesh/yengine/engine.h>
 #include <picomesh/yplatform/time.h>
 #include <picomesh/ycore/idkey.h>
+#include <picomesh/ysecurity/jwt.h>
+#include <picomesh/ysecurity/secret.h>
 #include <picomesh/plugin/relational_storage/relational_sql.h>
 
 #include <stdint.h>
@@ -49,12 +51,41 @@
     "username TEXT PRIMARY KEY, uid INTEGER NOT NULL, " \
     "created_at INTEGER NOT NULL DEFAULT 0, confirmed INTEGER NOT NULL DEFAULT 0)"
 
+/* Namespace authority (issue #30 / docs/security.md "Authorization Domain
+ * Model"). A namespace is the ownership container for repos; a user gets a
+ * personal namespace at register, groups are namespaces too, and groups may
+ * nest into sub-namespaces. `path` is the full slash-joined namespace path
+ * (`acme`, `acme/platform`); `id` is its deterministic FNV-1a hash so callers
+ * agree on the id without a lookup round-trip (same trick git_repo uses for
+ * repo_id). `parent_id` is the hash of the parent path (0 for a root namespace).
+ *
+ * Memberships carry the GitLab role ladder (guest < reporter < developer <
+ * maintainer < owner). They are the canonical source for the JWT `groups`
+ * claim: the token issuer reads a user's memberships at login and flattens them
+ * to "<path>:<role>" strings. Role inheritance through parent namespaces is
+ * resolved at AUTHORIZATION time (the authorizer walks the namespace path), so
+ * only DIRECT grants are stored here. Both tables live in rstore_uid;
+ * `namespaces` shards by hash(path) (point lookups by path), `namespace_members`
+ * shards by uid (a user's memberships co-locate in one shard). */
+#define ACCOUNTS_NS_DDL \
+    "CREATE TABLE IF NOT EXISTS namespaces(" \
+    "id INTEGER PRIMARY KEY, parent_id INTEGER NOT NULL DEFAULT 0, " \
+    "slug TEXT NOT NULL, path TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'user', " \
+    "owner_uid INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0, " \
+    "UNIQUE(path))"
+#define ACCOUNTS_NSMEMBER_DDL \
+    "CREATE TABLE IF NOT EXISTS namespace_members(" \
+    "namespace_id INTEGER NOT NULL, namespace_path TEXT NOT NULL, " \
+    "uid INTEGER NOT NULL, role TEXT NOT NULL DEFAULT 'guest', " \
+    "PRIMARY KEY(namespace_id, uid))"
+
 #define ACCOUNTS_STORE_UID  "rstore_uid"
 #define ACCOUNTS_STORE_NAME "rstore_username"
 
 struct PICOMESH_CLASS_ANNOTATE("class@accounts:accounts") accounts_accounts_data {
     int users_schema_ensured; /* per-worker: `users` created in rstore_uid */
     int names_schema_ensured; /* per-worker: `usernames` created in rstore_username */
+    int ns_schema_ensured;    /* per-worker: namespace tables created in rstore_uid */
 };
 
 static struct accounts_accounts_data *acc(struct object *obj)
@@ -76,6 +107,88 @@ static struct picomesh_void_result accounts_open_names(struct rel_handle *h, str
     struct picomesh_void_result o = rel_open(h, ACCOUNTS_STORE_NAME);
     if (PICOMESH_IS_ERR(o)) return PICOMESH_ERR(picomesh_void, "accounts: open rstore_username failed", o);
     return rel_ensure_schema(h, hdrs, &acc(obj)->names_schema_ensured, ACCOUNTS_NAMES_DDL);
+}
+
+/* Ensure the two namespace tables exist on EVERY shard of rstore_uid (rows
+ * spread by hash(path) / uid, so the tables must exist in each). Guarded by the
+ * per-worker `ns_schema_ensured` flag so it runs at most once. Two CREATEs ⇒
+ * two execs per shard (db_exec runs one statement at a time). */
+static struct picomesh_void_result accounts_ensure_ns_schema(struct rel_handle *h, struct yheaders *hdrs, struct object *obj)
+{
+    if (acc(obj)->ns_schema_ensured) return PICOMESH_OK_VOID();
+    struct picomesh_int_result sc = rel_handle_shard_count(h, hdrs);
+    if (PICOMESH_IS_ERR(sc)) return PICOMESH_ERR(picomesh_void, "accounts: namespace schema shard count failed", sc);
+    int shards = sc.value;
+    uint32_t saved = h->shard;
+    for (int i = 0; i < shards; ++i) {
+        h->shard = (uint32_t)i;
+        struct picomesh_json_result r1 = rel_exec(h, hdrs, ACCOUNTS_NS_DDL, "[]");
+        if (PICOMESH_IS_ERR(r1)) { h->shard = saved; return PICOMESH_ERR(picomesh_void, "accounts: namespaces create failed", r1); }
+        free(r1.value);
+        struct picomesh_json_result r2 = rel_exec(h, hdrs, ACCOUNTS_NSMEMBER_DDL, "[]");
+        if (PICOMESH_IS_ERR(r2)) { h->shard = saved; return PICOMESH_ERR(picomesh_void, "accounts: namespace_members create failed", r2); }
+        free(r2.value);
+    }
+    h->shard = saved;
+    acc(obj)->ns_schema_ensured = 1;
+    return PICOMESH_OK_VOID();
+}
+
+/* Deterministic namespace id: FNV-1a of the full path (0 nudged to 1). The id
+ * is derivable from the path so every node agrees on it without a lookup. */
+static int64_t ns_id_of(const char *path)
+{
+    uint32_t hash = picomesh_fnv1a32(path ? path : "");
+    return (int64_t)(hash ? hash : 1u);
+}
+
+/* Canonical existence check: the namespace_id recorded in the `namespaces`
+ * table for `path`, or 0 if no such namespace exists. The namespaces table —
+ * NOT a derived hash — is the authority, so a grant or a repo can be rejected
+ * when its target namespace was never created. Shards by hash(path). */
+static int64_t ns_lookup(struct rel_handle *h, struct yheaders *hdrs, const char *path)
+{
+    h->shard = picomesh_fnv1a32(path);
+    char *args = rel_args1s(path);
+    int found = 0;
+    int64_t id = rel_query_int(h, hdrs, "SELECT id FROM namespaces WHERE path=?", args, "id", 0, &found);
+    free(args);
+    return found ? id : 0;
+}
+
+/* A single namespace path SEGMENT, validated to a STRICT grammar:
+ * `[A-Za-z0-9._-]`, length 1..63, no leading dot. Identical to git_repo's
+ * path_segment_ok. This is security-critical: namespace paths are serialized
+ * into the comma/colon-delimited JWT `groups` claim ("<path>:<role>,..."), so a
+ * slug containing ',' ':' or ';' could otherwise smuggle a second membership
+ * (e.g. a slug "x,site" would inject "site:owner" into the claim and grant the
+ * site-admin bypass). Restricting the charset to the same safe segment grammar
+ * the repo paths use closes that injection before any namespace can enter a
+ * token claim. */
+static int ns_slug_ok(const char *slug)
+{
+    if (!slug || !*slug || slug[0] == '.') return 0;
+    size_t n = 0;
+    for (const char *p = slug; *p; ++p, ++n) {
+        if (n >= 63) return 0;
+        char c = *p;
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_'))
+            return 0;
+    }
+    /* Reject names that collide with webapp URL route words — both the repo
+     * verbs (so `<ns>/<repo>/<verb>` stays unambiguous) and the top-level page
+     * routes (so a personal namespace can't shadow /admin, /groups, …). A
+     * namespace slug IS a user's path, so this also reserves those usernames
+     * (the GitLab convention). */
+    static const char *const reserved[] = {
+        "issues", "runs", "edit", "new", "settings",
+        "repos", "admin", "groups", "dashboard", "search",
+        "login", "register", "logout", "static",
+    };
+    for (size_t i = 0; i < sizeof(reserved) / sizeof(reserved[0]); ++i)
+        if (strcmp(slug, reserved[i]) == 0) return 0;
+    return 1;
 }
 
 /* Existence of the completed `users` row for `uid`, AS A RESULT. A backend/query
@@ -303,6 +416,11 @@ struct picomesh_int_result accounts_accounts_set_groups_impl(struct ctx *ctx, st
     return PICOMESH_OK(picomesh_int, 1);
 }
 
+/* The user's namespace memberships, flattened to the "<path>:<role>,..." CSV
+ * the token issuer mints into the JWT `groups` claim. Sourced from the canonical
+ * `namespace_members` table (issue #30) — NOT the legacy `users.groups` column,
+ * which is no longer the authority. Inheritance through parent namespaces is
+ * applied later, at authorization time; this returns only direct grants. */
 PICOMESH_CLASS_ANNOTATE("override@accounts:accounts:accounts_groups")
 struct picomesh_string_result accounts_accounts_groups_impl(struct ctx *ctx, struct object *obj,
                                                             struct yheaders *hdrs, uint32_t uid)
@@ -311,15 +429,340 @@ struct picomesh_string_result accounts_accounts_groups_impl(struct ctx *ctx, str
     struct rel_handle h;
     struct picomesh_void_result oh = accounts_open_uid(&h, hdrs, obj);
     if (PICOMESH_IS_ERR(oh)) return PICOMESH_ERR(picomesh_string, "accounts_groups: open failed", oh);
+    struct picomesh_void_result ens = accounts_ensure_ns_schema(&h, hdrs, obj);
+    if (PICOMESH_IS_ERR(ens)) return PICOMESH_ERR(picomesh_string, "accounts_groups: namespace schema failed", ens);
     h.shard = uid;
     char *args = rel_args1i((int64_t)uid);
-    char *groups = rel_query_str(&h, hdrs, "SELECT groups FROM users WHERE uid=?", args, "groups");
+    struct picomesh_json_result rows = rel_query(&h, hdrs,
+        "SELECT namespace_path, role FROM namespace_members WHERE uid=?", args);
     free(args);
-    if (!groups) {
-        char *empty = strdup("");
-        return empty ? PICOMESH_OK(picomesh_string, empty) : PICOMESH_ERR(picomesh_string, "accounts_groups: out of memory");
+    if (PICOMESH_IS_ERR(rows)) return PICOMESH_ERR(picomesh_string, "accounts_groups: query failed", rows);
+
+    struct yjson_doc *doc = yjson_parse(rows.value ? rows.value : "[]", rows.value ? strlen(rows.value) : 2);
+    free(rows.value);
+    if (!doc) return PICOMESH_ERR(picomesh_string, "accounts_groups: malformed members result");
+    const struct yjson_value *arr = yjson_doc_root(doc);
+    size_t n = (arr && yjson_is_array(arr)) ? yjson_array_size(arr) : 0;
+    size_t cap = 64, len = 0;
+    char *out = malloc(cap);
+    if (!out) { yjson_doc_free(doc); return PICOMESH_ERR(picomesh_string, "accounts_groups: out of memory"); }
+    out[0] = 0;
+    for (size_t i = 0; i < n; ++i) {
+        const struct yjson_value *row = yjson_array_at(arr, i);
+        const char *path = yjson_as_string(yjson_object_get(row, "namespace_path"), NULL);
+        const char *role = yjson_as_string(yjson_object_get(row, "role"), NULL);
+        if (!path || !*path || !role || !*role) continue;
+        size_t need = len + (len ? 1 : 0) + strlen(path) + 1 + strlen(role) + 1;
+        if (need > cap) {
+            while (cap < need) cap *= 2;
+            char *grown = realloc(out, cap);
+            if (!grown) { free(out); yjson_doc_free(doc); return PICOMESH_ERR(picomesh_string, "accounts_groups: out of memory"); }
+            out = grown;
+        }
+        len += (size_t)snprintf(out + len, cap - len, "%s%s:%s", len ? "," : "", path, role);
     }
-    return PICOMESH_OK(picomesh_string, groups);
+    yjson_doc_free(doc);
+    return PICOMESH_OK(picomesh_string, out);
+}
+
+/* The caller's verified identity + roles from the JWT in `hdrs`, or
+ * authenticated=0 for an in-process (NULL/empty-JWT) caller. */
+static struct picomesh_authctx ns_caller(struct yheaders *hdrs)
+{
+    struct picomesh_authctx caller;
+    picomesh_authctx_from_headers(hdrs, picomesh_active_engine(), &caller);
+    return caller;
+}
+
+/* 1 if `caller` may administer `path` (grant roles / create subgroups under it):
+ * site admin, or maintainer+ on `path` (inherited). An unauthenticated caller is
+ * an in-process trusted caller (e.g. the register flow) and is allowed. */
+static int ns_caller_admins(const struct picomesh_authctx *caller, const char *path)
+{
+    if (!caller->authenticated) return 0; /* fail closed: no credential, no admin */
+    if (picomesh_groups_contains(caller->groups_csv, PICOMESH_GROUP_SYSTEM)) return 1; /* trusted internal */
+    if (picomesh_groups_max_role(caller->groups_csv, "site") >= picomesh_role_rank("maintainer")) return 1;
+    return picomesh_groups_effective_role(caller->groups_csv, path) >= picomesh_role_rank("maintainer");
+}
+
+/* Create a namespace (issue #30). `parent_path` "" makes a root namespace;
+ * otherwise the new path is `<parent_path>/<slug>` and a subgroup is recorded
+ * with `parent_id` set. `kind` is "user" or "group". Returns the full path.
+ *
+ * Security (privilege-escalation hardening):
+ *   - The owner is the VERIFIED CALLER, never the `owner_uid` argument, except
+ *     for the in-process register flow (no JWT) which passes the new user's uid.
+ *   - The owner membership is granted ONLY when THIS call actually created the
+ *     namespace row (INSERT changes==1). Re-creating an existing namespace
+ *     (e.g. `site`, or another user's namespace) is rejected and grants nothing,
+ *     so a caller cannot mint themselves owner on a namespace they don't own.
+ *   - The reserved `site` namespace cannot be created by an external caller.
+ *   - A subgroup requires its parent to exist AND the caller to be maintainer+
+ *     on the parent (or a site admin). */
+PICOMESH_CLASS_ANNOTATE("override@accounts:accounts:accounts_ns_create")
+struct picomesh_string_result accounts_accounts_ns_create_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                                                               uint32_t owner_uid, const char *kind,
+                                                               const char *slug, const char *parent_path)
+{
+    (void)ctx;
+    if (!ns_slug_ok(slug)) return PICOMESH_ERR(picomesh_string, "accounts_ns_create: invalid slug");
+    if (!kind || !*kind) kind = "group";
+    if (!parent_path) parent_path = "";
+
+    struct picomesh_authctx caller = ns_caller(hdrs);
+    /* FAIL CLOSED: a credential-less caller is never trusted. The gateway's
+     * register/bootstrap path presents an explicit signed `system:internal`
+     * capability instead of relying on the absence of a JWT (issue #30). */
+    if (!caller.authenticated)
+        return PICOMESH_ERR(picomesh_string, "accounts_ns_create: authentication required");
+    int is_system = picomesh_groups_contains(caller.groups_csv, PICOMESH_GROUP_SYSTEM);
+
+    /* ROOT namespace creation is a privileged operation: only the trusted
+     * internal capability (personal-namespace bootstrap at register) or a site
+     * admin may create one. This closes namespace squatting (a regular user
+     * can't grab a root name and strand a future user) and the reserved `site`
+     * escalation. A regular user may still create SUBGROUPS under a namespace
+     * they administer (checked below). The reserved `site` namespace is mintable
+     * ONLY by the internal capability (the first-user bootstrap). */
+    if (!parent_path[0]) {
+        if (!is_system && strcmp(slug, "site") == 0)
+            return PICOMESH_ERR(picomesh_string, "accounts_ns_create: reserved namespace");
+        if (!is_system && picomesh_groups_max_role(caller.groups_csv, "site") < picomesh_role_rank("maintainer"))
+            return PICOMESH_ERR(picomesh_string, "accounts_ns_create: forbidden (root namespace creation is a site-admin operation)");
+    }
+
+    /* The owner is the caller's own uid, EXCEPT for the trusted internal
+     * capability, which acts on behalf of `owner_uid` (a new user at register). */
+    uint32_t owner = is_system ? owner_uid : caller.uid;
+
+    char path[256];
+    int written = parent_path[0] ? snprintf(path, sizeof(path), "%s/%s", parent_path, slug)
+                                 : snprintf(path, sizeof(path), "%s", slug);
+    if (written <= 0 || (size_t)written >= sizeof(path))
+        return PICOMESH_ERR(picomesh_string, "accounts_ns_create: namespace path too long");
+    int64_t nsid = ns_id_of(path);
+    int64_t parent_id = parent_path[0] ? ns_id_of(parent_path) : 0;
+
+    struct rel_handle h;
+    struct picomesh_void_result oh = accounts_open_uid(&h, hdrs, obj);
+    if (PICOMESH_IS_ERR(oh)) return PICOMESH_ERR(picomesh_string, "accounts_ns_create: open failed", oh);
+    struct picomesh_void_result ens = accounts_ensure_ns_schema(&h, hdrs, obj);
+    if (PICOMESH_IS_ERR(ens)) return PICOMESH_ERR(picomesh_string, "accounts_ns_create: namespace schema failed", ens);
+
+    if (parent_path[0]) {
+        if (!ns_lookup(&h, hdrs, parent_path))
+            return PICOMESH_ERR(picomesh_string, "accounts_ns_create: parent namespace does not exist");
+        if (!ns_caller_admins(&caller, parent_path))
+            return PICOMESH_ERR(picomesh_string, "accounts_ns_create: forbidden (need maintainer on parent)");
+    }
+
+    /* Create the namespace row. INSERT OR IGNORE elects exactly one creator: a
+     * losing caller (the row already existed) gets changes==0 and is rejected
+     * WITHOUT a membership grant — the escalation guard. */
+    h.shard = picomesh_fnv1a32(path);
+    struct yjson_writer *nw = yjson_writer_new();
+    yjson_writer_begin_array(nw);
+    yjson_writer_int(nw, nsid);
+    yjson_writer_int(nw, parent_id);
+    yjson_writer_string(nw, slug);
+    yjson_writer_string(nw, path);
+    yjson_writer_string(nw, kind);
+    yjson_writer_int(nw, (int64_t)owner);
+    yjson_writer_int(nw, picomesh_yplatform_time_wall_ms() / 1000);
+    char *nargs = rel_args_take(nw);
+    int nc = rel_exec_changes(&h, hdrs,
+        "INSERT OR IGNORE INTO namespaces(id,parent_id,slug,path,kind,owner_uid,created_at) VALUES(?,?,?,?,?,?,?)", nargs);
+    free(nargs);
+    if (nc < 0) return PICOMESH_ERR(picomesh_string, "accounts_ns_create: namespace insert failed");
+    if (nc == 0) {
+        /* The namespace already exists. IDEMPOTENT for the SAME owner — a retry
+         * of a partially-completed create, or re-ensuring a user's personal
+         * namespace — so it (re)grants the owner membership below. A DIFFERENT
+         * owner means the name is taken by someone else → reject (this is what
+         * makes a registration whose personal-namespace name was grabbed by a
+         * group fail cleanly instead of stranding the account). */
+        h.shard = picomesh_fnv1a32(path);
+        char *qa = rel_args1s(path);
+        int found = 0;
+        int64_t existing_owner =
+            rel_query_int(&h, hdrs, "SELECT owner_uid FROM namespaces WHERE path=?", qa, "owner_uid", -1, &found);
+        free(qa);
+        if (!found) return PICOMESH_ERR(picomesh_string, "accounts_ns_create: namespace owner lookup failed");
+        if ((uint32_t)existing_owner != owner)
+            return PICOMESH_ERR(picomesh_string, "accounts_ns_create: namespace already owned by another");
+        /* same owner → fall through to (re)grant the owner membership */
+    }
+
+    /* The creator (or the same owner re-ensuring) reaches here; the owner grant
+     * is safe and idempotent. */
+    h.shard = owner;
+    struct yjson_writer *mw = yjson_writer_new();
+    yjson_writer_begin_array(mw);
+    yjson_writer_int(mw, nsid);
+    yjson_writer_string(mw, path);
+    yjson_writer_int(mw, (int64_t)owner);
+    yjson_writer_string(mw, "owner");
+    char *margs = rel_args_take(mw);
+    int mc = rel_exec_changes(&h, hdrs,
+        "INSERT OR REPLACE INTO namespace_members(namespace_id,namespace_path,uid,role) VALUES(?,?,?,?)", margs);
+    free(margs);
+    if (mc < 0) return PICOMESH_ERR(picomesh_string, "accounts_ns_create: owner membership insert failed");
+
+    yinfo("accounts_ns_create: %s kind=%s owner=%u", path, kind, owner);
+    char *result = strdup(path);
+    if (!result) return PICOMESH_ERR(picomesh_string, "accounts_ns_create: out of memory");
+    return PICOMESH_OK(picomesh_string, result);
+}
+
+/* Grant (or change) `uid`'s role on the namespace `path` (issue #30). The
+ * namespace MUST already exist in the canonical `namespaces` table — a grant
+ * cannot conjure a namespace into being. The caller must be maintainer+ on the
+ * namespace (or a site admin); the in-process path is trusted. Stores a direct
+ * membership (inheritance is resolved at authz time). Returns 1. */
+PICOMESH_CLASS_ANNOTATE("override@accounts:accounts:accounts_ns_add_member")
+struct picomesh_int_result accounts_accounts_ns_add_member_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                                                                const char *path, uint32_t uid, const char *role)
+{
+    (void)ctx;
+    if (!path || !*path) return PICOMESH_ERR(picomesh_int, "accounts_ns_add_member: path required");
+    if (!role || !*role) role = "guest";
+    if (picomesh_role_rank(role) < 0) return PICOMESH_ERR(picomesh_int, "accounts_ns_add_member: unknown role");
+    struct rel_handle h;
+    struct picomesh_void_result oh = accounts_open_uid(&h, hdrs, obj);
+    if (PICOMESH_IS_ERR(oh)) return PICOMESH_ERR(picomesh_int, "accounts_ns_add_member: open failed", oh);
+    struct picomesh_void_result ens = accounts_ensure_ns_schema(&h, hdrs, obj);
+    if (PICOMESH_IS_ERR(ens)) return PICOMESH_ERR(picomesh_int, "accounts_ns_add_member: namespace schema failed", ens);
+
+    int64_t nsid = ns_lookup(&h, hdrs, path);
+    if (!nsid) return PICOMESH_ERR(picomesh_int, "accounts_ns_add_member: namespace does not exist");
+    struct picomesh_authctx caller = ns_caller(hdrs);
+    if (!ns_caller_admins(&caller, path))
+        return PICOMESH_ERR(picomesh_int, "accounts_ns_add_member: forbidden (need maintainer on namespace)");
+
+    /* The target must be a REAL registered user — uids are the deterministic
+     * hash of a username, so without this a grant could pre-authorize an
+     * arbitrary future uid that silently takes effect when that name registers. */
+    struct picomesh_int_result exists = account_exists(&h, hdrs, uid);
+    if (PICOMESH_IS_ERR(exists)) return PICOMESH_ERR(picomesh_int, "accounts_ns_add_member: account check failed", exists);
+    if (exists.value == 0) return PICOMESH_ERR(picomesh_int, "accounts_ns_add_member: no such user");
+
+    h.shard = uid;
+    struct yjson_writer *mw = yjson_writer_new();
+    yjson_writer_begin_array(mw);
+    yjson_writer_int(mw, nsid);
+    yjson_writer_string(mw, path);
+    yjson_writer_int(mw, (int64_t)uid);
+    yjson_writer_string(mw, role);
+    char *margs = rel_args_take(mw);
+    int mc = rel_exec_changes(&h, hdrs,
+        "INSERT OR REPLACE INTO namespace_members(namespace_id,namespace_path,uid,role) VALUES(?,?,?,?)", margs);
+    free(margs);
+    if (mc < 0) return PICOMESH_ERR(picomesh_int, "accounts_ns_add_member: membership insert failed");
+    yinfo("accounts_ns_add_member: %s uid=%u role=%s", path, uid, role);
+    return PICOMESH_OK(picomesh_int, 1);
+}
+
+/* Resolve a namespace path to its canonical namespace_id (0 if it does not
+ * exist). git_repo calls this at make time to verify the owning namespace
+ * exists and to store the repo's namespace_id reference (issue #30). */
+PICOMESH_CLASS_ANNOTATE("override@accounts:accounts:accounts_ns_resolve")
+struct picomesh_int64_result accounts_accounts_ns_resolve_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                                                               const char *path)
+{
+    (void)ctx;
+    if (!path || !*path) return PICOMESH_OK(picomesh_int64, 0);
+    struct rel_handle h;
+    struct picomesh_void_result oh = accounts_open_uid(&h, hdrs, obj);
+    if (PICOMESH_IS_ERR(oh)) return PICOMESH_ERR(picomesh_int64, "accounts_ns_resolve: open failed", oh);
+    struct picomesh_void_result ens = accounts_ensure_ns_schema(&h, hdrs, obj);
+    if (PICOMESH_IS_ERR(ens)) return PICOMESH_ERR(picomesh_int64, "accounts_ns_resolve: namespace schema failed", ens);
+    return PICOMESH_OK(picomesh_int64, ns_lookup(&h, hdrs, path));
+}
+
+/* Every namespace as `[{"id","parent_id","slug","path","kind","owner_uid"}, …]`,
+ * globally ordered by id. Drives the admin RBAC page (issue #30). Namespaces
+ * shard by hash(path), so this fans out across every shard. */
+PICOMESH_CLASS_ANNOTATE("override@accounts:accounts:accounts_ns_list")
+struct picomesh_json_result accounts_accounts_ns_list_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs)
+{
+    (void)ctx;
+    /* FAIL CLOSED: enumerating the whole tree is a site-admin view, re-checked
+     * here so a non-gateway/bridge path can't read it without auth (issue #30). */
+    struct picomesh_authctx caller = ns_caller(hdrs);
+    int is_system = caller.authenticated && picomesh_groups_contains(caller.groups_csv, PICOMESH_GROUP_SYSTEM);
+    if (!caller.authenticated ||
+        (!is_system && picomesh_groups_max_role(caller.groups_csv, "site") < picomesh_role_rank("maintainer")))
+        return PICOMESH_ERR(picomesh_json, "accounts_ns_list: forbidden (site admin only)");
+    struct rel_handle h;
+    struct picomesh_void_result oh = accounts_open_uid(&h, hdrs, obj);
+    if (PICOMESH_IS_ERR(oh)) return PICOMESH_ERR(picomesh_json, "accounts_ns_list: open failed", oh);
+    struct picomesh_void_result ens = accounts_ensure_ns_schema(&h, hdrs, obj);
+    if (PICOMESH_IS_ERR(ens)) return PICOMESH_ERR(picomesh_json, "accounts_ns_list: namespace schema failed", ens);
+    return rel_query_page(&h, hdrs,
+        "SELECT id,parent_id,slug,path,kind,owner_uid FROM namespaces", "[]", "id", 0, 0, 0);
+}
+
+/* The members of a namespace as `[{"uid","role"}, …]`. Memberships shard by uid,
+ * so a by-path query fans out across every shard. */
+PICOMESH_CLASS_ANNOTATE("override@accounts:accounts:accounts_ns_members")
+struct picomesh_json_result accounts_accounts_ns_members_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                                                              const char *path)
+{
+    (void)ctx;
+    if (!path || !*path) return PICOMESH_ERR(picomesh_json, "accounts_ns_members: path required");
+    struct rel_handle h;
+    struct picomesh_void_result oh = accounts_open_uid(&h, hdrs, obj);
+    if (PICOMESH_IS_ERR(oh)) return PICOMESH_ERR(picomesh_json, "accounts_ns_members: open failed", oh);
+    struct picomesh_void_result ens = accounts_ensure_ns_schema(&h, hdrs, obj);
+    if (PICOMESH_IS_ERR(ens)) return PICOMESH_ERR(picomesh_json, "accounts_ns_members: namespace schema failed", ens);
+    /* FAIL CLOSED: a namespace's members are visible to a maintainer of it (or a
+     * site admin / internal capability) — re-checked here, not just at the
+     * gateway (issue #30). */
+    struct picomesh_authctx caller = ns_caller(hdrs);
+    if (!ns_caller_admins(&caller, path))
+        return PICOMESH_ERR(picomesh_json, "accounts_ns_members: forbidden (need maintainer on namespace)");
+    char *args = rel_args1s(path);
+    /* Join the users table (same uid shard) so the row carries the username —
+     * the management UI can then show members without a separate, admin-only
+     * roster fetch, which is what made the page useless for non-admin
+     * maintainers. */
+    struct picomesh_json_result r = rel_query_page(&h, hdrs,
+        "SELECT m.uid AS uid, m.role AS role, u.username AS username "
+        "FROM namespace_members m LEFT JOIN users u ON u.uid = m.uid "
+        "WHERE m.namespace_path=?", args, "uid", 0, 0, 0);
+    free(args);
+    return r;
+}
+
+/* Revoke `uid`'s membership on the namespace `path` (issue #30). Maintainer+ on
+ * the namespace (or site admin) only — same gate as ns_add_member. Returns 1 if
+ * a membership was removed, 0 if there was none. */
+PICOMESH_CLASS_ANNOTATE("override@accounts:accounts:accounts_ns_remove_member")
+struct picomesh_int_result accounts_accounts_ns_remove_member_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                                                                   const char *path, uint32_t uid)
+{
+    (void)ctx;
+    if (!path || !*path) return PICOMESH_ERR(picomesh_int, "accounts_ns_remove_member: path required");
+    struct rel_handle h;
+    struct picomesh_void_result oh = accounts_open_uid(&h, hdrs, obj);
+    if (PICOMESH_IS_ERR(oh)) return PICOMESH_ERR(picomesh_int, "accounts_ns_remove_member: open failed", oh);
+    struct picomesh_void_result ens = accounts_ensure_ns_schema(&h, hdrs, obj);
+    if (PICOMESH_IS_ERR(ens)) return PICOMESH_ERR(picomesh_int, "accounts_ns_remove_member: namespace schema failed", ens);
+    struct picomesh_authctx caller = ns_caller(hdrs);
+    if (!ns_caller_admins(&caller, path))
+        return PICOMESH_ERR(picomesh_int, "accounts_ns_remove_member: forbidden (need maintainer on namespace)");
+    h.shard = uid;
+    struct yjson_writer *aw = yjson_writer_new();
+    yjson_writer_begin_array(aw);
+    yjson_writer_string(aw, path);
+    yjson_writer_int(aw, (int64_t)uid);
+    char *args = rel_args_take(aw);
+    int changes = rel_exec_changes(&h, hdrs,
+        "DELETE FROM namespace_members WHERE namespace_path=? AND uid=?", args);
+    free(args);
+    if (changes < 0) return PICOMESH_ERR(picomesh_int, "accounts_ns_remove_member: delete failed");
+    yinfo("accounts_ns_remove_member: %s uid=%u removed=%d", path, uid, changes > 0 ? 1 : 0);
+    return PICOMESH_OK(picomesh_int, changes > 0 ? 1 : 0);
 }
 
 /* List registered users as `[{"uid":…,"username":…}, …]` — a plain SELECT. */

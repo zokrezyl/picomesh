@@ -965,6 +965,34 @@ static void register_release_claim(uint32_t uid, const char *uname)
     SVC_CLOSE(acc_rel);
 }
 
+/* Build a short-lived INTERNAL system capability for a trusted gateway
+ * bootstrap call (creating a new user's namespace, the first-user `site`
+ * namespace, the /repos/new repo). It is a JWT the gateway signs itself,
+ * carrying the reserved `system:internal` group and `sub` = the uid the
+ * operation acts for. Backends recognise this group as the explicit
+ * trusted-internal capability, so they can DENY a credential-less call yet
+ * still let the gateway perform bootstrap work — replacing the unsafe
+ * "no JWT means trusted" path. Returns a yheaders the caller frees (NULL on
+ * failure; the caller then fails closed). The capability never leaves the mesh
+ * and is never handed to a client. */
+static struct yheaders *internal_caps(uint32_t uid)
+{
+    struct picomesh_engine *e = picomesh_active_engine();
+    if (!e) return NULL;
+    struct picomesh_string_result secret = picomesh_security_jwt_secret(e);
+    if (PICOMESH_IS_ERR(secret)) { picomesh_error_destroy(secret.error); return NULL; }
+    int64_t now = picomesh_security_now();
+    char *claims = picomesh_jwt_build_claims("picomesh", uid, "system", PICOMESH_GROUP_SYSTEM, now, now + 60);
+    char *jwt = claims ? picomesh_jwt_encode(claims, secret.value) : NULL;
+    free(claims);
+    free(secret.value);
+    if (!jwt) return NULL;
+    struct yheaders *hdrs = yheaders_new();
+    if (hdrs) { yheaders_set_u32(hdrs, "uid", uid); yheaders_set(hdrs, "jwt", jwt); }
+    free(jwt);
+    return hdrs;
+}
+
 /* POST /register — create the account + credential, then start a
  * session and redirect to the user's namespace page. Fails if the
  * username is already taken (so the flow forks cleanly from /login). */
@@ -1061,10 +1089,80 @@ static void route_register_post(struct yloop_stream *s, const char *body,
     }
     SVC_CLOSE(pw_sv);
 
-    /* Step 3 — complete the account: accounts_register writes the `users`
-     * completion marker (after the credential) and confirms the claim. Its
-     * internal INSERT OR IGNORE re-claim is idempotent (we already hold it). On
-     * failure, release the claim (best-effort) so the name is not stranded. */
+    /* Step 3 — the user's personal namespace (`<username>`, kind=user). This is
+     * created BEFORE the account-completion marker and is MANDATORY: its owner
+     * membership becomes the `<username>:owner` JWT claim that drives RBAC, so an
+     * account must never be committed without it (issue #30). ns_create is
+     * idempotent for this owner (a retry re-grants), and rejects if the name is
+     * already a namespace owned by someone else (a group) — in which case the
+     * registration fails cleanly and the claim is released, rather than
+     * stranding a completed account with no namespace. Fail closed: a backend
+     * outage here aborts the registration (no completion marker is written). */
+    struct yheaders *sys_caps = internal_caps(uid);
+    if (!sys_caps) { register_release_claim(uid, uname); render_register(s, "registration temporarily unavailable — try again", keep_alive); return; }
+    SVC_OPEN(acc_ns, "accounts", accounts_accounts_create);
+    if (!acc_ns.ok) { yheaders_free(sys_caps); register_release_claim(uid, uname); render_register(s, "accounts service unreachable", keep_alive); return; }
+    struct picomesh_string_result personal_ns =
+        accounts_accounts_ns_create(&acc_ns.c, acc_ns.obj, sys_caps, uid, "user", uname, "");
+    SVC_CLOSE(acc_ns);
+    yheaders_free(sys_caps);
+    if (PICOMESH_IS_ERR(personal_ns)) {
+        picomesh_error_destroy(personal_ns.error);
+        register_release_claim(uid, uname);
+        render_register(s, "username unavailable (reserved namespace) — try another", keep_alive);
+        return;
+    }
+    free(personal_ns.value);
+
+    /* Step 4 — first-user bootstrap, BEFORE the account-completion marker. The
+     * deployment's site owner is the FIRST registrant: here the count of
+     * COMPLETED accounts is still 0 (our `users` row is not written until step
+     * 5), so `count == 0` identifies the first registrant. The `site` group
+     * namespace is created (with the internal capability) and owned by this
+     * user. Doing it BEFORE accounts_register means a completed account always
+     * implies the bootstrap ran — there is no window where the account is
+     * committed but `site:owner` is missing, and nothing needs rolling back.
+     * Fail closed: a real backend failure aborts the registration with nothing
+     * committed. A concurrent first registrant that lost the race for `site`
+     * (it already exists, owned by another) is NOT the site owner but is still a
+     * valid registration and continues as a regular user. */
+    SVC_OPEN(acc_boot, "accounts", accounts_accounts_create);
+    if (!acc_boot.ok) { register_release_claim(uid, uname); render_register(s, "accounts service unreachable", keep_alive); return; }
+    int first_user = 0;
+    struct picomesh_size_result cr = accounts_accounts_count(&acc_boot.c, acc_boot.obj, NULL);
+    if (PICOMESH_IS_OK(cr)) first_user = (cr.value == 0);
+    else picomesh_error_destroy(cr.error);
+    if (first_user) {
+        struct yheaders *site_caps = internal_caps(uid);
+        if (!site_caps) { SVC_CLOSE(acc_boot); register_release_claim(uid, uname); render_register(s, "registration temporarily unavailable — try again", keep_alive); return; }
+        struct picomesh_string_result site =
+            accounts_accounts_ns_create(&acc_boot.c, acc_boot.obj, site_caps, uid, "group", "site", "");
+        yheaders_free(site_caps);
+        if (PICOMESH_IS_ERR(site)) {
+            picomesh_error_destroy(site.error);
+            /* Distinguish "lost the race" (site already exists → continue) from
+             * a real failure (site absent → fail closed). */
+            struct picomesh_int64_result present =
+                accounts_accounts_ns_resolve(&acc_boot.c, acc_boot.obj, NULL, "site");
+            int site_present = PICOMESH_IS_OK(present) && present.value > 0;
+            if (PICOMESH_IS_ERR(present)) picomesh_error_destroy(present.error);
+            if (!site_present) {
+                SVC_CLOSE(acc_boot);
+                register_release_claim(uid, uname);
+                render_register(s, "registration temporarily unavailable — try again", keep_alive);
+                return;
+            }
+        } else {
+            free(site.value);
+            yinfo("authz: uid=%u bootstrapped as site-owner", uid);
+        }
+    }
+    SVC_CLOSE(acc_boot);
+
+    /* Step 5 — complete the account: accounts_register writes the `users`
+     * completion marker (after the credential, personal namespace, and any
+     * first-user site bootstrap) and confirms the claim. On failure, release
+     * the claim so the name is not stranded. */
     SVC_OPEN(acc, "accounts", accounts_accounts_create);
     if (!acc.ok) { register_release_claim(uid, uname); render_register(s, "accounts service unreachable", keep_alive); return; }
     struct picomesh_int_result reg = accounts_accounts_register(&acc.c, acc.obj, NULL, uid, uname);
@@ -1075,28 +1173,6 @@ static void route_register_post(struct yloop_stream *s, const char *body,
         register_release_claim(uid, uname);
         render_register(s, "username already taken", keep_alive);
         return;
-    }
-
-    /* Assign the account's group memberships, which become the JWT `groups`
-     * claim at login and drive authorization. Every user owns their own
-     * namespace (`<username>:owner`). Bootstrap: the very first registrant —
-     * the only account when the running total is 1 — also becomes the
-     * deployment site-owner (`site:owner`), the same convention GitLab's
-     * `root` uses. This replaces the old raw role:<uid> storage poke. */
-    SVC_OPEN(acc2, "accounts", accounts_accounts_create);
-    if (acc2.ok) {
-        int first_user = 0;
-        struct picomesh_size_result cr = accounts_accounts_count(&acc2.c, acc2.obj, NULL);
-        if (PICOMESH_IS_OK(cr)) first_user = (cr.value == 1);
-        else picomesh_error_destroy(cr.error);
-
-        char groups[160];
-        if (first_user) snprintf(groups, sizeof(groups), "site:owner,%s:owner", uname);
-        else snprintf(groups, sizeof(groups), "%s:owner", uname);
-        struct picomesh_int_result gr = accounts_accounts_set_groups(&acc2.c, acc2.obj, NULL, uid, groups);
-        if (PICOMESH_IS_ERR(gr)) picomesh_error_destroy(gr.error);
-        if (first_user) yinfo("authz: uid=%u bootstrapped as site-owner", uid);
-        SVC_CLOSE(acc2);
     }
 
     const char *err = NULL;
@@ -1301,17 +1377,28 @@ static void route_repos_new_post(struct yloop_stream *s, uint32_t uid,
         return;
     }
 
-    uint32_t rid = repo_register(uname, name, uid);
-    if (!rid) { send_redirect(s, "/repos", keep_alive, NULL); return; }
-
-    /* Mirror the binding into git_repo so its count_total reflects
-     * reality AND a bare repo lands on disk under the per-user
-     * parent dir (<repos_dir>/<uname>/<name>.git). */
+    /* Create the real repo FIRST and require it to SUCCEED: git_repo.make
+     * validates the owning namespace exists and applies authorization. Only
+     * after it lands do we mirror the binding into the legacy registry and
+     * redirect — so a failed make never leaves stale registry metadata/counts
+     * nor redirects as if the repo exists. */
+    int made = 0;
+    struct yheaders *sys_caps = internal_caps(uid);
     SVC_OPEN(repo, "git_repo", git_repo_git_repo_create);
-    if (repo.ok) {
-        git_repo_git_repo_make(&repo.c, repo.obj, NULL, uid, uname, name);
+    if (repo.ok && sys_caps) {
+        struct picomesh_uint32_result mk =
+            git_repo_git_repo_make(&repo.c, repo.obj, sys_caps, uid, uname, name);
+        made = PICOMESH_IS_OK(mk) && mk.value != 0;
+        if (PICOMESH_IS_ERR(mk)) picomesh_error_destroy(mk.error);
+        SVC_CLOSE(repo);
+    } else if (repo.ok) {
         SVC_CLOSE(repo);
     }
+    if (sys_caps) yheaders_free(sys_caps);
+    if (!made) { send_redirect(s, "/repos", keep_alive, NULL); return; }
+
+    uint32_t rid = repo_register(uname, name, uid);
+    if (!rid) { send_redirect(s, "/repos", keep_alive, NULL); return; }
 
     char where[128];
     snprintf(where, sizeof(where), "/%s/%s", uname, name);
@@ -1813,6 +1900,33 @@ static void route_whoami(struct yloop_stream *s,
     yjson_writer_key(w, "uid");      yjson_writer_int(w, (int64_t)caller.uid);
     yjson_writer_key(w, "username"); yjson_writer_string(w, caller.username);
     yjson_writer_key(w, "is_admin"); yjson_writer_bool(w, admin);
+    /* The caller's own namespace memberships ("<path>:<role>") as
+     * [{"path","role"}, …] — non-secret self data (issue #30). The webapp uses
+     * it to offer a repo-creation namespace picker and a group-management area;
+     * it never carries a JWT. */
+    yjson_writer_key(w, "namespaces");
+    yjson_writer_begin_array(w);
+    for (const char *cursor = caller.groups_csv; cursor && *cursor; ) {
+        const char *comma = strchr(cursor, ',');
+        size_t span = comma ? (size_t)(comma - cursor) : strlen(cursor);
+        const char *colon = memchr(cursor, ':', span);
+        if (colon) {
+            size_t path_len = (size_t)(colon - cursor);
+            size_t role_len = span - path_len - 1;
+            char ns_path[256], ns_role[32];
+            if (path_len < sizeof(ns_path) && role_len < sizeof(ns_role)) {
+                memcpy(ns_path, cursor, path_len); ns_path[path_len] = 0;
+                memcpy(ns_role, colon + 1, role_len); ns_role[role_len] = 0;
+                yjson_writer_begin_object(w);
+                yjson_writer_key(w, "path"); yjson_writer_string(w, ns_path);
+                yjson_writer_key(w, "role"); yjson_writer_string(w, ns_role);
+                yjson_writer_end_object(w);
+            }
+        }
+        if (!comma) break;
+        cursor = comma + 1;
+    }
+    yjson_writer_end_array(w);
     yjson_writer_end_object(w);
     size_t len;
     const char *data = yjson_writer_data(w, &len);

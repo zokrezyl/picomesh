@@ -8,11 +8,17 @@ static git_repo_git_repo_delete_fn _git_repo_git_repo_git_repo_git_repo_delete_c
 __attribute__((unused))
 static git_repo_git_repo_owner_of_fn _git_repo_git_repo_git_repo_git_repo_owner_of_check = git_repo_git_repo_owner_of_impl;
 __attribute__((unused))
+static git_repo_git_repo_namespace_of_fn _git_repo_git_repo_git_repo_git_repo_namespace_of_check = git_repo_git_repo_namespace_of_impl;
+__attribute__((unused))
 static git_repo_git_repo_count_for_owner_fn _git_repo_git_repo_git_repo_git_repo_count_for_owner_check = git_repo_git_repo_count_for_owner_impl;
 __attribute__((unused))
 static git_repo_git_repo_count_total_fn _git_repo_git_repo_git_repo_git_repo_count_total_check = git_repo_git_repo_count_total_impl;
 __attribute__((unused))
 static git_repo_git_repo_list_for_owner_fn _git_repo_git_repo_git_repo_git_repo_list_for_owner_check = git_repo_git_repo_list_for_owner_impl;
+__attribute__((unused))
+static git_repo_git_repo_list_for_namespace_fn _git_repo_git_repo_git_repo_git_repo_list_for_namespace_check = git_repo_git_repo_list_for_namespace_impl;
+__attribute__((unused))
+static git_repo_git_repo_count_for_namespace_fn _git_repo_git_repo_git_repo_git_repo_count_for_namespace_check = git_repo_git_repo_count_for_namespace_impl;
 __attribute__((unused))
 static git_repo_git_repo_read_tree_fn _git_repo_git_repo_git_repo_git_repo_read_tree_check = git_repo_git_repo_read_tree_impl;
 __attribute__((unused))
@@ -43,9 +49,12 @@ struct class_ptr_result git_repo_git_repo_class_get(void)
         {"git_repo", "git_repo_make", (method_id_t)git_repo_git_repo_make, (impl_t)git_repo_git_repo_make_impl},
         {"git_repo", "git_repo_delete", (method_id_t)git_repo_git_repo_delete, (impl_t)git_repo_git_repo_delete_impl},
         {"git_repo", "git_repo_owner_of", (method_id_t)git_repo_git_repo_owner_of, (impl_t)git_repo_git_repo_owner_of_impl},
+        {"git_repo", "git_repo_namespace_of", (method_id_t)git_repo_git_repo_namespace_of, (impl_t)git_repo_git_repo_namespace_of_impl},
         {"git_repo", "git_repo_count_for_owner", (method_id_t)git_repo_git_repo_count_for_owner, (impl_t)git_repo_git_repo_count_for_owner_impl},
         {"git_repo", "git_repo_count_total", (method_id_t)git_repo_git_repo_count_total, (impl_t)git_repo_git_repo_count_total_impl},
         {"git_repo", "git_repo_list_for_owner", (method_id_t)git_repo_git_repo_list_for_owner, (impl_t)git_repo_git_repo_list_for_owner_impl},
+        {"git_repo", "git_repo_list_for_namespace", (method_id_t)git_repo_git_repo_list_for_namespace, (impl_t)git_repo_git_repo_list_for_namespace_impl},
+        {"git_repo", "git_repo_count_for_namespace", (method_id_t)git_repo_git_repo_count_for_namespace, (impl_t)git_repo_git_repo_count_for_namespace_impl},
         {"git_repo", "git_repo_read_tree", (method_id_t)git_repo_git_repo_read_tree, (impl_t)git_repo_git_repo_read_tree_impl},
         {"git_repo", "git_repo_read_file", (method_id_t)git_repo_git_repo_read_file, (impl_t)git_repo_git_repo_read_file_impl},
         {"git_repo", "git_repo_put_file", (method_id_t)git_repo_git_repo_put_file, (impl_t)git_repo_git_repo_put_file_impl},

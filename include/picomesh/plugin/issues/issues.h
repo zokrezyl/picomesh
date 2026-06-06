@@ -29,6 +29,7 @@ struct picomesh_size_result issues_issues_count_open_in_repo(struct ctx * ctx, s
 struct picomesh_size_result issues_issues_count_total(struct ctx * ctx, struct object * obj, struct yheaders * hdrs);
 struct picomesh_json_result issues_issues_list(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, int64_t offset, int64_t limit);
 struct picomesh_json_result issues_issues_list_all(struct ctx * ctx, struct object * obj, struct yheaders * hdrs);
+struct picomesh_uint32_result issues_issues_repo_of(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t issue_id);
 
 /* ---- activation ---- */
 void picomesh_plugin_issues_register(void);
