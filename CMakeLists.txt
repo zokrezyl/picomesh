@@ -301,7 +301,10 @@ add_executable(picomesh
     ${PICOMESH_PLUGIN_OBJECTS}
     src/picomesh/yplatform/longjmp_chk_stub.c)
 add_dependencies(picomesh picomesh_ymain ${PICOMESH_PLUGIN_TARGETS})
-target_link_libraries(picomesh PRIVATE picomesh_runtime sqlite3 libmdbx libgit2)
+# Plugins are consumed as raw $<TARGET_OBJECTS:>, so their PUBLIC link deps do
+# NOT propagate — the plugin objects' external libs must be named here too
+# (libgit2 for git_repo, libcurl for github_authn's GitHub OAuth HTTPS calls).
+target_link_libraries(picomesh PRIVATE picomesh_runtime sqlite3 libmdbx libgit2 libcurl)
 
 # ---- picoforge-webapp (standalone HTML web app) --------------------------
 #

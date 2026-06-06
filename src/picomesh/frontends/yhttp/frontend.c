@@ -914,6 +914,7 @@ static int auth_and_start_session(uint32_t uid, const char *username, int64_t pw
 static void register_release_claim(uint32_t uid, const char *uname);
 static struct yheaders *internal_caps(uint32_t uid);
 static void send_json_error(struct yloop_stream *s, int status, const char *message, int keep_alive);
+static int header_value(const char *raw, size_t raw_len, const char *name, char *out, size_t out_cap);
 
 static int oauth_start_session(uint32_t uid, const char *username,
                                char *tok_out, size_t tok_cap,
@@ -1060,14 +1061,37 @@ static int ensure_oauth_account(uint32_t uid, const char *uname, const char **er
     return 1;
 }
 
-static void route_github_callback_post(struct yloop_stream *s, const char *body,
-                                       size_t body_len, int keep_alive)
+static void route_github_callback_post(struct yloop_stream *s,
+                                       const char *headers_raw, size_t headers_raw_len,
+                                       const char *body, size_t body_len, int keep_alive)
 {
-    char code[512] = {0}, redirect_uri[1024] = {0};
+    /* CSRF gate. The picoforge webapp validates the OAuth `state` cookie before
+     * relaying here, but that check lives in the browser-facing tier; a request
+     * sent straight to this gateway endpoint would bypass it (login-CSRF). The
+     * webapp relay marks itself with a custom Content-Type that a browser cannot
+     * forge cross-site: a cross-site <form> may only send the three "simple"
+     * content types, and a cross-origin fetch declaring this type triggers a
+     * CORS preflight this API-only gateway never answers. So a request without
+     * it is not the trusted webapp relay — refuse it. (Keep the literal in sync
+     * with the webapp: src/picoforge/webapp/webapp.c route_github_callback.) */
+    char content_type[96] = {0};
+    if (!header_value(headers_raw, headers_raw_len, "content-type", content_type, sizeof(content_type)) ||
+        strcmp(content_type, "application/x-picoforge-oauth-relay") != 0) {
+        send_json_error(s, 403, "github callback: not an authorized relay", keep_alive);
+        return;
+    }
+
+    char code[512] = {0}, redirect_uri[1024] = {0}, state[256] = {0};
     if (!form_get(body, body_len, "code", code, sizeof(code)) ||
         !form_get(body, body_len, "redirect_uri", redirect_uri, sizeof(redirect_uri)) ||
         !code[0] || !redirect_uri[0]) {
         send_json_error(s, 400, "github callback: missing code or redirect_uri", keep_alive);
+        return;
+    }
+    /* The relay always forwards the state it validated; its absence marks a
+     * caller that did not go through the webapp's state check. */
+    if (!form_get(body, body_len, "state", state, sizeof(state)) || !state[0]) {
+        send_json_error(s, 403, "github callback: missing OAuth state", keep_alive);
         return;
     }
 
@@ -2576,7 +2600,7 @@ int yhttp_frontend_try(struct yloop_stream *s,
      * static fallthrough have been removed (the frontend app renders every
      * page, sourcing data from this gateway over /_rpc + /_describe). ---- */
     if (is_post && path_eq(path, "/login"))    { route_login_post(s, body, body_len, keep_alive); return 1; }
-    if (is_post && path_eq(path, "/auth/github/callback")) { route_github_callback_post(s, body, body_len, keep_alive); return 1; }
+    if (is_post && path_eq(path, "/auth/github/callback")) { route_github_callback_post(s, headers_raw, headers_raw_len, body, body_len, keep_alive); return 1; }
     if (is_post && path_eq(path, "/register")) { route_register_post(s, body, body_len, keep_alive); return 1; }
     if (is_post && path_eq(path, "/logout"))   { route_logout(s, headers_raw, headers_raw_len, keep_alive); return 1; }
 

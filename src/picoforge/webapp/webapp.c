@@ -712,6 +712,8 @@ static void route_github_callback(struct yloop *loop, struct yloop_stream *s,
         route_login_get_with_error(s, "GitHub OAuth state did not match", keep_alive);
         return;
     }
+    char enc_state[160];
+    urlenc(enc_state, sizeof(enc_state), state);
     free(state); free(state_cookie);
     if (!code || !*code) { free(code); route_login_get_with_error(s, "GitHub did not return an OAuth code", keep_alive); return; }
     char redirect[1024], enc_code[1024], enc_redirect[1400];
@@ -720,12 +722,21 @@ static void route_github_callback(struct yloop *loop, struct yloop_stream *s,
     urlenc(enc_redirect, sizeof(enc_redirect), redirect);
     free(code);
     char body[2600];
-    int bn = snprintf(body, sizeof(body), "code=%s&redirect_uri=%s", enc_code, enc_redirect);
+    int bn = snprintf(body, sizeof(body), "code=%s&redirect_uri=%s&state=%s",
+                      enc_code, enc_redirect, enc_state);
     if (bn <= 0 || (size_t)bn >= sizeof(body)) { route_login_get_with_error(s, "GitHub callback is too large", keep_alive); return; }
 
+    /* The gateway's /auth/github/callback ONLY accepts this custom Content-Type.
+     * A browser cross-site form POST is limited to the three "simple" content
+     * types, and a cross-origin fetch declaring this type triggers a CORS
+     * preflight the API-only gateway never answers — so only this server-side
+     * relay (which has already validated the state cookie above) can reach the
+     * gateway handler. That closes the login-CSRF surface of a callback POST
+     * sent straight to the gateway to bypass this state check. Keep the literal
+     * in sync with the gateway (frontend.c route_github_callback_post). */
     struct http_response resp;
     int rc = http_post(loop, &sud->gw, "/auth/github/callback",
-                       "application/x-www-form-urlencoded", NULL, NULL, body, (size_t)bn, &resp);
+                       "application/x-picoforge-oauth-relay", NULL, NULL, body, (size_t)bn, &resp);
     if (rc != 0) { http_response_free(&resp); route_login_get_with_error(s, "gateway unreachable", keep_alive); return; }
     if (resp.status == 303 && resp.set_cookie[0]) {
         char sid[80] = {0};

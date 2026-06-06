@@ -430,6 +430,66 @@ def test_mint_cannot_forge_a_privileged_jwt(mesh):
         f"mint should still issue a non-privileged runner token: {body}"
 
 
+def test_mint_bypass_is_internal_only(actors):
+    """The token_issuer mint bypass lets ONLY an internal `system:internal`
+    caller forge a privilege-granting JWT, and that caller exists solely inside
+    the gateway process (internal_caps, used by oauth_start_session and the
+    first-user bootstrap). This proves the two halves of that contract:
+
+      1. mint is absent from the gateway policy, so it is unreachable to EVERY
+         external gateway caller — even the site owner is denied at the boundary
+         (the unauthenticated-bridge case is covered by
+         test_mint_cannot_forge_a_privileged_jwt). There is no external surface
+         on which to present a `system:internal` JWT, so the bypass cannot be
+         driven from outside.
+      2. the internal bypass genuinely works: the bootstrap minted the first
+         account a real `site:owner` JWT (mint would have refused that
+         privileged claim without internal caps), so root wields site-admin
+         authority a no-role user cannot.
+    """
+    # (1) mint is not an external surface — denied for every gateway caller,
+    #     privileged identity (root) included.
+    for caller in ("root", "dave"):
+        for forged in ("system:internal", "site:owner", "acme:owner"):
+            assert actors[caller].code(
+                "token_issuer.token_issuer.mint",
+                [actors[caller].uid, caller, forged, 0]) != 200, \
+                f"gateway exposed mint to {caller} for groups={forged!r}"
+
+    # (2) the internal-caps mint really did issue root a working site:owner JWT
+    #     (ns_list is site-admin-only — see test_ns_list_is_site_admin_only).
+    assert actors["root"].code("accounts.accounts.ns_list", []) == 200
+    assert actors["dave"].code("accounts.accounts.ns_list", []) != 200
+
+
+def test_github_callback_requires_webapp_relay_marker(mesh):
+    """The gateway's /auth/github/callback is the OAuth login sink. The webapp
+    validates the OAuth `state` cookie before relaying, but that check lives in
+    the browser tier; a request sent straight to the gateway would bypass it
+    (login-CSRF). The webapp relay marks itself with a custom Content-Type a
+    browser cannot forge cross-site (a cross-site form is limited to the three
+    "simple" types; a cross-origin fetch declaring this type triggers a CORS
+    preflight the API-only gateway never answers). The gateway rejects anything
+    else BEFORE doing any code exchange."""
+    body = b"code=x&redirect_uri=https%3A%2F%2Fe.example%2Fcb&state=s"
+
+    def _callback(content_type):
+        req = urllib.request.Request(mesh.gateway + "/auth/github/callback",
+                                     data=body, method="POST",
+                                     headers={"Content-Type": content_type})
+        try:
+            return urllib.request.urlopen(req, timeout=10).status
+        except urllib.error.HTTPError as exc:
+            return exc.code
+
+    # A cross-site form's content type is refused at the CSRF gate, never
+    # reaching the code exchange.
+    assert _callback("application/x-www-form-urlencoded") == 403
+    # The relay's custom type clears the gate; the request then fails downstream
+    # (no GitHub credentials configured) — anything but the 403 CSRF rejection.
+    assert _callback("application/x-picoforge-oauth-relay") != 403
+
+
 def test_ns_members_requires_maintainer_and_carries_usernames(actors):
     """ns_members is fail-closed (maintainer+ on the namespace), and the rows
     carry the username (joined server-side) so the UI needs no admin roster."""
