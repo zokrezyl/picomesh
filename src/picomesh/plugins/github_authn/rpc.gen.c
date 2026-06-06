@@ -16,6 +16,87 @@
 #include <stdlib.h>
 #include <string.h>
 
+static size_t github_authn_github_authn_exchange_code_skel(const void *_body, size_t _body_len,
+                          void *_resp, size_t _resp_max)
+{
+    size_t _off = 0;
+    struct ctx _local = {0};
+    /* The framework header section is first on every CALL body — parse
+     * it back into the `hdrs` argument before the packed business args. */
+    struct yheaders *_hdrs = NULL;
+    {
+        size_t _hconsumed = 0;
+        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
+        if (!_hdrs) goto _short_body;
+        _off = _hconsumed;
+    }
+    struct object *_obj = NULL;
+    {
+        if (_off + 8 > _body_len) goto _short_body;
+        uint64_t _h;
+        memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
+        _obj = (struct object *)rpc_handle_resolve(_h);
+    }
+    char _s1[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s1)) goto _short_body;
+        if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
+        _s1[_slen] = 0; _off += _slen;
+    }
+    char _s2[4096];
+    {
+        if (_off + 4 > _body_len) goto _short_body;
+        uint32_t _slen;
+        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
+        if (_off + _slen > _body_len) goto _short_body;
+        if (_slen >= sizeof(_s2)) goto _short_body;
+        if (_slen) memcpy(_s2, (const uint8_t *)_body + _off, _slen);
+        _s2[_slen] = 0; _off += _slen;
+    }
+    struct ytelemetry_span _tsp;
+    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.github_authn_github_authn_exchange_code");
+    struct picomesh_json_result _r = github_authn_github_authn_exchange_code(&_local, _obj, _hdrs, _s1, _s2);
+    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
+    yheaders_free(_hdrs); _hdrs = NULL;
+    if (_resp_max < 1) return 0;
+    if (PICOMESH_IS_ERR(_r)) {
+        char _errbuf[8192] = {0};
+        picomesh_error_snprint(_errbuf, sizeof(_errbuf), _r.error);
+        const char *_msg = _errbuf[0] ? _errbuf : (_r.error.msg ? _r.error.msg : "(no msg)");
+        uint32_t _ml = (uint32_t)strlen(_msg);
+        if (_resp_max <= 5) _ml = 0;
+        else if (_ml > _resp_max - 5) _ml = (uint32_t)(_resp_max - 5);
+        if (_resp_max < 1 + 4 + _ml) {
+            picomesh_error_destroy(_r.error);
+            ((uint8_t *)_resp)[0] = 1;
+            return _resp_max >= 1 ? 1 : 0;
+        }
+        ((uint8_t *)_resp)[0] = 1;
+        memcpy((uint8_t *)_resp + 1, &_ml, 4);
+        memcpy((uint8_t *)_resp + 5, _msg, _ml);
+        picomesh_error_destroy(_r.error);
+        return 1 + 4 + _ml;
+    }
+    {
+        const char *_sv = _r.value ? _r.value : "";
+        uint32_t _svlen = (uint32_t)strlen(_sv);
+        if (_resp_max < 1 + 4 + (size_t)_svlen) { free(_r.value); return 0; }
+        ((uint8_t *)_resp)[0] = 0;
+        memcpy((uint8_t *)_resp + 1, &_svlen, 4);
+        if (_svlen) memcpy((uint8_t *)_resp + 5, _sv, _svlen);
+        free(_r.value);
+        return 1 + 4 + (size_t)_svlen;
+    }
+_short_body:
+    yheaders_free(_hdrs);
+    if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
+    return _resp_max >= 1 ? 1 : 0;
+}
+
 static size_t github_authn_github_authn_set_credentials_skel(const void *_body, size_t _body_len,
                           void *_resp, size_t _resp_max)
 {
@@ -386,6 +467,28 @@ _short_body:
     return _resp_max >= 1 ? 1 : 0;
 }
 
+static int github_authn_github_authn_exchange_code_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          const struct yjson_value *args,
+                          struct yjson_writer *result, char *err, size_t err_cap)
+{
+    const char *arg0 = yjson_as_string(yjson_array_at(args, 0), "");
+    const char *arg1 = yjson_as_string(yjson_array_at(args, 1), "");
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_json_result call_result = github_authn_github_authn_exchange_code(call_ctx, obj, hdrs, arg0, arg1);
+    if (PICOMESH_IS_ERR(call_result)) {
+        char chain[8192] = {0};
+        picomesh_error_snprint(chain, sizeof(chain), call_result.error);
+        snprintf(err, err_cap, "%s: %s", "github_authn_github_authn_exchange_code",
+                 chain[0] ? chain : (call_result.error.msg ? call_result.error.msg : "<no message>"));
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    yjson_writer_raw(result, call_result.value ? call_result.value : "null");
+    free(call_result.value);
+    return 0;
+}
+
 static int github_authn_github_authn_set_credentials_jinvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
                           const struct yjson_value *args,
                           struct yjson_writer *result, char *err, size_t err_cap)
@@ -506,6 +609,50 @@ static int github_authn_github_authn_list_all_jinvoke(struct ctx *ctx, struct ob
     }
     yjson_writer_raw(result, call_result.value ? call_result.value : "null");
     free(call_result.value);
+    return 0;
+}
+
+static int github_authn_github_authn_exchange_code_minvoke(struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+                          cmp_ctx_t *_mr, uint32_t _argc, cmp_ctx_t *_mw,
+                          char *_err, size_t _err_cap)
+{
+    (void)_mr;
+    if (_argc != 2u) {
+        snprintf(_err, _err_cap, "github_authn_github_authn_exchange_code: expected 2 arg(s), got %u", _argc);
+        return -1;
+    }
+    char _v0[4096];
+    {
+        uint32_t _sz = (uint32_t)sizeof(_v0);
+        if (!cmp_read_str(_mr, _v0, &_sz)) {
+            snprintf(_err, _err_cap, "code: expected str arg (%s)", cmp_strerror(_mr));
+            return -1;
+        }
+    }
+    char _v1[4096];
+    {
+        uint32_t _sz = (uint32_t)sizeof(_v1);
+        if (!cmp_read_str(_mr, _v1, &_sz)) {
+            snprintf(_err, _err_cap, "redirect_uri: expected str arg (%s)", cmp_strerror(_mr));
+            return -1;
+        }
+    }
+    struct ctx local_ctx = {0};
+    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+    struct picomesh_json_result call_result = github_authn_github_authn_exchange_code(call_ctx, obj, hdrs, _v0, _v1);
+    if (PICOMESH_IS_ERR(call_result)) {
+        char chain[8192] = {0};
+        picomesh_error_snprint(chain, sizeof(chain), call_result.error);
+        snprintf(_err, _err_cap, "%s: %s", "github_authn_github_authn_exchange_code",
+                 chain[0] ? chain : (call_result.error.msg ? call_result.error.msg : "<no message>"));
+        picomesh_error_destroy(call_result.error);
+        return -1;
+    }
+    {
+        const char *_sv = call_result.value ? call_result.value : "";
+        cmp_write_str(_mw, _sv, (uint32_t)strlen(_sv));
+        free(call_result.value);
+    }
     return 0;
 }
 
@@ -717,6 +864,7 @@ struct object_ptr_result github_authn_github_authn_create(struct ctx *ctx)
 struct github_authn_jinvoke_row { const char *name; jinvoke_fn fn; };
 
 static const struct github_authn_jinvoke_row github_authn_jinvoke_rows[] = {
+    {"github_authn_github_authn_exchange_code", github_authn_github_authn_exchange_code_jinvoke},
     {"github_authn_github_authn_set_credentials", github_authn_github_authn_set_credentials_jinvoke},
     {"github_authn_github_authn_register_code", github_authn_github_authn_register_code_jinvoke},
     {"github_authn_github_authn_resolve", github_authn_github_authn_resolve_jinvoke},
@@ -739,6 +887,7 @@ static jinvoke_fn github_authn_jinvoke_lookup(const char *qname)
 struct github_authn_minvoke_row { const char *name; minvoke_fn fn; };
 
 static const struct github_authn_minvoke_row github_authn_minvoke_rows[] = {
+    {"github_authn_github_authn_exchange_code", github_authn_github_authn_exchange_code_minvoke},
     {"github_authn_github_authn_set_credentials", github_authn_github_authn_set_credentials_minvoke},
     {"github_authn_github_authn_register_code", github_authn_github_authn_register_code_minvoke},
     {"github_authn_github_authn_resolve", github_authn_github_authn_resolve_minvoke},
@@ -758,6 +907,10 @@ static minvoke_fn github_authn_minvoke_lookup(const char *qname)
 
 /* ---- github_authn: per-method parameter signatures (runtime reflection) -- */
 
+static const struct jinvoke_param github_authn_github_authn_exchange_code_params[] = {
+    {"code", "const char *"},
+    {"redirect_uri", "const char *"}
+};
 static const struct jinvoke_param github_authn_github_authn_set_credentials_params[] = {
     {"client_id", "uint32_t"},
     {"secret_id", "uint32_t"}
@@ -776,6 +929,7 @@ static const struct jinvoke_param github_authn_github_authn_list_params[] = {
 struct github_authn_params_row { const char *name; struct jinvoke_params params; };
 
 static const struct github_authn_params_row github_authn_params_rows[] = {
+    {"github_authn_github_authn_exchange_code", {github_authn_github_authn_exchange_code_params, 2}},
     {"github_authn_github_authn_set_credentials", {github_authn_github_authn_set_credentials_params, 2}},
     {"github_authn_github_authn_register_code", {github_authn_github_authn_register_code_params, 2}},
     {"github_authn_github_authn_resolve", {github_authn_github_authn_resolve_params, 1}},
@@ -805,6 +959,7 @@ static struct class_ptr_result github_authn_accessor_lookup(const char *name)
 struct github_authn_skel_row { const char *name; rpc_skel_fn fn; };
 
 static const struct github_authn_skel_row github_authn_skel_rows[] = {
+    {"github_authn_github_authn_exchange_code", github_authn_github_authn_exchange_code_skel},
     {"github_authn_github_authn_set_credentials", github_authn_github_authn_set_credentials_skel},
     {"github_authn_github_authn_register_code", github_authn_github_authn_register_code_skel},
     {"github_authn_github_authn_resolve", github_authn_github_authn_resolve_skel},

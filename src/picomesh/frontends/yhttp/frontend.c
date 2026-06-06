@@ -67,6 +67,7 @@
 #include <picomesh/plugin/password_authn/password_authn.h>
 #include <picomesh/plugin/token_issuer/token_issuer.h>
 #include <picomesh/plugin/session/session.h>
+#include <picomesh/plugin/github_authn/github_authn.h>
 #include <picomesh/plugin/issues/issues.h>
 #include <picomesh/plugin/git_repo/git_repo.h>
 #include <picomesh/plugin/git_pipeline/git_pipeline.h>
@@ -907,6 +908,206 @@ static int auth_and_start_session(uint32_t uid, const char *username, int64_t pw
     return 1;
 }
 
+
+/* Forward declarations — these helpers are defined further down but are used by
+ * the OAuth/registration handlers above their definitions. */
+static void register_release_claim(uint32_t uid, const char *uname);
+static struct yheaders *internal_caps(uint32_t uid);
+static void send_json_error(struct yloop_stream *s, int status, const char *message, int keep_alive);
+
+static int oauth_start_session(uint32_t uid, const char *username,
+                               char *tok_out, size_t tok_cap,
+                               const char **err)
+{
+    struct picomesh_engine *e = picomesh_active_engine();
+    if (!e) { *err = "no engine"; return 0; }
+    struct picomesh_string_result groups = {0};
+    SVC_OPEN(acc, "accounts", accounts_accounts_create);
+    if (!acc.ok) { *err = "accounts service unreachable"; return 0; }
+    groups = accounts_accounts_groups(&acc.c, acc.obj, NULL, uid);
+    SVC_CLOSE(acc);
+    if (PICOMESH_IS_ERR(groups)) { picomesh_error_destroy(groups.error); *err = "could not load account groups"; return 0; }
+
+    struct yheaders *sys_caps = internal_caps(uid);
+    if (!sys_caps) { free(groups.value); *err = "internal capability unavailable"; return 0; }
+    SVC_OPEN(ti, "token_issuer", token_issuer_token_issuer_create);
+    if (!ti.ok) { yheaders_free(sys_caps); free(groups.value); *err = "token_issuer unreachable"; return 0; }
+    struct picomesh_string_result access =
+        token_issuer_token_issuer_mint(&ti.c, ti.obj, sys_caps, uid, username ? username : "", groups.value ? groups.value : "", 0);
+    SVC_CLOSE(ti);
+    yheaders_free(sys_caps);
+    free(groups.value);
+    if (PICOMESH_IS_ERR(access)) { picomesh_error_destroy(access.error); *err = "token mint failed"; return 0; }
+
+    SVC_OPEN(ses, "session", session_session_create);
+    if (!ses.ok) { free(access.value); *err = "session unreachable"; return 0; }
+    struct picomesh_string_result tok_r =
+        session_session_start(&ses.c, ses.obj, NULL, uid, access.value ? access.value : "", "");
+    SVC_CLOSE(ses);
+    free(access.value);
+    if (PICOMESH_IS_ERR(tok_r)) { picomesh_error_destroy(tok_r.error); *err = "session create failed"; return 0; }
+    snprintf(tok_out, tok_cap, "%s", tok_r.value ? tok_r.value : "");
+    free(tok_r.value);
+    if (!tok_out[0]) { *err = "session create failed"; return 0; }
+    return 1;
+}
+
+static int ensure_oauth_account(uint32_t uid, const char *uname, const char **err)
+{
+    SVC_OPEN(acc_chk, "accounts", accounts_accounts_create);
+    if (!acc_chk.ok) { *err = "accounts service unreachable"; return 0; }
+    struct picomesh_int_result exists_r = accounts_accounts_exists(&acc_chk.c, acc_chk.obj, NULL, uid);
+    SVC_CLOSE(acc_chk);
+    if (PICOMESH_IS_ERR(exists_r)) { picomesh_error_destroy(exists_r.error); *err = "account lookup failed"; return 0; }
+    if (exists_r.value) return 1;
+
+    SVC_OPEN(acc_claim, "accounts", accounts_accounts_create);
+    if (!acc_claim.ok) { *err = "accounts service unreachable"; return 0; }
+    struct picomesh_int_result claim_r = accounts_accounts_claim_username(&acc_claim.c, acc_claim.obj, NULL, uid, uname);
+    SVC_CLOSE(acc_claim);
+    if (PICOMESH_IS_ERR(claim_r)) { picomesh_error_destroy(claim_r.error); *err = "username claim failed"; return 0; }
+    if (claim_r.value != 1) { *err = "GitHub login name is already taken"; return 0; }
+
+    struct yheaders *sys_caps = internal_caps(uid);
+    if (!sys_caps) { register_release_claim(uid, uname); *err = "registration temporarily unavailable"; return 0; }
+    SVC_OPEN(acc_ns, "accounts", accounts_accounts_create);
+    if (!acc_ns.ok) { yheaders_free(sys_caps); register_release_claim(uid, uname); *err = "accounts service unreachable"; return 0; }
+    struct picomesh_string_result personal_ns =
+        accounts_accounts_ns_create(&acc_ns.c, acc_ns.obj, sys_caps, uid, "user", uname, "");
+    SVC_CLOSE(acc_ns);
+    yheaders_free(sys_caps);
+    if (PICOMESH_IS_ERR(personal_ns)) { picomesh_error_destroy(personal_ns.error); register_release_claim(uid, uname); *err = "username unavailable"; return 0; }
+    free(personal_ns.value);
+
+    /* First-user `site` bootstrap, BEFORE the account-completion marker — same
+     * fail-closed contract as the password /register path. Creating `site` here
+     * (when this is the first account) keeps a backend failure from leaving a
+     * half-registered account with no site owner; `created_site` records that
+     * THIS call created it, so a later register failure can roll it back. */
+    int first_user = 0, created_site = 0;
+    SVC_OPEN(acc_boot, "accounts", accounts_accounts_create);
+    if (!acc_boot.ok) { register_release_claim(uid, uname); *err = "accounts service unreachable"; return 0; }
+    struct picomesh_size_result cr = accounts_accounts_count(&acc_boot.c, acc_boot.obj, NULL);
+    if (PICOMESH_IS_OK(cr)) first_user = (cr.value == 0); else picomesh_error_destroy(cr.error);
+    if (first_user) {
+        struct yheaders *site_caps = internal_caps(uid);
+        if (!site_caps) { SVC_CLOSE(acc_boot); register_release_claim(uid, uname); *err = "registration temporarily unavailable"; return 0; }
+        struct picomesh_string_result site =
+            accounts_accounts_ns_create(&acc_boot.c, acc_boot.obj, site_caps, uid, "group", "site", "");
+        yheaders_free(site_caps);
+        if (PICOMESH_IS_OK(site)) {
+            free(site.value);
+            created_site = 1;
+            yinfo("authz: uid=%u bootstrapped as site-owner (oauth)", uid);
+        } else {
+            picomesh_error_destroy(site.error);
+            /* Distinguish "lost the race" (site already exists → continue as a
+             * regular user) from a real failure (site absent → fail closed). */
+            struct picomesh_int64_result present =
+                accounts_accounts_ns_resolve(&acc_boot.c, acc_boot.obj, NULL, "site");
+            int site_present = PICOMESH_IS_OK(present) && present.value > 0;
+            if (PICOMESH_IS_ERR(present)) picomesh_error_destroy(present.error);
+            if (!site_present) {
+                SVC_CLOSE(acc_boot);
+                register_release_claim(uid, uname);
+                *err = "registration temporarily unavailable";
+                return 0;
+            }
+        }
+    }
+    SVC_CLOSE(acc_boot);
+
+    /* Complete the account. On failure, release the claim AND roll back a `site`
+     * we just created. The rollback is VERIFIED: if it fails, the username claim
+     * is HELD (not released) so no third party can take the name and the same
+     * user retrying re-owns and completes — fail closed, never strand `site`. */
+    SVC_OPEN(acc_reg, "accounts", accounts_accounts_create);
+    if (!acc_reg.ok) { register_release_claim(uid, uname); *err = "accounts service unreachable"; return 0; }
+    struct picomesh_int_result reg = accounts_accounts_register(&acc_reg.c, acc_reg.obj, NULL, uid, uname);
+    SVC_CLOSE(acc_reg);
+    int ok = PICOMESH_IS_OK(reg) && reg.value == 1;
+    if (PICOMESH_IS_ERR(reg)) picomesh_error_destroy(reg.error);
+    if (!ok) {
+        if (created_site) {
+            int rollback_ok = 0;
+            struct yheaders *del_caps = internal_caps(uid);
+            if (del_caps) {
+                SVC_OPEN(acc_rb, "accounts", accounts_accounts_create);
+                if (acc_rb.ok) {
+                    struct picomesh_int_result del = accounts_accounts_ns_delete(&acc_rb.c, acc_rb.obj, del_caps, "site");
+                    if (PICOMESH_IS_OK(del)) rollback_ok = 1;
+                    else picomesh_error_destroy(del.error);
+                    SVC_CLOSE(acc_rb);
+                }
+                yheaders_free(del_caps);
+            }
+            if (!rollback_ok) {
+                ywarn("authz: site bootstrap rollback FAILED for uid=%u (oauth) — username claim held; operator repair may be needed", uid);
+                *err = "registration failed and could not be cleaned up — please retry";
+                return 0;
+            }
+        }
+        register_release_claim(uid, uname);
+        *err = "account create failed";
+        return 0;
+    }
+    return 1;
+}
+
+static void route_github_callback_post(struct yloop_stream *s, const char *body,
+                                       size_t body_len, int keep_alive)
+{
+    char code[512] = {0}, redirect_uri[1024] = {0};
+    if (!form_get(body, body_len, "code", code, sizeof(code)) ||
+        !form_get(body, body_len, "redirect_uri", redirect_uri, sizeof(redirect_uri)) ||
+        !code[0] || !redirect_uri[0]) {
+        send_json_error(s, 400, "github callback: missing code or redirect_uri", keep_alive);
+        return;
+    }
+
+    SVC_OPEN(gh, "github_authn", github_authn_github_authn_create);
+    if (!gh.ok) { send_json_error(s, 502, "github_authn unreachable", keep_alive); return; }
+    struct picomesh_json_result ex =
+        github_authn_github_authn_exchange_code(&gh.c, gh.obj, NULL, code, redirect_uri);
+    SVC_CLOSE(gh);
+    if (PICOMESH_IS_ERR(ex)) {
+        char msg[512]; snprintf(msg, sizeof(msg), "github callback: %s", ex.error.msg ? ex.error.msg : "exchange failed");
+        picomesh_error_destroy(ex.error);
+        send_json_error(s, 401, msg, keep_alive);
+        return;
+    }
+
+    uint32_t uid = 0;
+    char uname[64] = {0};
+    struct yjson_doc *doc = yjson_parse(ex.value, strlen(ex.value));
+    if (doc) {
+        const struct yjson_value *root = yjson_doc_root(doc);
+        uid = (uint32_t)yjson_as_int(yjson_object_get(root, "uid"), 0);
+        const char *u = yjson_as_string(yjson_object_get(root, "username"), NULL);
+        if (u) snprintf(uname, sizeof(uname), "%s", u);
+        yjson_doc_free(doc);
+    }
+    free(ex.value);
+    if (!uid || !username_ok(uname)) { send_json_error(s, 401, "github callback: invalid GitHub user", keep_alive); return; }
+
+    const char *err = NULL;
+    if (!ensure_oauth_account(uid, uname, &err)) {
+        send_json_error(s, 403, err ? err : "github account link failed", keep_alive);
+        return;
+    }
+    char tok[64];
+    if (!oauth_start_session(uid, uname, tok, sizeof(tok), &err)) {
+        send_json_error(s, 500, err ? err : "github session failed", keep_alive);
+        return;
+    }
+    char cookie_hdr[256];
+    if (!build_session_cookies(cookie_hdr, sizeof(cookie_hdr), tok, uname)) {
+        send_json_error(s, 500, "cookie build failed", keep_alive);
+        return;
+    }
+    send_redirect(s, "/repos", keep_alive, cookie_hdr);
+}
+
 /* POST /login — yaapp shape: authenticate an EXISTING account; do NOT
  * auto-register. Caller must visit /register first if they don't have
  * a credential yet. */
@@ -1176,16 +1377,32 @@ static void route_register_post(struct yloop_stream *s, const char *body,
     if (PICOMESH_IS_ERR(reg)) picomesh_error_destroy(reg.error);
     if (!was_new) {
         if (created_site) {
+            /* VERIFY the rollback. ns_delete returning OK (1 = deleted, 0 =
+             * already gone) both mean `site` is no longer stranded. A service-
+             * open failure or an ns_delete error means rollback FAILED. */
+            int rollback_ok = 0;
             struct yheaders *del_caps = internal_caps(uid);
             if (del_caps) {
                 SVC_OPEN(acc_rb, "accounts", accounts_accounts_create);
                 if (acc_rb.ok) {
                     struct picomesh_int_result del =
                         accounts_accounts_ns_delete(&acc_rb.c, acc_rb.obj, del_caps, "site");
-                    if (PICOMESH_IS_ERR(del)) picomesh_error_destroy(del.error);
+                    if (PICOMESH_IS_OK(del)) rollback_ok = 1;
+                    else picomesh_error_destroy(del.error);
                     SVC_CLOSE(acc_rb);
                 }
                 yheaders_free(del_caps);
+            }
+            if (!rollback_ok) {
+                /* Hard failure: `site` is owned by a uid whose account did NOT
+                 * complete, and we could not remove it. Do NOT release the
+                 * username claim — keep the name bound to this uid so no third
+                 * party can take it, and so the same user retrying re-owns and
+                 * completes (or an operator repairs). Surfacing a hard error is
+                 * the only fail-closed option here. */
+                ywarn("authz: site bootstrap rollback FAILED for uid=%u — username claim held; operator repair may be needed", uid);
+                render_register(s, "registration failed and could not be cleaned up — please retry, or contact the operator", keep_alive);
+                return;
             }
         }
         register_release_claim(uid, uname);
@@ -2353,6 +2570,7 @@ int yhttp_frontend_try(struct yloop_stream *s,
      * static fallthrough have been removed (the frontend app renders every
      * page, sourcing data from this gateway over /_rpc + /_describe). ---- */
     if (is_post && path_eq(path, "/login"))    { route_login_post(s, body, body_len, keep_alive); return 1; }
+    if (is_post && path_eq(path, "/auth/github/callback")) { route_github_callback_post(s, body, body_len, keep_alive); return 1; }
     if (is_post && path_eq(path, "/register")) { route_register_post(s, body, body_len, keep_alive); return 1; }
     if (is_post && path_eq(path, "/logout"))   { route_logout(s, headers_raw, headers_raw_len, keep_alive); return 1; }
 

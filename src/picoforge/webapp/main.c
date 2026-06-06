@@ -44,6 +44,12 @@ static const struct yargv_option_def WEBAPP_OPTIONS[] = {
     {"--console-url", NULL, "console_url",  "Service console URL linked on /admin/services "
                                             "(default http://127.0.0.1:8231/_alpine; \"\" to hide)",
      YARGV_VALUE, 0},
+    {"--github-client", NULL, "github_client", "GitHub OAuth App client id (or $PICOFORGE_GITHUB_CLIENT)",
+     YARGV_VALUE, 0},
+    {"--github-url", NULL, "github_url", "GitHub web URL (default https://github.com)",
+     YARGV_VALUE, 0},
+    {"--public-url", NULL, "public_url", "Externally visible webapp URL for OAuth callbacks",
+     YARGV_VALUE, 0},
     {"--verbose",     "-v", "verbose",      "Enable debug logging",
      YARGV_BOOL,  0},
     {"--help",        "-h", "help",         "Show this message",
@@ -108,6 +114,9 @@ int main(int argc, char **argv)
      * the /admin/services link works out of the box. */
     const char *console_url   = yargv_get_string(cli, "console_url",
                                                  "http://127.0.0.1:8231/_alpine");
+    const char *github_client = yargv_get_string(cli, "github_client", getenv("PICOFORGE_GITHUB_CLIENT"));
+    const char *github_url    = yargv_get_string(cli, "github_url", "https://github.com");
+    const char *public_url    = yargv_get_string(cli, "public_url", getenv("PICOFORGE_PUBLIC_URL"));
 
     struct yloop_ptr_result lr = yloop_create();
     if (PICOMESH_IS_ERR(lr)) {
@@ -121,6 +130,9 @@ int main(int argc, char **argv)
         .templates_dir = templates_dir,
         .static_dir = static_dir,
         .console_url = console_url,
+        .github_client_id = github_client,
+        .github_url = github_url,
+        .public_url = public_url,
     };
     struct picomesh_void_result sr = webapp_start(loop, host, port, &fc);
     if (PICOMESH_IS_ERR(sr)) {

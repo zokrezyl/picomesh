@@ -33,6 +33,7 @@ include(build-tools/picomesh/libs/simdjson.cmake)
 include(build-tools/picomesh/libs/sqlite3.cmake)
 include(build-tools/picomesh/libs/libmdbx.cmake)
 include(build-tools/picomesh/libs/libgit2.cmake)
+include(build-tools/picomesh/libs/libcurl.cmake)
 
 # ---- yplatform backend selection -------------------------------------
 #

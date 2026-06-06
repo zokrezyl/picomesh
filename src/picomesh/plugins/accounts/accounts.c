@@ -27,6 +27,7 @@
 #include <picomesh/ycore/idkey.h>
 #include <picomesh/ysecurity/jwt.h>
 #include <picomesh/ysecurity/secret.h>
+#include <picomesh/yconfig/yconfig.h>
 #include <picomesh/plugin/relational_storage/relational_sql.h>
 
 #include <stdint.h>
@@ -168,6 +169,9 @@ static int64_t ns_lookup(struct rel_handle *h, struct yheaders *hdrs, const char
 static int ns_slug_ok(const char *slug)
 {
     if (!slug || !*slug || slug[0] == '.') return 0;
+    /* "-" is the GitLab-style routing sentinel ("/-/<command>", "<repo>/-/<verb>")
+     * in the webapp, so a namespace segment may never be exactly "-". */
+    if (strcmp(slug, "-") == 0) return 0;
     size_t n = 0;
     for (const char *p = slug; *p; ++p, ++n) {
         if (n >= 63) return 0;
@@ -465,6 +469,18 @@ struct picomesh_string_result accounts_accounts_groups_impl(struct ctx *ctx, str
     return PICOMESH_OK(picomesh_string, out);
 }
 
+/* Read a boolean from this service's own yconfig (e.g. "accounts.<key>"),
+ * returning `fallback` when the key is absent or the engine is unavailable. */
+static int accounts_cfg_bool(const char *path, int fallback)
+{
+    struct picomesh_engine *e = picomesh_active_engine();
+    if (!e) return fallback;
+    struct yconfig_node_ptr_result r = yconfig_get(picomesh_engine_config(e), path);
+    int out = (PICOMESH_IS_OK(r) && r.value) ? yconfig_node_as_bool(r.value, fallback) : fallback;
+    if (PICOMESH_IS_ERR(r)) picomesh_error_destroy(r.error);
+    return out;
+}
+
 /* The caller's verified identity + roles from the JWT in `hdrs`, or
  * authenticated=0 for an in-process (NULL/empty-JWT) caller. */
 static struct picomesh_authctx ns_caller(struct yheaders *hdrs)
@@ -517,18 +533,20 @@ struct picomesh_string_result accounts_accounts_ns_create_impl(struct ctx *ctx, 
         return PICOMESH_ERR(picomesh_string, "accounts_ns_create: authentication required");
     int is_system = picomesh_groups_contains(caller.groups_csv, PICOMESH_GROUP_SYSTEM);
 
-    /* ROOT namespace creation is a privileged operation: only the trusted
-     * internal capability (personal-namespace bootstrap at register) or a site
-     * admin may create one. This closes namespace squatting (a regular user
-     * can't grab a root name and strand a future user) and the reserved `site`
-     * escalation. A regular user may still create SUBGROUPS under a namespace
-     * they administer (checked below). The reserved `site` namespace is mintable
-     * ONLY by the internal capability (the first-user bootstrap). */
+    /* ROOT namespace creation. GitLab-style: any authenticated user MAY create a
+     * top-level group by default, but the deployment can restrict it to site
+     * admins via `accounts.allow_user_root_groups: false` (default true). The
+     * site admin and the trusted internal capability (the personal-namespace
+     * bootstrap at register) may always create one. The reserved `site`
+     * namespace stays mintable ONLY by the internal capability (the first-user
+     * bootstrap) regardless of the flag. A regular user may also create
+     * SUBGROUPS under a namespace they administer (checked below). */
     if (!parent_path[0]) {
         if (!is_system && strcmp(slug, "site") == 0)
             return PICOMESH_ERR(picomesh_string, "accounts_ns_create: reserved namespace");
-        if (!is_system && picomesh_groups_max_role(caller.groups_csv, "site") < picomesh_role_rank("maintainer"))
-            return PICOMESH_ERR(picomesh_string, "accounts_ns_create: forbidden (root namespace creation is a site-admin operation)");
+        int is_site_admin = picomesh_groups_max_role(caller.groups_csv, "site") >= picomesh_role_rank("maintainer");
+        if (!is_system && !is_site_admin && !accounts_cfg_bool("accounts.allow_user_root_groups", 1))
+            return PICOMESH_ERR(picomesh_string, "accounts_ns_create: forbidden (this deployment restricts root group creation to site admins)");
     }
 
     /* The owner is the caller's own uid, EXCEPT for the trusted internal
@@ -802,20 +820,21 @@ struct picomesh_json_result accounts_accounts_ns_subtree_impl(struct ctx *ctx, s
     struct picomesh_authctx caller = ns_caller(hdrs);
     if (!ns_caller_can_read(&caller, path))
         return PICOMESH_ERR(picomesh_json, "accounts_ns_subtree: forbidden (need reporter on namespace)");
-    /* `path` itself OR any descendant `path/...`. The LIKE pattern escapes
-     * nothing because the slug grammar forbids `%` and `_`-as-wildcard concerns
-     * (SQLite LIKE treats `_` as a wildcard, but a false extra match would only
-     * widen the set to namespaces the caller already inherits into, never leak
-     * across a sibling — and the strict grammar keeps paths well-formed). */
-    char like[128];
-    snprintf(like, sizeof(like), "%s/%%", path);
+    /* `path` itself OR any descendant `path/...`. Match the descendant prefix
+     * with an EXACT substring compare, NOT a LIKE pattern: the slug grammar
+     * permits `_`, which SQLite LIKE treats as a single-character wildcard, so a
+     * `LIKE 'a_b/%'` would also match `axb/...` and disclose sibling namespace
+     * names. `substr(path,1,N)=prefix` has no wildcard semantics. */
+    char prefix[128];
+    int prefix_len = snprintf(prefix, sizeof(prefix), "%s/", path);
     struct yjson_writer *qw = yjson_writer_new();
     yjson_writer_begin_array(qw);
     yjson_writer_string(qw, path);
-    yjson_writer_string(qw, like);
+    yjson_writer_int(qw, prefix_len);
+    yjson_writer_string(qw, prefix);
     char *args = rel_args_take(qw);
     struct picomesh_json_result r = rel_query_page(&h, hdrs,
-        "SELECT path FROM namespaces WHERE path=? OR path LIKE ?", args, "path", 0, 0, 0);
+        "SELECT path FROM namespaces WHERE path=? OR substr(path,1,?)=?", args, "path", 0, 0, 0);
     free(args);
     return r;
 }
@@ -856,14 +875,22 @@ struct picomesh_int_result accounts_accounts_ns_delete_impl(struct ctx *ctx, str
     if (!is_system && !is_site_admin && !is_owner)
         return PICOMESH_ERR(picomesh_int, "accounts_ns_delete: forbidden (owner or site admin only)");
 
-    /* Refuse to orphan a subtree: a namespace with children cannot be deleted. */
-    char clike[128];
-    snprintf(clike, sizeof(clike), "%s/%%", path);
-    char *ca = rel_args1s(clike);
-    int64_t children = rel_query_int(&h, hdrs,
-        "SELECT COUNT(*) AS n FROM namespaces WHERE path LIKE ?", ca, "n", 0, &found);
+    /* Refuse to orphan a subtree: a namespace with children cannot be deleted.
+     * EXACT prefix match (not LIKE — `_` in a slug is a SQLite wildcard that
+     * would miscount unrelated siblings as children), and a cross-shard
+     * aggregate (child namespaces hash to other shards than `path`). */
+    char cprefix[128];
+    int cprefix_len = snprintf(cprefix, sizeof(cprefix), "%s/", path);
+    struct yjson_writer *cw = yjson_writer_new();
+    yjson_writer_begin_array(cw);
+    yjson_writer_int(cw, cprefix_len);
+    yjson_writer_string(cw, cprefix);
+    char *ca = rel_args_take(cw);
+    struct picomesh_int64_result children = rel_query_int_all(&h, hdrs,
+        "SELECT COUNT(*) AS n FROM namespaces WHERE substr(path,1,?)=?", ca, "n");
     free(ca);
-    if (children > 0)
+    if (PICOMESH_IS_ERR(children)) return PICOMESH_ERR(picomesh_int, "accounts_ns_delete: child check failed", children);
+    if (children.value > 0)
         return PICOMESH_ERR(picomesh_int, "accounts_ns_delete: namespace has child namespaces");
 
     /* Remove the memberships. They shard by uid, so the row for each member

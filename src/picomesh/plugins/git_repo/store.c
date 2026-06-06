@@ -470,6 +470,9 @@ static int path_segment_ok(const char *s)
 {
     if (!s || !*s) return 0;
     if (s[0] == '.') return 0;
+    /* "-" is the webapp's GitLab-style routing sentinel ("<repo>/-/<verb>"), so
+     * a namespace/repo segment may never be exactly "-". */
+    if (strcmp(s, "-") == 0) return 0;
     size_t n = 0;
     for (const char *p = s; *p; ++p, ++n) {
         if (n >= REPO_NAME_MAX - 1) return 0;

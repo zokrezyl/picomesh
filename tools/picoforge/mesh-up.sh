@@ -459,6 +459,8 @@ echo "[5b] standalone picoforge-webapp → gateway /_rpc on :${SIDE}"
 "$WEBAPP" --gateway-url "http://127.0.0.1:${WEB}" \
     --host 127.0.0.1 --port "$SIDE" \
     --static assets/picoforge/static \
+    --github-client "${PICOFORGE_GITHUB_CLIENT:-}" \
+    --public-url "${PICOFORGE_PUBLIC_URL:-http://127.0.0.1:${SIDE}}" \
     > $SIDECAR_LOG 2>&1 &
 SIDECAR=$!
 sleep 0.7
@@ -473,18 +475,18 @@ if [ "$holders" != "$SIDECAR" ]; then
 fi
 
 # GET sidecar /login renders its own sign-in form (not the gateway's).
-out=$(curl -sS --max-time 10 "http://127.0.0.1:${SIDE}/login")
+out=$(curl -sS --max-time 10 "http://127.0.0.1:${SIDE}/-/login")
 expect_contains 'sidecar GET /login renders' "$out" '<h1>Sign in</h1>'
 
 # The /login page links to /register, so the webapp MUST serve it (this
 # was a 404 hole). GET renders the form; POST relays to the gateway and,
 # for a brand-new account, returns 303 + Set-Cookie like /login does.
-out=$(curl -sS --max-time 10 "http://127.0.0.1:${SIDE}/register")
+out=$(curl -sS --max-time 10 "http://127.0.0.1:${SIDE}/-/register")
 expect_contains 'webapp GET /register renders' "$out" '<h1>Create account</h1>'
 hdrs=$(curl -sS --max-time 10 -D - -o /dev/null \
-            -XPOST "http://127.0.0.1:${SIDE}/register" \
+            -XPOST "http://127.0.0.1:${SIDE}/-/register" \
             --data-urlencode 'username=carol' --data-urlencode 'password=hunter2')
-expect_contains 'webapp POST /register (new user) → 303 /repos' "$hdrs" '303 See Other.*[Ll]ocation: /repos|[Ll]ocation: /repos.*303'
+expect_contains 'webapp POST /register (new user) → 303 /repos' "$hdrs" '303 See Other.*[Ll]ocation: /-/repos|[Ll]ocation: /-/-/repos.*303'
 expect_contains 'webapp POST /register relays sid cookie' "$hdrs" 'Set-Cookie: picomesh-sid='
 
 # POST sidecar /login forwards the form to the gateway's composite
@@ -492,14 +494,14 @@ expect_contains 'webapp POST /register relays sid cookie' "$hdrs" 'Set-Cookie: p
 # session and answers 303 + Set-Cookie, which the sidecar relays.
 rm -f $SIDE_COOKIES
 hdrs=$(curl -sS --max-time 10 -D - -o /dev/null -c $SIDE_COOKIES \
-            -XPOST "http://127.0.0.1:${SIDE}/login" \
+            -XPOST "http://127.0.0.1:${SIDE}/-/login" \
             --data-urlencode 'username=alice' --data-urlencode 'password=hunter2')
-expect_contains 'sidecar POST /login → 303 /repos' "$hdrs" '303 See Other.*[Ll]ocation: /repos|[Ll]ocation: /repos.*303'
+expect_contains 'sidecar POST /login → 303 /repos' "$hdrs" '303 See Other.*[Ll]ocation: /-/repos|[Ll]ocation: /-/-/repos.*303'
 expect_contains 'sidecar relays gateway sid cookie' "$hdrs" 'Set-Cookie: picomesh-sid='
 
 # GET sidecar /repos renders a data page sourced from the gateway via
 # /_rpc (git_repo.git_repo.count_total) — the sidecar holds no plugins.
-out=$(curl -sS --max-time 10 -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/repos")
+out=$(curl -sS --max-time 10 -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/-/repos")
 expect_contains 'sidecar GET /repos renders'           "$out" '<h1>Repositories</h1>'
 expect_contains 'sidecar /repos sourced via gateway /_rpc' "$out" 'via the gateway'
 
@@ -511,61 +513,61 @@ out=$(curl -sS --max-time 10 -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/alice")
 expect_contains 'webapp GET /<account> (account landing)' "$out" '<h1>alice</h1>'
 # Repo-scoped pages carry the repo name as <h1> (project header) and the
 # section name in the panel header + the active project tab.
-out=$(curl -sS --max-time 10 -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/alice/website/issues")
+out=$(curl -sS --max-time 10 -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/alice/website/-/issues")
 expect_contains 'webapp GET /<acct>/<repo>/issues'        "$out" '<strong>Issues</strong>'
-expect_contains 'webapp issues page active tab'           "$out" 'class="active" href="/alice/website/issues"'
-out=$(curl -sS --max-time 10 -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/alice/website/runs")
+expect_contains 'webapp issues page active tab'           "$out" 'class="active" href="/alice/website/-/issues"'
+out=$(curl -sS --max-time 10 -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/alice/website/-/runs")
 expect_contains 'webapp GET /<acct>/<repo>/runs'          "$out" '<strong>Pipeline runs</strong>'
 # Admin space is gated on a signed-in SITE ADMIN, enforced BEFORE any
 # admin content renders. alice is a regular user → 403; an anonymous
 # caller → 303 to /login. Only root (the site-owner bootstrapped at the
 # first /register) may see the admin pages.
 code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
-            "http://127.0.0.1:${SIDE}/admin")
+            "http://127.0.0.1:${SIDE}/-/admin")
 [ "$code" = "303" ] && note_pass "anonymous /admin → 303 (redirect to login)" \
                     || note_fail "anonymous /admin returned $code (want 303)"
 code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
-            -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/admin")
+            -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/-/admin")
 [ "$code" = "403" ] && note_pass "non-admin alice /admin → 403 (forbidden before render)" \
                     || note_fail "non-admin alice /admin returned $code (want 403)"
 
 # Sign in as root (the site owner) to view the admin area.
 rm -f $ROOT_COOKIES
 curl -sS --max-time 10 -c $ROOT_COOKIES -o /dev/null -XPOST \
-     "http://127.0.0.1:${SIDE}/login" \
+     "http://127.0.0.1:${SIDE}/-/login" \
      --data-urlencode 'username=root' --data-urlencode 'password=rootpw'
 
 # The Admin area is its OWN section with its OWN left menu (distinct from
 # the project nav). /admin is the overview; each aspect is a page; every
 # admin page shows the "Admin area" sidebar, not the project sidebar.
-out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/admin")
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/-/admin")
 expect_contains 'webapp GET /admin (overview, as admin)'  "$out" '<h1>Admin</h1>'
 expect_contains 'admin area has its own sidebar'          "$out" 'Admin area'
-expect_contains 'admin overview links to Repositories'    "$out" 'href="/admin/repos"'
-out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/admin/users")
+expect_contains 'admin overview links to Repositories'    "$out" 'href="/-/admin/repos"'
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/-/admin/users")
 expect_contains 'webapp GET /admin/users'                 "$out" '<h1>Users</h1>'
-expect_contains 'admin/users uses admin sidebar'          "$out" 'class="active" href="/admin/users"'
+expect_contains 'admin/users uses admin sidebar'          "$out" 'class="active" href="/-/admin/users"'
 expect_contains 'admin/users lists real registered users' "$out" 'alice'
-expect_contains 'admin sidebar excludes Projects nav'     "$out" 'href="/admin/services"'
-out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/admin/repos")
+expect_contains 'admin sidebar excludes Projects nav'     "$out" 'href="/-/admin/services"'
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/-/admin/repos")
 expect_contains 'webapp GET /admin/repos'                 "$out" '<h1>Repositories</h1>'
-out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/admin/tokens")
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/-/admin/tokens")
 expect_contains 'webapp GET /admin/tokens'                "$out" '<h1>Tokens</h1>'
 # The admin RBAC (Namespaces) area is exercised after [5e] provisions a group.
 
 # New GitLab-like shell additions (gh#10): repo settings tab, services
 # health page, cross-repo dashboards, and the dedicated new-repo form —
 # all sourced from the gateway, all inside the same shell.
-out=$(curl -sS --max-time 10 -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/alice/website/settings")
-expect_contains 'webapp GET /<acct>/<repo>/settings'      "$out" 'class="active" href="/alice/website/settings"'
-out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/admin/services")
+out=$(curl -sS --max-time 10 -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/alice/website/-/settings")
+expect_contains 'webapp GET /<acct>/<repo>/settings'      "$out" 'class="active" href="/alice/website/-/settings"'
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/-/admin/services")
 expect_contains 'webapp GET /admin/services lists services' "$out" 'service-table'
 expect_contains 'webapp /admin/services shows git_repo'   "$out" 'git_repo'
-out=$(curl -sS --max-time 10 -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/dashboard/issues")
+out=$(curl -sS --max-time 10 -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/-/dashboard/issues")
 expect_contains 'webapp GET /dashboard/issues'            "$out" 'Open issues across your repositories'
-out=$(curl -sS --max-time 10 -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/dashboard/runs")
+out=$(curl -sS --max-time 10 -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/-/dashboard/runs")
 expect_contains 'webapp GET /dashboard/runs'              "$out" 'pipeline-table'
-out=$(curl -sS --max-time 10 -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/repos/new")
+out=$(curl -sS --max-time 10 -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/-/repos/new")
 expect_contains 'webapp GET /repos/new (form)'            "$out" '<h1>New repository</h1>'
 # Every signed-in page wears the same shell (topbar + sidebar).
 expect_contains 'webapp pages share the shell'            "$out" 'class="sidebar-nav"'
@@ -656,7 +658,7 @@ out=$(http_post "$CTRL" /create '{"class":"mesh_mesh"}')
 expect_contains 'control parent :8800 still serves /create' "$out" '"handle":[0-9]+'
 
 # Keep the webapp sidecar ALIVE — it is the live page tier the banner points
-# the operator at (http://…:${SIDE}/login). The cleanup trap SIGTERMs it on
+# the operator at (http://…:${SIDE}/-/login). The cleanup trap SIGTERMs it on
 # exit. (It used to be SIGKILLed here, which left the "live mesh" with no
 # browser UI and forced the operator to hand-start picoforge-webapp — the very
 # thing that leaks orphan webapps onto :8080.)
@@ -932,11 +934,15 @@ icode=$(gw_code $ROOT_COOKIES '{"path":"accounts.accounts.ns_create","args":['"$
 [ "$icode" = "500" ] && note_pass "rbac: comma/colon slug injection rejected (500)" \
                      || note_fail "rbac: injection slug returned $icode (want 500)"
 
-# (11) Anti-squat: a regular (non site-admin) user cannot create a ROOT namespace,
-# so they can't grab a name and strand a future user without ownership.
-scode=$(gw_code $LOG_DIR/rb-bob.txt '{"path":"accounts.accounts.ns_create","args":['"$BOB_UID"',"group","bobsquat",""]}')
-[ "$scode" = "500" ] && note_pass "rbac: non-admin cannot create a root namespace (500)" \
-                     || note_fail "rbac: non-admin root ns_create returned $scode (want 500)"
+# (11) GitLab-style root groups: with the default config
+# (accounts.allow_user_root_groups true) any signed-in user may create a
+# top-level group and owns it. The reserved `site` namespace stays off-limits.
+scode=$(gw_code $LOG_DIR/rb-bob.txt '{"path":"accounts.accounts.ns_create","args":['"$BOB_UID"',"group","bobgroup",""]}')
+[ "$scode" = "200" ] && note_pass "rbac: any user can create a root group (GitLab default, 200)" \
+                     || note_fail "rbac: user root ns_create returned $scode (want 200)"
+sitecode=$(gw_code $LOG_DIR/rb-bob.txt '{"path":"accounts.accounts.ns_create","args":['"$BOB_UID"',"group","site",""]}')
+[ "$sitecode" = "500" ] && note_pass "rbac: reserved 'site' namespace stays off-limits to users (500)" \
+                        || note_fail "rbac: user creating 'site' returned $sitecode (want 500)"
 
 # (12) Pipeline log reads are namespace-scoped (git_pipeline enforces it): the
 # repo owner can read a job's log; a no-role user cannot (private repo). JOB_ID
@@ -1002,36 +1008,36 @@ echo "[5f] webapp admin RBAC management (issue #30) — namespaces + role member
 # The site-admin RBAC UI in the picoforge webapp ($SIDE). root (site owner) is
 # signed in via $ROOT_COOKIES; the acme group + its members were provisioned in
 # [5e] through the gateway, so the admin pages must surface them.
-out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/admin/namespaces")
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/-/admin/namespaces")
 expect_contains 'webapp GET /admin/namespaces (RBAC admin)'  "$out" '<h1>Namespaces</h1>'
-expect_contains 'admin sidebar has a Namespaces entry'       "$out" 'href="/admin/namespaces"'
-expect_contains 'admin/namespaces lists the site namespace'  "$out" '/admin/namespaces/site'
-expect_contains 'admin/namespaces lists the acme group'      "$out" '/admin/namespaces/acme'
-expect_contains 'admin/namespaces has a create-group form'   "$out" 'action="/admin/namespaces/create"'
+expect_contains 'admin sidebar has a Namespaces entry'       "$out" 'href="/-/admin/namespaces"'
+expect_contains 'admin/namespaces lists the site namespace'  "$out" '/-/admin/namespaces/site'
+expect_contains 'admin/namespaces lists the acme group'      "$out" '/-/admin/namespaces/acme'
+expect_contains 'admin/namespaces has a create-group form'   "$out" 'action="/-/admin/namespaces/create"'
 # Drill into the acme group: it must show its members (bob is a developer).
-out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/admin/namespaces/acme")
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/-/admin/namespaces/acme")
 expect_contains 'webapp namespace detail shows the members panel' "$out" 'Grant a role'
 expect_contains 'namespace detail shows a member role'            "$out" 'developer'
 # Create a group through the webapp form, then grant bob a role through it.
-curl -sS --max-time 10 -o /dev/null -b $ROOT_COOKIES -XPOST "http://127.0.0.1:${SIDE}/admin/namespaces/create" \
+curl -sS --max-time 10 -o /dev/null -b $ROOT_COOKIES -XPOST "http://127.0.0.1:${SIDE}/-/admin/namespaces/create" \
      --data-urlencode 'slug=webgroup' --data-urlencode 'parent=' >/dev/null
-out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/admin/namespaces")
-expect_contains 'webapp create-group form created a namespace' "$out" '/admin/namespaces/webgroup'
-curl -sS --max-time 10 -o /dev/null -b $ROOT_COOKIES -XPOST "http://127.0.0.1:${SIDE}/admin/namespaces/add_member" \
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/-/admin/namespaces")
+expect_contains 'webapp create-group form created a namespace' "$out" '/-/admin/namespaces/webgroup'
+curl -sS --max-time 10 -o /dev/null -b $ROOT_COOKIES -XPOST "http://127.0.0.1:${SIDE}/-/admin/namespaces/add_member" \
      --data-urlencode 'path=webgroup' --data-urlencode "uid=${BOB_UID}" --data-urlencode 'role=maintainer' >/dev/null
-out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/admin/namespaces/webgroup")
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/-/admin/namespaces/webgroup")
 expect_contains 'webapp grant-role form added a member (maintainer)' "$out" 'maintainer'
 # Revoke it again through the webapp form.
-curl -sS --max-time 10 -o /dev/null -b $ROOT_COOKIES -XPOST "http://127.0.0.1:${SIDE}/admin/namespaces/remove_member" \
+curl -sS --max-time 10 -o /dev/null -b $ROOT_COOKIES -XPOST "http://127.0.0.1:${SIDE}/-/admin/namespaces/remove_member" \
      --data-urlencode 'path=webgroup' --data-urlencode "uid=${BOB_UID}" >/dev/null
-out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/admin/namespaces/webgroup")
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/-/admin/namespaces/webgroup")
 # After revoke the members table holds only the owner (root); bob (the only
 # non-owner) is gone, so no 'maintainer' role row remains in the table.
 mcount=$(printf '%s' "$out" | grep -o "maintainer" | wc -l)
 [ "$mcount" -le 1 ] && note_pass "webapp revoke-role form removed the member" \
                     || note_fail "webapp revoke did not remove the member (maintainer count=$mcount)"
 # A non-admin (alice) is refused the RBAC admin area.
-code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/admin/namespaces")
+code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/-/admin/namespaces")
 [ "$code" = "403" ] && note_pass "webapp /admin/namespaces refuses a non-admin (403)" \
                     || note_fail "non-admin /admin/namespaces returned $code (want 403)"
 
@@ -1042,18 +1048,18 @@ out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/acme")
 expect_contains 'webapp group namespace page lists group repos' "$out" '/acme/api'
 # Repo creation offers a NAMESPACE picker (not just personal). bob is a
 # developer on acme, so his /repos/new must offer the acme namespace.
-out=$(curl -sS --max-time 10 -b $LOG_DIR/rb-bob.txt "http://127.0.0.1:${SIDE}/repos/new")
+out=$(curl -sS --max-time 10 -b $LOG_DIR/rb-bob.txt "http://127.0.0.1:${SIDE}/-/repos/new")
 expect_contains 'webapp /repos/new has a namespace field'    "$out" 'name="namespace"'
 expect_contains 'namespace picker suggests a group bob can push to' "$out" 'value="acme"'
 # bob creates a repo in the acme GROUP through the webapp form.
-curl -sS --max-time 10 -o /dev/null -b $LOG_DIR/rb-bob.txt -XPOST "http://127.0.0.1:${SIDE}/repos/new" \
+curl -sS --max-time 10 -o /dev/null -b $LOG_DIR/rb-bob.txt -XPOST "http://127.0.0.1:${SIDE}/-/repos/new" \
      --data-urlencode 'namespace=acme' --data-urlencode 'name=bobweb' >/dev/null
 out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/acme")
 expect_contains 'group repo created via webapp shows on the namespace page' "$out" '/acme/bobweb'
 # The group repo must list at its NAMESPACE URL on bob's own /repos page (the
 # owner index stores the full path), not at /bob/bobweb.
-out=$(curl -sS --max-time 10 -b $LOG_DIR/rb-bob.txt "http://127.0.0.1:${SIDE}/repos")
-expect_contains "bob's /repos links the group repo at its namespace path" "$out" 'href="/acme/bobweb"'
+out=$(curl -sS --max-time 10 -b $LOG_DIR/rb-bob.txt "http://127.0.0.1:${SIDE}/-/repos")
+expect_contains "bob's /repos links the group repo at its namespace path" "$out" 'href="/acme/bobweb/-/tree"'
 # A repo may not be named after a route word (would be unbrowseable nested).
 rcode=$(gw_code $ROOT_COOKIES '{"path":"git_repo.git_repo.make","args":['"$RUID"',"acme","settings"]}')
 [ "$rcode" = "500" ] && note_pass "rbac: reserved repo name 'settings' rejected (500)" \
@@ -1062,38 +1068,44 @@ rcode=$(gw_code $ROOT_COOKIES '{"path":"git_repo.git_repo.make","args":['"$RUID"
 # manage page works; a nested subgroup's repos are discoverable there. Roles are
 # point-in-time JWT claims, so re-login root to pick up the acme ownership it was
 # granted (via ns_create) after its earlier webapp login.
-curl -sS --max-time 10 -o /dev/null -c $ROOT_COOKIES -XPOST "http://127.0.0.1:${SIDE}/login" \
+curl -sS --max-time 10 -o /dev/null -c $ROOT_COOKIES -XPOST "http://127.0.0.1:${SIDE}/-/login" \
      --data-urlencode 'username=root' --data-urlencode 'password=rootpw' >/dev/null
-out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/groups")
-expect_contains 'webapp /groups lists a namespace the user owns' "$out" '/groups/acme'
-out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/groups/acme/platform")
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/-/groups")
+expect_contains 'webapp /groups lists a namespace the user owns' "$out" '/-/groups/acme'
+out=$(curl -sS --max-time 10 -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/-/groups/acme/platform")
 expect_contains 'webapp /groups subgroup page lists nested repos' "$out" 'acme/platform/svc'
 # Nested-namespace repos are NAVIGABLE: /acme/platform/svc resolves to repo
 # 'svc' in namespace 'acme/platform' (not parsed as acct=acme/repo=platform).
-code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/acme/platform/svc")
+code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b $ROOT_COOKIES "http://127.0.0.1:${SIDE}/acme/platform/svc/-/tree")
 [ "$code" = "200" ] && note_pass "webapp navigates to a nested-namespace repo (200)" \
                     || note_fail "nested repo /acme/platform/svc returned $code (want 200)"
 # A non-maintainer (alice) is refused a group management page.
-code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/groups/acme")
+code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' -b $SIDE_COOKIES "http://127.0.0.1:${SIDE}/-/groups/acme")
 [ "$code" = "403" ] && note_pass "webapp /groups/<ns> refuses a non-maintainer (403)" \
                     || note_fail "non-maintainer /groups/acme returned $code (want 403)"
 
 # /repos is RBAC-based discovery, NOT creator-index-based (issue #30): erin is
 # only a REPORTER on acme and created nothing, yet her Projects page must list
 # acme/api (created by root) because she holds a role on its namespace.
-curl -sS --max-time 10 -o /dev/null -c "$LOG_DIR/web-erin.txt" -XPOST "http://127.0.0.1:${SIDE}/login" \
+curl -sS --max-time 10 -o /dev/null -c "$LOG_DIR/web-erin.txt" -XPOST "http://127.0.0.1:${SIDE}/-/login" \
      --data-urlencode 'username=erin' --data-urlencode 'password=pw-erin' >/dev/null
-out=$(curl -sS --max-time 10 -b "$LOG_DIR/web-erin.txt" "http://127.0.0.1:${SIDE}/repos")
-expect_contains 'webapp /repos shows a group repo the user can access but did not create' "$out" 'href="/acme/api"'
+out=$(curl -sS --max-time 10 -b "$LOG_DIR/web-erin.txt" "http://127.0.0.1:${SIDE}/-/repos")
+expect_contains 'webapp /repos shows a group repo the user can access but did not create' "$out" 'href="/acme/api/-/tree"'
 
 # /repos follows INHERITED role into subgroups: bob is developer on acme with NO
 # direct grant on acme/platform, yet his Projects page must list the subgroup
 # repo acme/platform/svc (discovered via the namespace subtree, not the creator
 # index). This is the case the creator-index discovery missed.
-curl -sS --max-time 10 -o /dev/null -c "$LOG_DIR/web-bob.txt" -XPOST "http://127.0.0.1:${SIDE}/login" \
+curl -sS --max-time 10 -o /dev/null -c "$LOG_DIR/web-bob.txt" -XPOST "http://127.0.0.1:${SIDE}/-/login" \
      --data-urlencode 'username=bob' --data-urlencode 'password=pw-bob' >/dev/null
-out=$(curl -sS --max-time 10 -b "$LOG_DIR/web-bob.txt" "http://127.0.0.1:${SIDE}/repos")
-expect_contains 'webapp /repos lists an INHERITED subgroup repo (no direct grant, not creator)' "$out" 'href="/acme/platform/svc"'
+out=$(curl -sS --max-time 10 -b "$LOG_DIR/web-bob.txt" "http://127.0.0.1:${SIDE}/-/repos")
+expect_contains 'webapp /repos lists an INHERITED subgroup repo (no direct grant, not creator)' "$out" 'href="/acme/platform/svc/-/tree"'
+
+# A member SEES every namespace they belong to on /groups, whatever the role —
+# erin is only a REPORTER on acme, yet /groups must list acme. This is the
+# "added to a group but the member can't see it anywhere" gap.
+out=$(curl -sS --max-time 10 -b "$LOG_DIR/web-erin.txt" "http://127.0.0.1:${SIDE}/-/groups")
+expect_contains 'webapp /groups lists a namespace where the user is a non-maintainer member' "$out" '>acme</a>'
 
 echo
 # Persistence proof. The security/rel-db refactor split storage in two:
@@ -1155,7 +1167,7 @@ fi
 echo ""
 echo "OK — mesh is live. parent log: $PARENT_LOG"
 echo "    Browser (picoforge-webapp — the page tier):"
-echo "      open http://127.0.0.1:${SIDE}/login   (server-side HTML)"
+echo "      open http://127.0.0.1:${SIDE}/-/login   (server-side HTML)"
 echo "    Gateway (API only — /_rpc, /_describe; HTML 404s here):"
 echo "      curl http://127.0.0.1:${WEB}/_describe"
 echo "    Control plane:"

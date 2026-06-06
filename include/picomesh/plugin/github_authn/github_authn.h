@@ -22,6 +22,7 @@ struct class_ptr_result github_authn_github_authn_class_get(void);
 struct object_ptr_result github_authn_github_authn_create(struct ctx *ctx);
 
 /* ---- methods ---- */
+struct picomesh_json_result github_authn_github_authn_exchange_code(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, const char * code, const char * redirect_uri);
 struct picomesh_int_result github_authn_github_authn_set_credentials(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t client_id, uint32_t secret_id);
 struct picomesh_int_result github_authn_github_authn_register_code(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t code, uint32_t user_id);
 struct picomesh_uint32_result github_authn_github_authn_resolve(struct ctx * ctx, struct object * obj, struct yheaders * hdrs, uint32_t code);

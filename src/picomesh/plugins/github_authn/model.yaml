@@ -1,4 +1,19 @@
 methods:
+  - slot: github_authn_exchange_code
+    domain: github_authn
+    owning_class: github_authn
+    return_type: struct picomesh_json_result
+    args:
+      - name: ctx
+        type: "struct ctx *"
+      - name: obj
+        type: "struct object *"
+      - name: hdrs
+        type: "struct yheaders *"
+      - name: code
+        type: "const char *"
+      - name: redirect_uri
+        type: "const char *"
   - slot: github_authn_set_credentials
     domain: github_authn
     owning_class: github_authn
@@ -89,6 +104,9 @@ classes:
     mixins: []
     data: struct github_authn_github_authn_data
     ops:
+      - slot: github_authn_exchange_code
+        slot_domain: github_authn
+        impl: github_authn_github_authn_exchange_code_impl
       - slot: github_authn_set_credentials
         slot_domain: github_authn
         impl: github_authn_github_authn_set_credentials_impl

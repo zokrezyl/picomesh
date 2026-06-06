@@ -582,10 +582,15 @@ Known mismatches:
   table, and a repo row records its `namespace_id`. Namespace slugs are
   validated to the strict `[A-Za-z0-9._-]` segment grammar so a slug can never
   smuggle a second `<path>:<role>` into the comma/colon-delimited groups claim.
-  Root-namespace creation by an external caller is a site-admin operation
-  (anti-squatting); a personal namespace whose name is already a namespace is
-  refused at register so an account is never stranded without ownership;
-  subgroups require maintainer+ on the parent. `git_repo.make` and `delete`
+  Root-namespace (top-level group) creation is GitLab-style: by default any
+  authenticated user may create one (and becomes its owner), but the deployment
+  can restrict it to site admins by setting `accounts.allow_user_root_groups:
+  false` (mirrors GitLab's "Users can create top-level groups"). The reserved
+  `site` namespace stays creatable ONLY by the trusted internal capability
+  regardless of the flag, and the personal-namespace bootstrap is unaffected. A
+  personal namespace whose name is already a namespace is refused at register so
+  an account is never stranded without ownership; subgroups require maintainer+
+  on the parent. `git_repo.make` and `delete`
   carry service-local namespace checks. Issue and pipeline operations are
   namespace-scoped too: `issues.open`/`count_open_in_repo` and
   `git_pipeline.enqueue*` resolve repo_id→namespace at the gate; `issues.close`
@@ -646,7 +651,13 @@ Known mismatches:
   rolled back via `accounts.ns_delete` (an internal-only method, gated to the
   namespace owner / site admin / `system:internal` and refused at the gateway),
   so a failed first registration can never strand `site` under a phantom owner
-  with no completed account. A concurrent first registrant that loses the race
+  with no completed account. The rollback is VERIFIED, not best-effort: if
+  `ns_delete` cannot remove `site` (service unreachable / error), the register
+  fails HARD and the username claim is deliberately NOT released — the name
+  stays bound to that uid (so no third party can take it and the same user
+  retrying re-owns and completes), and the operator is warned. `ns_delete`
+  itself refuses to delete a namespace that has child namespaces, using an
+  EXACT-prefix descendant check aggregated across all shards. A concurrent first registrant that loses the race
   for `site` (it already exists, owned by another) did not create it and
   continues as a regular user. The net invariant: `site:owner` is always backed
   by a completed account, and the first deployment registrant becomes that owner.
@@ -669,7 +680,10 @@ Known mismatches:
   developer on `acme` sees `acme/platform/svc` with no direct subgroup grant),
   and — because the creator index is no longer consulted for discovery — it does
   NOT leak repo paths in namespaces the caller created in but has since been
-  revoked from. `list_for_owner`/`count_for_owner` remain (caller-or-site-admin
+  revoked from. `ns_subtree` matches descendants with an EXACT substring-prefix
+  compare (`substr(path,1,N)=prefix`), never a SQL `LIKE` pattern: slugs permit
+  `_`, which SQLite `LIKE` treats as a single-char wildcard, so a `LIKE 'a_b/%'`
+  would otherwise disclose sibling namespace names like `axb/...`. `list_for_owner`/`count_for_owner` remain (caller-or-site-admin
   scoped) but are not part of access-based discovery.
 
   Acceptance tests for issue #30 live in two places: the integration pytest

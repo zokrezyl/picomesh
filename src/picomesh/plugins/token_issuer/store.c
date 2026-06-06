@@ -20,6 +20,7 @@
 #include <picomesh/ycore/result.h>
 #include <picomesh/ycore/ytrace.h>
 #include <picomesh/yclass/class.h>
+#include <picomesh/yclass/yheaders.h>
 #include <picomesh/yengine/engine.h>
 #include <picomesh/yplatform/time.h>
 #include <picomesh/ycore/idkey.h>
@@ -291,8 +292,24 @@ struct picomesh_string_result token_issuer_token_issuer_mint_impl(struct ctx *ct
                                                                   uint32_t uid, const char *username,
                                                                   const char *groups_csv, int64_t ttl_seconds)
 {
-    (void)ctx; (void)obj; (void)hdrs;
-    if (ti_groups_privileged(groups_csv))
+    (void)ctx; (void)obj;
+    int internal = 0;
+    const char *jwt = hdrs ? yheaders_get(hdrs, "jwt") : NULL;
+    if (jwt && *jwt) {
+        struct picomesh_string_result secret = picomesh_security_jwt_secret(picomesh_active_engine());
+        if (PICOMESH_IS_OK(secret)) {
+            struct picomesh_authctx caller;
+            struct picomesh_void_result vr = picomesh_authctx_from_jwt(jwt, secret.value, &caller);
+            if (PICOMESH_IS_OK(vr) && caller.authenticated &&
+                picomesh_groups_contains(caller.groups_csv, PICOMESH_GROUP_SYSTEM))
+                internal = 1;
+            else if (PICOMESH_IS_ERR(vr)) picomesh_error_destroy(vr.error);
+            free(secret.value);
+        } else {
+            picomesh_error_destroy(secret.error);
+        }
+    }
+    if (ti_groups_privileged(groups_csv) && !internal)
         return PICOMESH_ERR(picomesh_string, "token_issuer_mint: refusing to mint a privilege-granting token");
     if (ttl_seconds <= 0) ttl_seconds = picomesh_security_access_ttl(picomesh_active_engine());
     return ti_mint_access(uid, username, groups_csv ? groups_csv : "", ttl_seconds);

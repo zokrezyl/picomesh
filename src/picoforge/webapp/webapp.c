@@ -136,9 +136,13 @@ static void send_response(struct yloop_stream *s, int status,
 static void send_redirect(struct yloop_stream *s, const char *location,
                           const char *extra_headers, int keep_alive)
 {
-    char hdrs[512];
-    snprintf(hdrs, sizeof(hdrs), "Location: %s\r\n%s",
-             location, extra_headers ? extra_headers : "");
+    char hdrs[8192];
+    int n = snprintf(hdrs, sizeof(hdrs), "Location: %s\r\n%s",
+                     location, extra_headers ? extra_headers : "");
+    if (n <= 0 || (size_t)n >= sizeof(hdrs)) {
+        send_response(s, 500, "text/plain", "redirect too large", strlen("redirect too large"), NULL, keep_alive);
+        return;
+    }
     send_response(s, 303, "text/plain", "", 0, hdrs, keep_alive);
 }
 
@@ -292,19 +296,38 @@ static const char LOGIN_HTML[] =
     "</head><body>"
     "<main class=\"login\">"
     "<h1>Sign in</h1>"
-    "<form method=\"post\" action=\"/login\">"
+    "<form method=\"post\" action=\"/-/login\">"
     "<label>Username <input name=\"username\" autofocus></label>"
     "<label>Password <input type=\"password\" name=\"password\"></label>"
     "<button type=\"submit\">Sign in</button>"
     "</form>"
-    "<p><a href=\"/register\">Create an account</a></p>"
+    "<p><a href=\"/-/register\">Create an account</a></p>"
     "</main>"
     "</body></html>";
 
-static void route_login_get(struct yloop_stream *s, int keep_alive)
+static void route_login_get(struct yloop_stream *s, const struct serve_ud *sud, int keep_alive)
 {
-    send_response(s, 200, "text/html; charset=utf-8",
-                  LOGIN_HTML, sizeof(LOGIN_HTML) - 1, NULL, keep_alive);
+    if (!sud || !sud->cfg || !sud->cfg->github_client_id || !*sud->cfg->github_client_id) {
+        send_response(s, 200, "text/html; charset=utf-8", LOGIN_HTML, sizeof(LOGIN_HTML) - 1, NULL, keep_alive);
+        return;
+    }
+    struct buf b; buf_init(&b);
+    buf_puts(&b,
+        "<!doctype html><html><head>"
+        "<meta charset=\"utf-8\"><title>Sign in — picoforge</title>"
+        "<link rel=\"stylesheet\" href=\"/static/style.css\">"
+        "</head><body><main class=\"login\"><h1>Sign in</h1>"
+        "<form method=\"post\" action=\"/-/login\">"
+        "<label>Username <input name=\"username\" autofocus></label>"
+        "<label>Password <input type=\"password\" name=\"password\"></label>"
+        "<button type=\"submit\">Sign in</button>"
+        "</form>"
+        "<div class=\"oauth-divider\">or</div>"
+        "<p><a class=\"oauth-btn btn\" href=\"/-/auth/github\">Sign in with GitHub</a></p>"
+        "<p><a href=\"/-/register\">Create an account</a></p>"
+        "</main></body></html>");
+    send_response(s, 200, "text/html; charset=utf-8", b.data, b.len, NULL, keep_alive);
+    buf_free(&b);
 }
 
 /* HTML-escape `src` into `dst[cap]`. Writes a NUL-terminated string.
@@ -359,7 +382,7 @@ static void route_login_get_with_error(struct yloop_stream *s,
         "</head><body><main class=\"login\">"
         "<h1>Sign in</h1>"
         "<p class=\"error\">%s</p>"
-        "<form method=\"post\" action=\"/login\">"
+        "<form method=\"post\" action=\"/-/login\">"
         "<label>Username <input name=\"username\" autofocus></label>"
         "<label>Password <input type=\"password\" name=\"password\"></label>"
         "<button type=\"submit\">Sign in</button>"
@@ -576,13 +599,148 @@ static void route_login_post(struct yloop *loop, struct yloop_stream *s,
         build_auth_cookies(hdrs, sizeof(hdrs), resp.set_cookie, username);
         http_response_free(&resp);
         free(username);
-        send_redirect(s, "/repos", hdrs, keep_alive);
+        send_redirect(s, "/-/repos", hdrs, keep_alive);
         return;
     }
 
     http_response_free(&resp);
     free(username);
     route_login_get_with_error(s, "invalid username or password", keep_alive);
+}
+
+
+static char *query_get(const char *path, const char *key);
+static void resolve_claims(struct yloop *loop, const struct serve_ud *sud,
+                           const char *sid, struct claims *out);
+
+static void public_base_url(const struct serve_ud *sud, const struct phr_header *hdrs, size_t n,
+                            char *out, size_t cap)
+{
+    if (sud && sud->cfg && sud->cfg->public_url && *sud->cfg->public_url) {
+        snprintf(out, cap, "%s", sud->cfg->public_url);
+        return;
+    }
+    char host[256] = {0};
+    header_match(hdrs, n, "host", host, sizeof(host));
+    snprintf(out, cap, "http://%s", host[0] ? host : "127.0.0.1:8080");
+}
+
+static void urlenc(char *out, size_t cap, const char *in)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    size_t o = 0;
+    for (const unsigned char *p = (const unsigned char *)(in ? in : ""); *p && o + 4 < cap; ++p) {
+        if ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') ||
+            *p == '-' || *p == '_' || *p == '.' || *p == '~') out[o++] = (char)*p;
+        else { out[o++] = '%'; out[o++] = hex[*p >> 4]; out[o++] = hex[*p & 15]; }
+    }
+    out[o] = 0;
+}
+
+static void github_redirect_uri(const struct serve_ud *sud, const struct phr_header *hdrs, size_t n,
+                                char *out, size_t cap)
+{
+    char base[512];
+    public_base_url(sud, hdrs, n, base, sizeof(base));
+    size_t bl = strlen(base);
+    while (bl > 0 && base[bl - 1] == '/') base[--bl] = 0;
+    snprintf(out, cap, "%s/-/auth/github/callback", base);
+}
+
+static int oauth_state(char *out, size_t cap)
+{
+    unsigned char rnd[16];
+    int fd = open("/dev/urandom", O_RDONLY);
+    if (fd < 0) return 0;
+    ssize_t n = read(fd, rnd, sizeof(rnd));
+    close(fd);
+    if (n != (ssize_t)sizeof(rnd) || cap < sizeof(rnd) * 2 + 1) return 0;
+    static const char hex[] = "0123456789abcdef";
+    for (size_t i = 0; i < sizeof(rnd); ++i) {
+        out[i * 2] = hex[rnd[i] >> 4];
+        out[i * 2 + 1] = hex[rnd[i] & 15];
+    }
+    out[sizeof(rnd) * 2] = 0;
+    return 1;
+}
+
+static void route_github_start(struct yloop_stream *s, const struct serve_ud *sud,
+                               const struct phr_header *hdrs, size_t n, int keep_alive)
+{
+    const char *client = sud && sud->cfg ? sud->cfg->github_client_id : NULL;
+    const char *ghurl = (sud && sud->cfg && sud->cfg->github_url && *sud->cfg->github_url)
+        ? sud->cfg->github_url : "https://github.com";
+    if (!client || !*client) { route_login_get_with_error(s, "GitHub login is not configured", keep_alive); return; }
+    char state[33];
+    if (!oauth_state(state, sizeof(state))) { route_login_get_with_error(s, "GitHub login is temporarily unavailable", keep_alive); return; }
+    char redirect[1024], enc_redirect[1400], enc_client[512], enc_state[80];
+    github_redirect_uri(sud, hdrs, n, redirect, sizeof(redirect));
+    urlenc(enc_redirect, sizeof(enc_redirect), redirect);
+    urlenc(enc_client, sizeof(enc_client), client);
+    urlenc(enc_state, sizeof(enc_state), state);
+    char location[4096];
+    int ln = snprintf(location, sizeof(location), "%s/login/oauth/authorize?client_id=%s&redirect_uri=%s&scope=repo,user:email&state=%s",
+                      ghurl, enc_client, enc_redirect, enc_state);
+    if (ln <= 0 || (size_t)ln >= sizeof(location)) { route_login_get_with_error(s, "GitHub redirect URL is too large", keep_alive); return; }
+    char cookie[128];
+    snprintf(cookie, sizeof(cookie), "Set-Cookie: picoforge-oauth-state=%s; Path=/-/auth/github; HttpOnly; SameSite=Lax; Max-Age=600\r\n", state);
+    send_redirect(s, location, cookie, keep_alive);
+}
+
+static int sid_from_set_cookie(const char *set_cookie, char *out, size_t cap)
+{
+    const char *p = set_cookie ? strstr(set_cookie, "picomesh-sid=") : NULL;
+    if (!p) return 0;
+    p += strlen("picomesh-sid=");
+    const char *e = strchr(p, ';');
+    size_t n = e ? (size_t)(e - p) : strlen(p);
+    if (!n || n >= cap) return 0;
+    memcpy(out, p, n); out[n] = 0;
+    return 1;
+}
+
+static void route_github_callback(struct yloop *loop, struct yloop_stream *s,
+                                  const struct serve_ud *sud,
+                                  const struct phr_header *hdrs, size_t hn,
+                                  const char *full_path, int keep_alive)
+{
+    char *code = query_get(full_path, "code");
+    char *state = query_get(full_path, "state");
+    char *state_cookie = cookie_get(hdrs, hn, "picoforge-oauth-state");
+    if (!state || !state_cookie || strcmp(state, state_cookie) != 0) {
+        free(code); free(state); free(state_cookie);
+        route_login_get_with_error(s, "GitHub OAuth state did not match", keep_alive);
+        return;
+    }
+    free(state); free(state_cookie);
+    if (!code || !*code) { free(code); route_login_get_with_error(s, "GitHub did not return an OAuth code", keep_alive); return; }
+    char redirect[1024], enc_code[1024], enc_redirect[1400];
+    github_redirect_uri(sud, hdrs, hn, redirect, sizeof(redirect));
+    urlenc(enc_code, sizeof(enc_code), code);
+    urlenc(enc_redirect, sizeof(enc_redirect), redirect);
+    free(code);
+    char body[2600];
+    int bn = snprintf(body, sizeof(body), "code=%s&redirect_uri=%s", enc_code, enc_redirect);
+    if (bn <= 0 || (size_t)bn >= sizeof(body)) { route_login_get_with_error(s, "GitHub callback is too large", keep_alive); return; }
+
+    struct http_response resp;
+    int rc = http_post(loop, &sud->gw, "/auth/github/callback",
+                       "application/x-www-form-urlencoded", NULL, NULL, body, (size_t)bn, &resp);
+    if (rc != 0) { http_response_free(&resp); route_login_get_with_error(s, "gateway unreachable", keep_alive); return; }
+    if (resp.status == 303 && resp.set_cookie[0]) {
+        char sid[80] = {0};
+        sid_from_set_cookie(resp.set_cookie, sid, sizeof(sid));
+        struct claims cl;
+        resolve_claims(loop, sud, sid, &cl);
+        char hdrs_out[1024];
+        build_auth_cookies(hdrs_out, sizeof(hdrs_out), resp.set_cookie, cl.username);
+        strncat(hdrs_out, "Set-Cookie: picoforge-oauth-state=; Path=/-/auth/github; HttpOnly; SameSite=Lax; Max-Age=0\r\n", sizeof(hdrs_out) - strlen(hdrs_out) - 1);
+        http_response_free(&resp);
+        send_redirect(s, "/-/repos", hdrs_out, keep_alive);
+        return;
+    }
+    http_response_free(&resp);
+    route_login_get_with_error(s, "GitHub sign-in failed", keep_alive);
 }
 
 /* ---- /register: same relay shape as /login ------------------------- *
@@ -597,12 +755,12 @@ static const char REGISTER_HTML[] =
     "</head><body>"
     "<main class=\"login\">"
     "<h1>Create account</h1>"
-    "<form method=\"post\" action=\"/register\">"
+    "<form method=\"post\" action=\"/-/register\">"
     "<label>Username <input name=\"username\" autofocus></label>"
     "<label>Password <input type=\"password\" name=\"password\"></label>"
     "<button type=\"submit\">Create account</button>"
     "</form>"
-    "<p>Already have an account? <a href=\"/login\">Sign in</a>.</p>"
+    "<p>Already have an account? <a href=\"/-/login\">Sign in</a>.</p>"
     "</main>"
     "</body></html>";
 
@@ -627,12 +785,12 @@ static void route_register_get_with_error(struct yloop_stream *s,
         "</head><body><main class=\"login\">"
         "<h1>Create account</h1>"
         "<p class=\"error\">%s</p>"
-        "<form method=\"post\" action=\"/register\">"
+        "<form method=\"post\" action=\"/-/register\">"
         "<label>Username <input name=\"username\" autofocus></label>"
         "<label>Password <input type=\"password\" name=\"password\"></label>"
         "<button type=\"submit\">Create account</button>"
         "</form>"
-        "<p>Already have an account? <a href=\"/login\">Sign in</a>.</p>"
+        "<p>Already have an account? <a href=\"/-/login\">Sign in</a>.</p>"
         "</main></body></html>",
         escaped);
     if (n <= 0) return;
@@ -669,7 +827,7 @@ static void route_register_post(struct yloop *loop, struct yloop_stream *s,
         build_auth_cookies(hdrs, sizeof(hdrs), resp.set_cookie, username);
         http_response_free(&resp);
         free(username);
-        send_redirect(s, "/repos", hdrs, keep_alive);
+        send_redirect(s, "/-/repos", hdrs, keep_alive);
         return;
     }
 
@@ -717,29 +875,29 @@ static void render_topbar(struct buf *b, const char *uname, const char *active_n
 {
     int in_admin_area = active_nav && strncmp(active_nav, "admin-", 6) == 0;
     buf_puts(b, "<header class=\"topbar\">"
-                "<a class=\"brand\" href=\"/repos\">picoforge</a>");
+                "<a class=\"brand\" href=\"/-/repos\">picoforge</a>");
     if (uname && *uname) {
-        buf_puts(b, "<form class=\"global-search\" method=\"get\" action=\"/search\">"
+        buf_puts(b, "<form class=\"global-search\" method=\"get\" action=\"/-/search\">"
                     "<input name=\"q\" placeholder=\"Search or jump to\xe2\x80\xa6\" "
                     "aria-label=\"Search\"></form>"
                     "<nav class=\"top-actions\">");
         /* "New" is an app-space action — omit it in the admin area so admin
          * chrome doesn't carry user-space project actions. */
         if (!in_admin_area)
-            buf_puts(b, "<a class=\"btn small\" href=\"/repos/new\">New</a>");
+            buf_puts(b, "<a class=\"btn small\" href=\"/-/repos/new\">New</a>");
         /* Only a site admin gets the Admin entry point — a regular user must
          * not even see the link (the pages 403 anyway, but the nav must not
          * advertise admin access). */
         if (is_admin)
-            buf_puts(b, "<a href=\"/admin\">Admin</a>");
+            buf_puts(b, "<a href=\"/-/admin\">Admin</a>");
         buf_puts(b, "<span class=\"user\">");
         buf_esc(b, uname);
         buf_puts(b, "</span>"
-                    "<form method=\"post\" action=\"/logout\">"
+                    "<form method=\"post\" action=\"/-/logout\">"
                     "<button class=\"link\" type=\"submit\">Sign out</button>"
                     "</form></nav>");
     } else {
-        buf_puts(b, "<nav class=\"top-actions\"><a href=\"/login\">Sign in</a></nav>");
+        buf_puts(b, "<nav class=\"top-actions\"><a href=\"/-/login\">Sign in</a></nav>");
     }
     buf_puts(b, "</header>");
 }
@@ -753,18 +911,18 @@ static void render_sidebar(struct buf *b, const char *active)
 {
     struct nav { const char *label; const char *href; const char *key; };
     static const struct nav APP[] = {
-        {"Projects",  "/repos",            "projects"},
-        {"Groups",    "/groups",           "groups"},
-        {"Issues",    "/dashboard/issues", "issues"},
-        {"Pipelines", "/dashboard/runs",   "runs"},
+        {"Projects",  "/-/repos",            "projects"},
+        {"Groups",    "/-/groups",           "groups"},
+        {"Issues",    "/-/dashboard/issues", "issues"},
+        {"Pipelines", "/-/dashboard/runs",   "runs"},
     };
     static const struct nav ADMIN[] = {
-        {"Overview",     "/admin",            "admin-overview"},
-        {"Users",        "/admin/users",      "admin-users"},
-        {"Namespaces",   "/admin/namespaces", "admin-namespaces"},
-        {"Repositories", "/admin/repos",      "admin-repos"},
-        {"Tokens",       "/admin/tokens",     "admin-tokens"},
-        {"Services",     "/admin/services",   "admin-services"},
+        {"Overview",     "/-/admin",            "admin-overview"},
+        {"Users",        "/-/admin/users",      "admin-users"},
+        {"Namespaces",   "/-/admin/namespaces", "admin-namespaces"},
+        {"Repositories", "/-/admin/repos",      "admin-repos"},
+        {"Tokens",       "/-/admin/tokens",     "admin-tokens"},
+        {"Services",     "/-/admin/services",   "admin-services"},
     };
     int admin = active && strncmp(active, "admin-", 6) == 0;
     const struct nav *items = admin ? ADMIN : APP;
@@ -781,7 +939,7 @@ static void render_sidebar(struct buf *b, const char *active)
     buf_puts(b, "</nav>");
     if (admin)
         buf_puts(b, "<nav class=\"sidebar-nav sidebar-foot\">"
-                    "<a href=\"/repos\">\xe2\x86\x90 Back to app</a></nav>");
+                    "<a href=\"/-/repos\">\xe2\x86\x90 Back to app</a></nav>");
     buf_puts(b, "</aside>");
 }
 
@@ -842,7 +1000,7 @@ static void send_forbidden(struct yloop_stream *s, const char *uname, int keep_a
     render_page_header(&b, "Forbidden",
                        "You do not have permission to view this page.", NULL);
     buf_puts(&b, "<p class=\"muted\">This area is restricted to site administrators. "
-                 "<a href=\"/repos\">Back to your repositories</a>.</p>"
+                 "<a href=\"/-/repos\">Back to your repositories</a>.</p>"
                  "</main></div>"
                  "<footer class=\"app-footer\"><span>picoforge \xc2\xb7 served by "
                  "picoforge-webapp via the gateway <code>/_rpc</code></span></footer>"
@@ -858,7 +1016,7 @@ static void send_forbidden(struct yloop_stream *s, const char *uname, int keep_a
  * caller must return without rendering admin content. */
 static int require_admin(struct yloop_stream *s, const struct claims *cl, int keep_alive)
 {
-    if (!cl->uid) { send_redirect(s, "/login", NULL, keep_alive); return 0; }
+    if (!cl->uid) { send_redirect(s, "/-/login", NULL, keep_alive); return 0; }
     if (!cl->is_admin) {
         send_forbidden(s, cl->username[0] ? cl->username : NULL, keep_alive);
         return 0;
@@ -882,10 +1040,10 @@ static void render_project_header(struct buf *b, const char *acct,
 
     buf_puts(b, "<div class=\"project-actions\"><a class=\"btn\" href=\"/");
     buf_esc(b, acct); buf_puts(b, "/"); buf_esc(b, repo);
-    buf_puts(b, "/new\">New file</a>"
+    buf_puts(b, "/-/new\">New file</a>"
                 "<form method=\"post\" action=\"/");
     buf_esc(b, acct); buf_puts(b, "/"); buf_esc(b, repo);
-    buf_puts(b, "/runs/new\"><button class=\"btn\" type=\"submit\">Run pipeline</button>"
+    buf_puts(b, "/-/runs/new\"><button class=\"btn\" type=\"submit\">Run pipeline</button>"
                 "</form></div></header>");
 }
 
@@ -897,10 +1055,10 @@ static void render_project_tabs(struct buf *b, const char *acct, const char *rep
 {
     struct tab { const char *label; const char *suffix; const char *key; long count; };
     const struct tab TABS[] = {
-        {"Code", "", "code", -1},
-        {"Issues", "/issues", "issues", issue_count},
-        {"Pipelines", "/runs", "runs", run_count},
-        {"Settings", "/settings", "settings", -1},
+        {"Code", "/-/tree", "code", -1},
+        {"Issues", "/-/issues", "issues", issue_count},
+        {"Pipelines", "/-/runs", "runs", run_count},
+        {"Settings", "/-/settings", "settings", -1},
     };
     buf_puts(b, "<nav class=\"project-tabs\">");
     for (size_t i = 0; i < sizeof(TABS) / sizeof(TABS[0]); ++i) {
@@ -970,50 +1128,27 @@ static int repo_seen(const char *seen, const char *full)
     return strstr(seen, needle) != NULL;
 }
 
-/* GET /repos — the signed-in user's accessible repositories: every repo in
- * every namespace the caller holds a role on (RBAC discovery), merged with the
- * legacy creator index as a fallback. All data comes from the gateway over
- * /_rpc; the webapp holds no state. `sid` NULL/empty → bounce to /login. */
-static void route_repos_get(struct yloop *loop, struct yloop_stream *s,
-                            const struct serve_ud *sud, const char *sid,
-                            const char *uname, uint32_t owner_uid, int is_admin,
-                            int keep_alive)
+/* Collect every repo FULL PATH (<namespace>/<repo>) the signed-in caller can
+ * READ, by the SAME role-based discovery the /repos page uses (issue #30): for
+ * each direct membership at reporter+ (from /_whoami), expand to its subtree
+ * (accounts.ns_subtree — the role inherits down the whole subtree) and list each
+ * namespace once (git_repo.list_for_namespace), deduplicating namespaces and
+ * repos. The creator index (list_for_owner) is intentionally NOT consulted — it
+ * misses RBAC-visible group/subgroup repos AND leaks repos the caller created
+ * but has since lost access to. Returns a heap, newline-separated,
+ * NUL-terminated list (NULL/empty when the caller can read nothing); caller
+ * frees. Shared by /repos, /search and /dashboard/issues so all three agree. */
+static char *collect_accessible_repos(struct yloop *loop, const struct serve_ud *sud,
+                                      const char *sid)
 {
-    if (!sid || !*sid || !owner_uid) {
-        send_redirect(s, "/login", NULL, keep_alive);
-        return;
-    }
-
-    long total = rpc_result_int(loop, sud, sid, "git_repo.git_repo.count_total", "[]", -1);
-
-    /* Projects discovery is ROLE-based, not creator-index-based (issue #30): the
-     * page lists every repo in every namespace the caller can READ, INCLUDING
-     * subgroups reached by INHERITED role and EXCLUDING repos the caller created
-     * but has since lost access to. For each direct membership the caller holds
-     * (from /_whoami), accounts.ns_subtree returns that namespace AND all its
-     * descendants (the caller's reporter+ role inherits down the whole subtree);
-     * each namespace is then listed once via git_repo.list_for_namespace. The
-     * creator index (list_for_owner) is intentionally NOT consulted — it would
-     * leak repo paths in namespaces the caller no longer has a role on. */
     struct yjson_doc *who = whoami_doc(loop, sud, sid);
     const struct yjson_value *nss = who ? yjson_object_get(yjson_doc_root(who), "namespaces") : NULL;
 
-    struct buf b; buf_init(&b);
-    render_shell_open(&b, "Repositories", uname, "projects", is_admin);
-    render_page_header(&b, "Repositories", "Repositories you can access across the mesh.",
-                       "<a class=\"btn primary\" href=\"/repos/new\">New repository</a>");
-
-    char meta[64];
-    if (total >= 0) snprintf(meta, sizeof(meta), "%ld total in the mesh", total);
-    else            meta[0] = 0;
-    panel_open(&b, "Your repositories", meta[0] ? meta : NULL);
-
-    /* Two dedup sets of "\n<token>\n": namespaces already listed (a nested
-     * membership is covered by an ancestor's subtree) and repos already shown. */
+    /* Two dedup sets of "\n<token>\n": namespaces already expanded (a nested
+     * membership is covered by an ancestor's subtree) and repos already added. */
     struct buf ns_seen; buf_init(&ns_seen); buf_puts(&ns_seen, "\n");
     struct buf seen;    buf_init(&seen);    buf_puts(&seen, "\n");
-    int any = 0;
-    buf_puts(&b, "<table class=\"file-table\"><tbody>");
+    struct buf out;     buf_init(&out);
 
     size_t ns_count = nss ? yjson_array_size(nss) : 0;
     for (size_t i = 0; i < ns_count; ++i) {
@@ -1022,7 +1157,6 @@ static void route_repos_get(struct yloop *loop, struct yloop_stream *s,
         const char *role = yjson_as_string(yjson_object_get(e, "role"), NULL);
         if (!root || !*root || !role || !role_at_least(role, "reporter")) continue;
 
-        /* Expand this membership to its full subtree (self + descendants). */
         char esc[256], sargs[300];
         if (!json_escape(esc, sizeof(esc), root)) continue;
         snprintf(sargs, sizeof(sargs), "[\"%s\"]", esc);
@@ -1047,25 +1181,72 @@ static void route_repos_get(struct yloop *loop, struct yloop_stream *s,
                     snprintf(full, sizeof(full), "%s/%s", nspath, line);
                     if (repo_seen(seen.data, full)) continue;
                     buf_puts(&seen, "\n"); buf_puts(&seen, full); buf_puts(&seen, "\n");
-                    any = 1;
-                    buf_puts(&b, "<tr><td class=\"ic\">\xf0\x9f\x93\x81</td><td><a class=\"file-name dir\" href=\"/");
-                    buf_esc(&b, full); buf_puts(&b, "\">");
-                    buf_esc(&b, full); buf_puts(&b, "</a></td></tr>");
+                    buf_puts(&out, full); buf_puts(&out, "\n");
                 }
             }
             free(names);
         }
         if (sub) yjson_doc_free(sub);
     }
-    buf_puts(&b, "</tbody></table>");
     buf_free(&ns_seen);
+    buf_free(&seen);
+    if (who) yjson_doc_free(who);
+    return out.data; /* ownership transferred to caller (NULL when empty) */
+}
+
+/* GET /-/repos — the signed-in user's accessible repositories: every repo in
+ * every namespace the caller holds a role on (RBAC discovery via
+ * collect_accessible_repos). All data comes from the gateway over /_rpc; the
+ * webapp holds no state. `sid` NULL/empty → bounce to /login. */
+static void route_repos_get(struct yloop *loop, struct yloop_stream *s,
+                            const struct serve_ud *sud, const char *sid,
+                            const char *uname, uint32_t owner_uid, int is_admin,
+                            int keep_alive)
+{
+    if (!sid || !*sid || !owner_uid) {
+        send_redirect(s, "/-/login", NULL, keep_alive);
+        return;
+    }
+
+    long total = rpc_result_int(loop, sud, sid, "git_repo.git_repo.count_total", "[]", -1);
+
+    /* Projects discovery is ROLE-based, not creator-index-based (issue #30): the
+     * page lists every repo in every namespace the caller can READ, INCLUDING
+     * subgroups reached by INHERITED role and EXCLUDING repos the caller created
+     * but has since lost access to. collect_accessible_repos walks /_whoami →
+     * accounts.ns_subtree → git_repo.list_for_namespace; the creator index
+     * (list_for_owner) is intentionally NOT consulted. */
+    char *repos = collect_accessible_repos(loop, sud, sid);
+
+    struct buf b; buf_init(&b);
+    render_shell_open(&b, "Repositories", uname, "projects", is_admin);
+    render_page_header(&b, "Repositories", "Repositories you can access across the mesh.",
+                       "<a class=\"btn primary\" href=\"/-/repos/new\">New repository</a>");
+
+    char meta[64];
+    if (total >= 0) snprintf(meta, sizeof(meta), "%ld total in the mesh", total);
+    else            meta[0] = 0;
+    panel_open(&b, "Your repositories", meta[0] ? meta : NULL);
+
+    int any = 0;
+    buf_puts(&b, "<table class=\"file-table\"><tbody>");
+    if (repos && *repos) {
+        char *save = NULL;
+        for (char *full = strtok_r(repos, "\n", &save); full; full = strtok_r(NULL, "\n", &save)) {
+            if (!*full) continue;
+            any = 1;
+            buf_puts(&b, "<tr><td class=\"ic\">\xf0\x9f\x93\x81</td><td><a class=\"file-name dir\" href=\"/");
+            buf_esc(&b, full); buf_puts(&b, "/-/tree\">");
+            buf_esc(&b, full); buf_puts(&b, "</a></td></tr>");
+        }
+    }
+    buf_puts(&b, "</tbody></table>");
 
     if (!any)
         buf_puts(&b, "<p class=\"muted\">No repositories yet — use "
                      "\xe2\x80\x9cNew repository\xe2\x80\x9d to create one.</p>");
     panel_close(&b);
-    buf_free(&seen);
-    if (who) yjson_doc_free(who);
+    free(repos);
     render_shell_close(s, &b, keep_alive);
 }
 
@@ -1238,38 +1419,67 @@ static struct yjson_doc *rpc_result_doc(struct yloop *loop, const struct serve_u
 
 /* Split "<account>/<repo>[/<verb>]" out of a path (query stripped). On
  * success fills acct/repo/verb (verb "" if none) and returns 1. */
+/* Byte offset of the GitLab-style "/-/" separator within [path, path+plen)
+ * (query already excluded by the caller), or -1 if absent. Offset 0 means the
+ * path is a top-level command (/-/login); a positive offset means a project
+ * sub-page (<namespace>/<repo>/-/<verb>). */
+static long dash_sep(const char *path, size_t plen)
+{
+    if (plen >= 3) {
+        for (size_t i = 0; i + 3 <= plen; ++i)
+            if (path[i] == '/' && path[i + 1] == '-' && path[i + 2] == '/')
+                return (long)i;
+    }
+    return -1;
+}
+
+/* Split the RESOURCE part of a project URL (everything before "/-/", e.g.
+ * "/acme/platform/svc") into the namespace path (`acct`, all but the last
+ * segment) and the repo (`repo`, the last segment). Returns 1 on success
+ * (needs >= 1 namespace segment + a repo), 0 otherwise. */
+static int split_namespace_repo(const char *resource, size_t rlen,
+                                char *acct, size_t acct_cap,
+                                char *repo, size_t repo_cap)
+{
+    char tmp[1024];
+    if (rlen == 0 || rlen >= sizeof(tmp)) return 0;
+    memcpy(tmp, resource, rlen); tmp[rlen] = 0;
+    char *segs[16] = {0}; int ns = 0;
+    for (char *tok = strtok(tmp, "/"); tok && ns < 16; tok = strtok(NULL, "/"))
+        segs[ns++] = tok;
+    if (ns < 2) return 0; /* need namespace + repo */
+    for (int i = 0; i < ns; ++i) if (strstr(segs[i], "..")) return 0;
+    size_t al = 0; acct[0] = 0;
+    for (int i = 0; i < ns - 1; ++i)
+        al += (size_t)snprintf(acct + al, al < acct_cap ? acct_cap - al : 0, "%s%s", i ? "/" : "", segs[i]);
+    if (al >= acct_cap) return 0;
+    snprintf(repo, repo_cap, "%s", segs[ns - 1]);
+    return 1;
+}
+
+/* Parse a project sub-page URL "<namespace>/<repo>/-/<verb>" (GitLab style).
+ * Fills acct/repo/verb and returns 1; 0 if the path is not a project sub-page
+ * (no "/-/" separator at a positive offset, or a malformed resource). The file
+ * or directory operated on rides in the query string, not the URL path. */
 static int parse_repo_path(const char *path, size_t path_len,
                            char *acct, size_t acct_cap,
                            char *repo, size_t repo_cap,
                            char *verb, size_t verb_cap)
 {
-    char tmp[1024];
     size_t plen = path_len;
     const char *q = memchr(path, '?', path_len);
     if (q) plen = (size_t)(q - path);
-    if (plen == 0 || plen >= sizeof(tmp)) return 0;
-    memcpy(tmp, path, plen); tmp[plen] = 0;
-
-    char *segs[10] = {0}; int ns = 0;
-    for (char *tok = strtok(tmp, "/"); tok && ns < 10; tok = strtok(NULL, "/"))
-        segs[ns++] = tok;
-    if (ns < 2) return 0;
-    for (int i = 0; i < ns; ++i) if (strstr(segs[i], "..")) return 0;
-    /* The full repo path is <namespace-path>/<repo>[/<verb>]. The namespace may
-     * be MULTIPLE segments (a subgroup, e.g. acme/platform), so disambiguate
-     * from the right: a trailing KNOWN verb (issues/runs/settings/edit/new) is
-     * the verb, the segment before it is the repo, and everything earlier is the
-     * namespace. Otherwise the last segment is the repo. This keeps the 2-level
-     * cases identical while making nested namespaces addressable (issue #30). */
-    int has_verb = (ns >= 3 && repo_route_for(segs[ns - 1]) != NULL);
-    int repo_idx = has_verb ? ns - 2 : ns - 1;
-    if (repo_idx < 1) return 0; /* need at least one namespace segment */
-    size_t al = 0; acct[0] = 0;
-    for (int i = 0; i < repo_idx; ++i)
-        al += (size_t)snprintf(acct + al, al < acct_cap ? acct_cap - al : 0, "%s%s", i ? "/" : "", segs[i]);
-    if (al >= acct_cap) return 0;
-    snprintf(repo, repo_cap, "%s", segs[repo_idx]);
-    snprintf(verb, verb_cap, "%s", has_verb ? segs[ns - 1] : "");
+    long d = dash_sep(path, plen);
+    if (d <= 0) return 0; /* 0 = top-level command, -1 = bare namespace path */
+    if (!split_namespace_repo(path, (size_t)d, acct, acct_cap, repo, repo_cap)) return 0;
+    /* verb = first segment after "/-/" (the rest, if any, is ignored here; the
+     * acted-on file/dir is a query parameter). */
+    const char *tail = path + d + 3;
+    size_t tlen = plen - (size_t)d - 3;
+    size_t vlen = 0;
+    while (vlen < tlen && tail[vlen] != '/') ++vlen;
+    if (vlen == 0 || vlen >= verb_cap) return 0;
+    memcpy(verb, tail, vlen); verb[vlen] = 0;
     return 1;
 }
 
@@ -1310,8 +1520,8 @@ static void route_repo_browse(struct yloop *loop, struct yloop_stream *s,
     buf_puts(&b, "</div><div class=\"panel-actions\">");
     {
         char href[1200];
-        if (*dirv) snprintf(href, sizeof(href), "/%s/%s/new?dir=%s", acct, repo, dirv);
-        else       snprintf(href, sizeof(href), "/%s/%s/new", acct, repo);
+        if (*dirv) snprintf(href, sizeof(href), "/%s/%s/-/new?dir=%s", acct, repo, dirv);
+        else       snprintf(href, sizeof(href), "/%s/%s/-/new", acct, repo);
         buf_puts(&b, "<a class=\"btn small\" href=\"");
         buf_esc(&b, href);
         buf_puts(&b, "\">New file</a>");
@@ -1335,10 +1545,10 @@ static void route_repo_browse(struct yloop *loop, struct yloop_stream *s,
             char *slash = strrchr(up, '/');
             if (slash) *slash = 0; else up[0] = 0;
             if (up[0]) buf_printf(&b, "<tr><td class=\"ic\">\xf0\x9f\x93\x81</td>"
-                                      "<td><a class=\"file-name dir\" href=\"/%s/%s?dir=%s\">..</a></td>"
+                                      "<td><a class=\"file-name dir\" href=\"/%s/%s/-/tree?dir=%s\">..</a></td>"
                                       "<td class=\"muted\">-</td><td class=\"muted\">-</td></tr>", acct, repo, up);
             else       buf_printf(&b, "<tr><td class=\"ic\">\xf0\x9f\x93\x81</td>"
-                                      "<td><a class=\"file-name dir\" href=\"/%s/%s\">..</a></td>"
+                                      "<td><a class=\"file-name dir\" href=\"/%s/%s/-/tree\">..</a></td>"
                                       "<td class=\"muted\">-</td><td class=\"muted\">-</td></tr>", acct, repo);
         }
         char *save = NULL;
@@ -1356,8 +1566,8 @@ static void route_repo_browse(struct yloop *loop, struct yloop_stream *s,
             buf_puts(&b, is_dir ? "</td><td><a class=\"file-name dir\" href=\"/"
                                 : "</td><td><a class=\"file-name file\" href=\"/");
             buf_esc(&b, acct); buf_puts(&b, "/"); buf_esc(&b, repo);
-            if (is_dir) { buf_puts(&b, "?dir="); buf_esc(&b, child); }
-            else        { buf_puts(&b, "/edit?path="); buf_esc(&b, child); }
+            if (is_dir) { buf_puts(&b, "/-/tree?dir="); buf_esc(&b, child); }
+            else        { buf_puts(&b, "/-/edit?path="); buf_esc(&b, child); }
             buf_puts(&b, "\">"); buf_esc(&b, nm);
             buf_puts(&b, "</a></td><td class=\"muted\">-</td><td class=\"muted\">-</td></tr>");
         }
@@ -1391,16 +1601,16 @@ static void render_editor_page(struct yloop_stream *s, const char *uname,
     buf_puts(&b, "<header class=\"editor-header\"><div><div class=\"breadcrumbs\"><a href=\"/");
     buf_esc(&b, acct); buf_puts(&b, "\">"); buf_esc(&b, acct);
     buf_puts(&b, "</a> <span>/</span> <a href=\"/");
-    buf_esc(&b, acct); buf_puts(&b, "/"); buf_esc(&b, repo); buf_puts(&b, "\">");
+    buf_esc(&b, acct); buf_puts(&b, "/"); buf_esc(&b, repo); buf_puts(&b, "/-/tree\">");
     buf_esc(&b, repo); buf_puts(&b, "</a>");
     if (path && *path) { buf_puts(&b, " <span>/</span> <strong>"); buf_esc(&b, path); buf_puts(&b, "</strong>"); }
     buf_puts(&b, "</div><h1>");
     buf_puts(&b, is_new ? "New file" : "Edit file");
     buf_puts(&b, "</h1></div><a class=\"btn\" href=\"/");
-    buf_esc(&b, acct); buf_puts(&b, "/"); buf_esc(&b, repo); buf_puts(&b, "\">Cancel</a></header>");
+    buf_esc(&b, acct); buf_puts(&b, "/"); buf_esc(&b, repo); buf_puts(&b, "/-/tree\">Cancel</a></header>");
 
     buf_puts(&b, "<form id=\"f\" class=\"editor-form\" method=\"post\" action=\"/");
-    buf_esc(&b, acct); buf_puts(&b, "/"); buf_esc(&b, repo); buf_puts(&b, "/edit\">");
+    buf_esc(&b, acct); buf_puts(&b, "/"); buf_esc(&b, repo); buf_puts(&b, "/-/edit\">");
 
     /* Toolbar: path + commit message + commit, all on one dense row. */
     buf_puts(&b, "<div class=\"editor-toolbar\">"
@@ -1450,7 +1660,7 @@ static void route_repo_edit_get(struct yloop *loop, struct yloop_stream *s,
                                 const char *verb, const char *full_path,
                                 int is_admin, int keep_alive)
 {
-    if (!sid || !*sid) { send_redirect(s, "/login", NULL, keep_alive); return; }
+    if (!sid || !*sid) { send_redirect(s, "/-/login", NULL, keep_alive); return; }
     uint32_t rid = repo_hash(acct, repo);
 
     if (strcmp(verb, "new") == 0) {
@@ -1486,7 +1696,7 @@ static void route_repo_edit_post(struct yloop *loop, struct yloop_stream *s,
                                  const char *acct, const char *repo,
                                  const char *body, size_t body_len, int keep_alive)
 {
-    if (!sid || !*sid) { send_redirect(s, "/login", NULL, keep_alive); return; }
+    if (!sid || !*sid) { send_redirect(s, "/-/login", NULL, keep_alive); return; }
     uint32_t rid = repo_hash(acct, repo);
 
     char *path = form_get(body, body_len, "path");
@@ -1523,8 +1733,8 @@ static void route_repo_edit_post(struct yloop *loop, struct yloop_stream *s,
     snprintf(dir, sizeof(dir), "%s", path);
     char *slash = strrchr(dir, '/');
     char where[1200];
-    if (slash) { *slash = 0; snprintf(where, sizeof(where), "/%s/%s?dir=%s", acct, repo, dir); }
-    else       snprintf(where, sizeof(where), "/%s/%s", acct, repo);
+    if (slash) { *slash = 0; snprintf(where, sizeof(where), "/%s/%s/-/tree?dir=%s", acct, repo, dir); }
+    else       snprintf(where, sizeof(where), "/%s/%s/-/tree", acct, repo);
     free(path); free(content); free(message);
     send_redirect(s, where, NULL, keep_alive);
 }
@@ -1765,19 +1975,6 @@ static int service_active(const struct serve_ud *sud, const char *name)
     return 0;
 }
 
-/* Single-segment paths that are NOT user accounts (mirrors the gateway's
- * is_reserved_top), so `/login` etc. don't render an account-landing. */
-static int is_reserved_top(const char *seg)
-{
-    static const char *const RESERVED[] = {
-        "login", "logout", "register", "repos", "admin", "static",
-        "search", "dashboard", "favicon.ico", "robots.txt", NULL,
-    };
-    for (size_t i = 0; RESERVED[i]; ++i)
-        if (strcmp(RESERVED[i], seg) == 0) return 1;
-    return 0;
-}
-
 /* Shared page chrome — every data page opens with the same shell (via
  * render_shell_open) and closes with render_shell_close, so the app is one
  * whole UI rather than disconnected stubs. */
@@ -1791,8 +1988,8 @@ static void page_close_and_send(struct yloop_stream *s, struct buf *b, int keep_
     render_shell_close(s, b, keep_alive);
 }
 
-/* GET /<account> — account landing: the account's repositories listed by
- * name (git_repo.git_repo.list_for_owner) + the count. */
+/* GET /<account> — account landing: the namespace's repositories listed by
+ * name (git_repo.git_repo.list_for_namespace) + the count. */
 static void page_account_landing(struct yloop *loop, struct yloop_stream *s,
                                  const struct serve_ud *sud, const char *sid,
                                  const char *uname, const char *acct, int is_admin,
@@ -1825,7 +2022,7 @@ static void page_account_landing(struct yloop *loop, struct yloop_stream *s,
             any = 1;
             buf_puts(&b, "<tr><td class=\"ic\">\xf0\x9f\x93\x81</td><td><a class=\"file-name dir\" href=\"/");
             buf_esc(&b, acct); buf_puts(&b, "/"); buf_esc(&b, line);
-            buf_puts(&b, "\">"); buf_esc(&b, acct); buf_puts(&b, "/"); buf_esc(&b, line);
+            buf_puts(&b, "/-/tree\">"); buf_esc(&b, acct); buf_puts(&b, "/"); buf_esc(&b, line);
             buf_puts(&b, "</a></td></tr>");
         }
         buf_puts(&b, "</tbody></table>");
@@ -1995,13 +2192,13 @@ static void page_admin_overview(struct yloop *loop, struct yloop_stream *s,
 
     panel_open(&b, "Manage", NULL);
     buf_puts(&b, "<table class=\"file-table\"><tbody>"
-                 "<tr><td><a class=\"file-name\" href=\"/admin/users\">Users</a></td>"
+                 "<tr><td><a class=\"file-name\" href=\"/-/admin/users\">Users</a></td>"
                  "<td class=\"muted\">accounts &amp; registration</td></tr>"
-                 "<tr><td><a class=\"file-name\" href=\"/admin/repos\">Repositories</a></td>"
+                 "<tr><td><a class=\"file-name\" href=\"/-/admin/repos\">Repositories</a></td>"
                  "<td class=\"muted\">all repositories in the mesh</td></tr>"
-                 "<tr><td><a class=\"file-name\" href=\"/admin/tokens\">Tokens</a></td>"
+                 "<tr><td><a class=\"file-name\" href=\"/-/admin/tokens\">Tokens</a></td>"
                  "<td class=\"muted\">personal access tokens</td></tr>"
-                 "<tr><td><a class=\"file-name\" href=\"/admin/services\">Services</a></td>"
+                 "<tr><td><a class=\"file-name\" href=\"/-/admin/services\">Services</a></td>"
                  "<td class=\"muted\">mesh service health</td></tr>"
                  "</tbody></table>");
     panel_close(&b);
@@ -2056,7 +2253,7 @@ static void page_admin_users(struct yloop *loop, struct yloop_stream *s,
         buf_puts(&b, "</tbody></table>");
     }
     buf_puts(&b, "<p class=\"muted small\">Users are created by signing up at "
-                 "<a href=\"/register\">/register</a> (username + password). Admin-side "
+                 "<a href=\"/-/register\">/register</a> (username + password). Admin-side "
                  "user creation with credentials and role assignment is not implemented "
                  "yet.</p>");
     panel_close(&b);
@@ -2106,7 +2303,7 @@ static void page_admin_tokens(struct yloop *loop, struct yloop_stream *s,
     buf_puts(&b, "</section>");
     panel_open(&b, "Mint personal access token", NULL);
     if (!active) buf_puts(&b, "<p class=\"muted\">PAT service not active.</p>");
-    buf_puts(&b, "<form class=\"form-grid\" method=\"post\" action=\"/admin/tokens/mint_pat\">"
+    buf_puts(&b, "<form class=\"form-grid\" method=\"post\" action=\"/-/admin/tokens/mint_pat\">"
                  "<label>uid <input type=\"number\" name=\"uid\" value=\"100\"></label>"
                  "<button type=\"submit\" class=\"primary\">Mint</button></form>");
     panel_close(&b);
@@ -2149,7 +2346,7 @@ static void page_admin_namespaces(struct yloop *loop, struct yloop_stream *s,
             const char *p = yjson_as_string(yjson_object_get(e, "path"), "");
             const char *kind = yjson_as_string(yjson_object_get(e, "kind"), "");
             long owner = (long)yjson_as_int(yjson_object_get(e, "owner_uid"), 0);
-            buf_puts(&b, "<tr><td><a class=\"file-name\" href=\"/admin/namespaces/");
+            buf_puts(&b, "<tr><td><a class=\"file-name\" href=\"/-/admin/namespaces/");
             buf_esc(&b, p);
             buf_puts(&b, "\">");
             buf_esc(&b, p);
@@ -2157,7 +2354,7 @@ static void page_admin_namespaces(struct yloop *loop, struct yloop_stream *s,
             buf_esc(&b, kind);
             buf_puts(&b, "</td><td class=\"muted\">");
             buf_printf(&b, "%ld", owner);
-            buf_puts(&b, "</td><td><a href=\"/admin/namespaces/");
+            buf_puts(&b, "</td><td><a href=\"/-/admin/namespaces/");
             buf_esc(&b, p);
             buf_puts(&b, "\">manage</a></td></tr>");
         }
@@ -2168,7 +2365,7 @@ static void page_admin_namespaces(struct yloop *loop, struct yloop_stream *s,
     panel_close(&b);
 
     panel_open(&b, "Create group namespace", NULL);
-    buf_puts(&b, "<form class=\"form-grid\" method=\"post\" action=\"/admin/namespaces/create\">"
+    buf_puts(&b, "<form class=\"form-grid\" method=\"post\" action=\"/-/admin/namespaces/create\">"
                  "<label>Slug <input type=\"text\" name=\"slug\" placeholder=\"acme\"></label>"
                  "<label>Parent path <input type=\"text\" name=\"parent\" placeholder=\"(empty = root group)\"></label>"
                  "<button type=\"submit\" class=\"primary\">Create group</button></form>"
@@ -2267,8 +2464,8 @@ static void page_admin_namespace(struct yloop *loop, struct yloop_stream *s,
     page_open(&b, title, uname, "admin-namespaces", /*is_admin=*/1);
     render_page_header(&b, nspath, "Role memberships for this namespace. Roles inherit to "
                                    "child namespaces.", NULL);
-    buf_puts(&b, "<p class=\"muted small\"><a href=\"/admin/namespaces\">\xe2\x86\x90 All namespaces</a></p>");
-    render_namespace_members(&b, loop, sud, sid, nspath, "/admin/namespaces");
+    buf_puts(&b, "<p class=\"muted small\"><a href=\"/-/admin/namespaces\">\xe2\x86\x90 All namespaces</a></p>");
+    render_namespace_members(&b, loop, sud, sid, nspath, "/-/admin/namespaces");
     page_close_and_send(s, &b, keep_alive);
 }
 
@@ -2306,14 +2503,14 @@ static void page_groups(struct yloop *loop, struct yloop_stream *s,
                         const struct serve_ud *sud, const char *sid,
                         const char *uname, int is_admin, int keep_alive)
 {
-    if (!uname || !*uname) { send_redirect(s, "/login", NULL, keep_alive); return; }
+    if (!uname || !*uname) { send_redirect(s, "/-/login", NULL, keep_alive); return; }
     struct yjson_doc *who = whoami_doc(loop, sud, sid);
     const struct yjson_value *nss = who ? yjson_object_get(yjson_doc_root(who), "namespaces") : NULL;
 
     struct buf b; buf_init(&b);
     page_open(&b, "Groups", uname, "groups", is_admin);
-    render_page_header(&b, "Groups", "Namespaces you own or maintain. Manage members and "
-                                     "create subgroups.", NULL);
+    render_page_header(&b, "Groups", "Namespaces you belong to. Maintainers and owners can "
+                                     "also manage members and create subgroups.", NULL);
     panel_open(&b, "Your namespaces", NULL);
     buf_puts(&b, "<table class=\"file-table\"><thead><tr><th>Namespace</th><th>Your role</th>"
                  "<th></th></tr></thead><tbody>");
@@ -2323,23 +2520,50 @@ static void page_groups(struct yloop *loop, struct yloop_stream *s,
         const struct yjson_value *e = yjson_array_at(nss, i);
         const char *p = yjson_as_string(yjson_object_get(e, "path"), NULL);
         const char *r = yjson_as_string(yjson_object_get(e, "role"), NULL);
-        if (!p || !*p || !r || !role_at_least(r, "maintainer")) continue;
+        if (!p || !*p || !r) continue;
+        /* List EVERY membership, whatever the role — a member must be able to see
+         * a namespace they were added to even before it has any repos. Only a
+         * maintainer+ gets the management link (the detail page is gated and the
+         * backend re-checks every mutation); lower roles get a browse link to the
+         * namespace's repo listing. */
+        int can_manage = role_at_least(r, "maintainer");
         any = 1;
-        buf_puts(&b, "<tr><td><a class=\"file-name\" href=\"/groups/");
+        /* The namespace NAME links to its landing page (bare path); the
+         * "manage" action column (below) carries the maintainer-only link. */
+        buf_puts(&b, "<tr><td><a class=\"file-name\" href=\"/");
         buf_esc(&b, p);
         buf_puts(&b, "\">");
         buf_esc(&b, p);
         buf_puts(&b, "</a></td><td>");
         buf_esc(&b, r);
-        buf_puts(&b, "</td><td><a href=\"/groups/");
-        buf_esc(&b, p);
-        buf_puts(&b, "\">manage</a></td></tr>");
+        buf_puts(&b, "</td><td>");
+        if (can_manage) {
+            buf_puts(&b, "<a href=\"/-/groups/");
+            buf_esc(&b, p);
+            buf_puts(&b, "\">manage</a>");
+        } else {
+            buf_puts(&b, "<a href=\"/");
+            buf_esc(&b, p);
+            buf_puts(&b, "\">browse</a>");
+        }
+        buf_puts(&b, "</td></tr>");
     }
     if (!any)
-        buf_puts(&b, "<tr><td colspan=\"3\" class=\"muted\">You don't own or maintain any "
-                     "namespace directly. You may still manage a subgroup you inherit "
-                     "rights to — enter its path below.</td></tr>");
+        buf_puts(&b, "<tr><td colspan=\"3\" class=\"muted\">You are not a member of any "
+                     "namespace yet.</td></tr>");
     buf_puts(&b, "</tbody></table>");
+    panel_close(&b);
+
+    /* Create a top-level group (GitLab-style). Allowed for any signed-in user
+     * unless the deployment restricts it (accounts.allow_user_root_groups) or
+     * the slug is taken — either way the backend surfaces the error. */
+    panel_open(&b, "Create a group", NULL);
+    buf_puts(&b, "<form class=\"form-grid\" method=\"post\" action=\"/-/groups/create\">"
+                 "<label>Group name <input type=\"text\" name=\"slug\" "
+                 "placeholder=\"acme\" pattern=\"[A-Za-z0-9._-]{1,63}\" required></label>"
+                 "<button type=\"submit\" class=\"primary\">Create group</button></form>"
+                 "<p class=\"muted small\">Creates a top-level group you own. To make a "
+                 "subgroup, open the parent group and use its \xe2\x80\x9c" "Create subgroup" "\xe2\x80\x9d form.</p>");
     panel_close(&b);
 
     /* Direct memberships are listed above; INHERITED subgroups (a maintainer of
@@ -2347,7 +2571,7 @@ static void page_groups(struct yloop *loop, struct yloop_stream *s,
      * site-admin tree view, so offer a path box to jump straight to one — the
      * detail page authorizes by inherited role. */
     panel_open(&b, "Manage a namespace by path", NULL);
-    buf_puts(&b, "<form class=\"form-grid\" method=\"post\" action=\"/groups/go\">"
+    buf_puts(&b, "<form class=\"form-grid\" method=\"post\" action=\"/-/groups/go\">"
                  "<label>Namespace path <input type=\"text\" name=\"path\" "
                  "placeholder=\"acme/platform\" pattern=\"[A-Za-z0-9._/-]{1,128}\" required></label>"
                  "<button type=\"submit\" class=\"primary\">Manage</button></form>");
@@ -2361,7 +2585,7 @@ static void page_group_detail(struct yloop *loop, struct yloop_stream *s,
                               const struct serve_ud *sud, const char *sid,
                               const char *uname, const char *nspath, int is_admin, int keep_alive)
 {
-    if (!uname || !*uname) { send_redirect(s, "/login", NULL, keep_alive); return; }
+    if (!uname || !*uname) { send_redirect(s, "/-/login", NULL, keep_alive); return; }
     /* Gate the page on the caller being maintainer+ on this namespace (the
      * backend enforces it too on every mutation). */
     struct yjson_doc *who = whoami_doc(loop, sud, sid);
@@ -2378,7 +2602,7 @@ static void page_group_detail(struct yloop *loop, struct yloop_stream *s,
     char title[160]; snprintf(title, sizeof(title), "Group \xc2\xb7 %s", nspath);
     page_open(&b, title, uname, "groups", is_admin);
     render_page_header(&b, nspath, "Members and subgroups of this namespace.", NULL);
-    buf_puts(&b, "<p class=\"muted small\"><a href=\"/groups\">\xe2\x86\x90 Your groups</a></p>");
+    buf_puts(&b, "<p class=\"muted small\"><a href=\"/-/groups\">\xe2\x86\x90 Your groups</a></p>");
 
     /* The namespace's repositories (works for NESTED groups too, which the
      * /<account> URL can't reach because /a/b parses as a repo). */
@@ -2396,7 +2620,7 @@ static void page_group_detail(struct yloop *loop, struct yloop_stream *s,
             any_repo = 1;
             buf_puts(&b, "<tr><td class=\"ic\">\xf0\x9f\x93\x81</td><td><a class=\"file-name dir\" href=\"/");
             buf_esc(&b, nspath); buf_puts(&b, "/"); buf_esc(&b, line);
-            buf_puts(&b, "\">");
+            buf_puts(&b, "/-/tree\">");
             buf_esc(&b, nspath); buf_puts(&b, "/"); buf_esc(&b, line);
             buf_puts(&b, "</a></td></tr>");
         }
@@ -2406,12 +2630,12 @@ static void page_group_detail(struct yloop *loop, struct yloop_stream *s,
     panel_close(&b);
     free(names);
 
-    render_namespace_members(&b, loop, sud, sid, nspath, "/groups");
+    render_namespace_members(&b, loop, sud, sid, nspath, "/-/groups");
     page_close_and_send(s, &b, keep_alive);
 }
 
-/* POST <base>/create — create a group namespace. `base` is "/admin/namespaces"
- * or "/groups", so the same handler serves the site-admin and the group-owner
+/* POST <base>/create — create a group namespace. `base` is "/-/admin/namespaces"
+ * or "/-/groups", so the same handler serves the site-admin and the group-owner
  * surfaces; the backend enforces the real authority (root creation = site
  * admin; subgroup = maintainer on parent). Failures are shown, not swallowed. */
 static void webapp_ns_create(struct yloop *loop, struct yloop_stream *s,
@@ -2523,7 +2747,7 @@ static void page_repo_settings(struct yloop *loop, struct yloop_stream *s,
     panel_open(&b, "Access", NULL);
     buf_puts(&b, "<p>Browse this repository at <a href=\"/");
     buf_esc(&b, acct); buf_puts(&b, "/"); buf_esc(&b, repo);
-    buf_puts(&b, "\">/");
+    buf_puts(&b, "/-/tree\">/");
     buf_esc(&b, acct); buf_puts(&b, "/"); buf_esc(&b, repo);
     buf_puts(&b, "</a>.</p><p class=\"muted small\">Files are served over the gateway "
                  "<code>/_rpc</code> surface; direct git clone is not wired in this build.</p>");
@@ -2532,17 +2756,19 @@ static void page_repo_settings(struct yloop *loop, struct yloop_stream *s,
     render_shell_close(s, &b, keep_alive);
 }
 
-/* GET /search?q=<term> — filter the signed-in user's repositories by name
- * substring (case-insensitive). Reuses git_repo.git_repo.list_for_owner over
- * the gateway and matches in-process; no backend search method is assumed.
- * Not signed in → bounce to /login. */
+/* GET /-/search?q=<term> — filter the signed-in user's accessible repositories
+ * by name substring (case-insensitive). Uses the SAME RBAC discovery as /-/repos
+ * (collect_accessible_repos: whoami → ns_subtree → list_for_namespace) so
+ * group/subgroup repos visible through inherited membership are searchable, then
+ * matches in-process; no backend search method is assumed. Not signed in →
+ * bounce to /login. */
 static void page_search(struct yloop *loop, struct yloop_stream *s,
                         const struct serve_ud *sud, const char *sid,
                         const char *uname, const char *full_path, int is_admin,
                         int keep_alive)
 {
     if (!sid || !*sid || !uname || !*uname) {
-        send_redirect(s, "/login", NULL, keep_alive);
+        send_redirect(s, "/-/login", NULL, keep_alive);
         return;
     }
     char *q = query_get(full_path, "q");
@@ -2554,9 +2780,7 @@ static void page_search(struct yloop *loop, struct yloop_stream *s,
     }
     ql[qn] = 0;
 
-    char args[48];
-    snprintf(args, sizeof(args), "[%u]", hash_username(uname));
-    char *names = rpc_result_str(loop, sud, sid, "git_repo.git_repo.list_for_owner", args, NULL);
+    char *names = collect_accessible_repos(loop, sud, sid);
 
     struct buf b; buf_init(&b);
     page_open(&b, "Search", uname, "projects", is_admin);
@@ -2585,7 +2809,7 @@ static void page_search(struct yloop *loop, struct yloop_stream *s,
             /* `line` is the full repo path (<namespace>/<repo>). */
             buf_puts(&b, "<tr><td class=\"ic\">\xf0\x9f\x93\x81</td><td><a class=\"file-name dir\" href=\"/");
             buf_esc(&b, line);
-            buf_puts(&b, "\">"); buf_esc(&b, line);
+            buf_puts(&b, "/-/tree\">"); buf_esc(&b, line);
             buf_puts(&b, "</a></td></tr>");
         }
         buf_puts(&b, "</tbody></table>");
@@ -2602,7 +2826,7 @@ static void page_repos_new_form(struct yloop *loop, struct yloop_stream *s,
                                 const struct serve_ud *sud, const char *sid,
                                 const char *uname, int is_admin, int keep_alive)
 {
-    if (!uname || !*uname) { send_redirect(s, "/login", NULL, keep_alive); return; }
+    if (!uname || !*uname) { send_redirect(s, "/-/login", NULL, keep_alive); return; }
 
     /* The namespaces this user may create a repo in: any where they hold
      * developer+ (their personal namespace, plus groups they can push to).
@@ -2620,7 +2844,7 @@ static void page_repos_new_form(struct yloop *loop, struct yloop_stream *s,
      * e.g. a developer on `acme` creating in `acme/platform` — can be entered;
      * the backend authorizes by inherited namespace role. Defaults to the
      * personal namespace. */
-    buf_puts(&b, "<form class=\"form-grid\" method=\"post\" action=\"/repos/new\">"
+    buf_puts(&b, "<form class=\"form-grid\" method=\"post\" action=\"/-/repos/new\">"
                  "<label>Namespace <input name=\"namespace\" list=\"ns-options\" value=\"");
     buf_esc(&b, uname);
     buf_puts(&b, "\" pattern=\"[A-Za-z0-9._/-]{1,128}\" required></label>"
@@ -2710,15 +2934,15 @@ static void page_dashboard_runs(struct yloop *loop, struct yloop_stream *s,
     render_shell_close(s, &b, keep_alive);
 }
 
-/* GET /dashboard/issues — open issues summed across the user's repos
- * (no global list API yet; aggregate per-repo counts). */
+/* GET /-/dashboard/issues — open issues summed across every repo the user can
+ * access (no global list API yet; aggregate per-repo counts). Uses the SAME RBAC
+ * discovery as /-/repos (collect_accessible_repos) so group-managed and
+ * inherited-subgroup repos are included, not just the creator index. */
 static void page_dashboard_issues(struct yloop *loop, struct yloop_stream *s,
                                   const struct serve_ud *sud, const char *sid,
                                   const char *uname, int is_admin, int keep_alive)
 {
-    char args[48];
-    snprintf(args, sizeof(args), "[%u]", hash_username(uname));
-    char *names = rpc_result_str(loop, sud, sid, "git_repo.git_repo.list_for_owner", args, NULL);
+    char *names = collect_accessible_repos(loop, sud, sid);
 
     struct buf b; buf_init(&b);
     render_shell_open(&b, "Issues", uname, "issues", is_admin);
@@ -2740,7 +2964,7 @@ static void page_dashboard_issues(struct yloop *loop, struct yloop_stream *s,
                 open_n = rpc_result_int(loop, sud, sid, "issues.issues.count_open_in_repo", ia, -1);
             }
             buf_puts(&b, "<tr><td><a class=\"file-name\" href=\"/");
-            buf_esc(&b, line); buf_puts(&b, "/issues\">");
+            buf_esc(&b, line); buf_puts(&b, "/-/issues\">");
             buf_esc(&b, line);
             buf_puts(&b, "</a></td><td>");
             if (open_n >= 0) buf_printf(&b, "<span class=\"badge open\">%ld</span>", open_n);
@@ -2768,13 +2992,13 @@ static void post_issue_new(struct yloop *loop, struct yloop_stream *s,
     /* No valid session → no mutation. Never attribute an issue to a
      * fallback uid; an unresolved actor is an auth failure. */
     uint32_t uid = resolve_uid(loop, sud, sid);
-    if (!uid) { send_redirect(s, "/login", NULL, keep_alive); return; }
+    if (!uid) { send_redirect(s, "/-/login", NULL, keep_alive); return; }
     uint32_t rid = repo_hash(acct, repo);
     char args[64];
     snprintf(args, sizeof(args), "[%u,%u]", rid, uid);
     rpc_result_int(loop, sud, sid, "issues.issues.open", args, -1);
     char where[300];
-    snprintf(where, sizeof(where), "/%s/%s/issues", acct, repo);
+    snprintf(where, sizeof(where), "/%s/%s/-/issues", acct, repo);
     send_redirect(s, where, NULL, keep_alive);
 }
 
@@ -2783,7 +3007,7 @@ static void post_issue_close(struct yloop *loop, struct yloop_stream *s,
                              const char *acct, const char *repo,
                              const char *body, size_t body_len, int keep_alive)
 {
-    if (!resolve_uid(loop, sud, sid)) { send_redirect(s, "/login", NULL, keep_alive); return; }
+    if (!resolve_uid(loop, sud, sid)) { send_redirect(s, "/-/login", NULL, keep_alive); return; }
     char *iid_s = form_get(body, body_len, "issue_id");
     if (iid_s && *iid_s) {
         char args[48];
@@ -2792,7 +3016,7 @@ static void post_issue_close(struct yloop *loop, struct yloop_stream *s,
     }
     free(iid_s);
     char where[300];
-    snprintf(where, sizeof(where), "/%s/%s/issues", acct, repo);
+    snprintf(where, sizeof(where), "/%s/%s/-/issues", acct, repo);
     send_redirect(s, where, NULL, keep_alive);
 }
 
@@ -2800,12 +3024,12 @@ static void post_run_new(struct yloop *loop, struct yloop_stream *s,
                          const struct serve_ud *sud, const char *sid,
                          const char *acct, const char *repo, int keep_alive)
 {
-    if (!resolve_uid(loop, sud, sid)) { send_redirect(s, "/login", NULL, keep_alive); return; }
+    if (!resolve_uid(loop, sud, sid)) { send_redirect(s, "/-/login", NULL, keep_alive); return; }
     char args[48];
     snprintf(args, sizeof(args), "[%u]", repo_hash(acct, repo));
     rpc_result_int(loop, sud, sid, "git_pipeline.git_pipeline.enqueue", args, -1);
     char where[300];
-    snprintf(where, sizeof(where), "/%s/%s/runs", acct, repo);
+    snprintf(where, sizeof(where), "/%s/%s/-/runs", acct, repo);
     send_redirect(s, where, NULL, keep_alive);
 }
 
@@ -2814,7 +3038,7 @@ static void post_run_lease(struct yloop *loop, struct yloop_stream *s,
                            const char *acct, const char *repo,
                            const char *body, size_t body_len, int keep_alive)
 {
-    if (!resolve_uid(loop, sud, sid)) { send_redirect(s, "/login", NULL, keep_alive); return; }
+    if (!resolve_uid(loop, sud, sid)) { send_redirect(s, "/-/login", NULL, keep_alive); return; }
     char *runner_s = form_get(body, body_len, "runner");
     unsigned long runner = runner_s && *runner_s ? strtoul(runner_s, NULL, 10) : 1;
     if (!runner) runner = 1;
@@ -2823,7 +3047,7 @@ static void post_run_lease(struct yloop *loop, struct yloop_stream *s,
     snprintf(args, sizeof(args), "[%lu]", runner);
     rpc_result_int(loop, sud, sid, "git_pipeline.git_pipeline.lease", args, -1);
     char where[300];
-    snprintf(where, sizeof(where), "/%s/%s/runs", acct, repo);
+    snprintf(where, sizeof(where), "/%s/%s/-/runs", acct, repo);
     send_redirect(s, where, NULL, keep_alive);
 }
 
@@ -2859,7 +3083,7 @@ static void webapp_repos_new(struct yloop *loop, struct yloop_stream *s,
     struct claims cl;
     resolve_claims(loop, sud, sid, &cl);
     if (!cl.uid || !cl.username[0]) {
-        send_redirect(s, "/login", NULL, keep_alive);
+        send_redirect(s, "/-/login", NULL, keep_alive);
         return;
     }
     char *name = form_get(body, body_len, "name");
@@ -2875,10 +3099,10 @@ static void webapp_repos_new(struct yloop *loop, struct yloop_stream *s,
             snprintf(args, sizeof(args), "[%u,\"%s\",\"%s\"]", cl.uid, owner_esc, name_esc);
             if (!rpc_invoke(loop, sud, sid, "git_repo.git_repo.make", args, err, sizeof(err))) {
                 free(name); free(ns);
-                render_action_error(s, cl.username, cl.is_admin, err, "/repos/new", keep_alive);
+                render_action_error(s, cl.username, cl.is_admin, err, "/-/repos/new", keep_alive);
                 return;
             }
-            snprintf(redirect, sizeof(redirect), "/%s/%s", owner_name, name);
+            snprintf(redirect, sizeof(redirect), "/%s/%s/-/tree", owner_name, name);
         }
     }
     free(name); free(ns);
@@ -2897,7 +3121,7 @@ static void route_logout(struct yloop *loop, struct yloop_stream *s,
     (void)http_post(loop, &sud->gw, "/logout",
                     "application/x-www-form-urlencoded", NULL, sid, "", 0, &resp);
     http_response_free(&resp);
-    send_redirect(s, "/login",
+    send_redirect(s, "/-/login",
         "Set-Cookie: picomesh-sid=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0\r\n"
         "Set-Cookie: picomesh-uname=; Path=/; SameSite=Lax; Max-Age=0\r\n",
         keep_alive);
@@ -2913,39 +3137,22 @@ static int parse_action_path(const char *path, size_t path_len,
                              char *sect, size_t sect_cap,
                              char *act, size_t act_cap)
 {
-    char tmp[1024];
     size_t plen = path_len;
     const char *q = memchr(path, '?', path_len);
     if (q) plen = (size_t)(q - path);
-    if (plen == 0 || plen >= sizeof(tmp)) return 0;
-    memcpy(tmp, path, plen); tmp[plen] = 0;
-
-    char *segs[10] = {0}; int ns = 0;
-    for (char *tok = strtok(tmp, "/"); tok && ns < 10; tok = strtok(NULL, "/"))
-        segs[ns++] = tok;
-    if (ns < 3) return 0;
-    for (int i = 0; i < ns; ++i) if (strstr(segs[i], "..")) return 0;
-    /* A repo action on <namespace-path>/<repo>/<section>[/<act>]. Recognise the
-     * trailing section from the right so a nested namespace works (issue #30):
-     *   …/<repo>/edit                  (1-segment section)
-     *   …/<repo>/issues|runs/<act>     (2-segment section)
-     * Everything before the repo is the namespace. */
-    int sect_segs;
-    if (strcmp(segs[ns - 1], "edit") == 0)
-        sect_segs = 1;
-    else if (ns >= 4 && (strcmp(segs[ns - 2], "issues") == 0 || strcmp(segs[ns - 2], "runs") == 0))
-        sect_segs = 2;
-    else
-        return 0;
-    int repo_idx = ns - sect_segs - 1;
-    if (repo_idx < 1) return 0; /* need at least one namespace segment */
-    size_t al = 0; acct[0] = 0;
-    for (int i = 0; i < repo_idx; ++i)
-        al += (size_t)snprintf(acct + al, al < acct_cap ? acct_cap - al : 0, "%s%s", i ? "/" : "", segs[i]);
-    if (al >= acct_cap) return 0;
-    snprintf(repo, repo_cap, "%s", segs[repo_idx]);
-    snprintf(sect, sect_cap, "%s", segs[repo_idx + 1]);
-    snprintf(act,  act_cap,  "%s", sect_segs == 2 ? segs[repo_idx + 2] : "");
+    long d = dash_sep(path, plen);
+    if (d <= 0) return 0;
+    if (!split_namespace_repo(path, (size_t)d, acct, acct_cap, repo, repo_cap)) return 0;
+    /* tail = "<section>[/<act>]" after "/-/" (e.g. "issues/new", "edit"). */
+    char tail[128];
+    size_t tlen = plen - (size_t)d - 3;
+    if (tlen == 0 || tlen >= sizeof(tail)) return 0;
+    memcpy(tail, path + d + 3, tlen); tail[tlen] = 0;
+    if (strstr(tail, "..")) return 0;
+    char *slash = strchr(tail, '/');
+    if (slash) { *slash = 0; snprintf(act, act_cap, "%s", slash + 1); }
+    else       act[0] = 0;
+    snprintf(sect, sect_cap, "%s", tail);
     return 1;
 }
 
@@ -2959,7 +3166,7 @@ struct repo_route { const char *verb; const char *service; enum repo_page page; 
 static const struct repo_route *repo_routes(size_t *count)
 {
     static const struct repo_route ROUTES[] = {
-        { "",         "git_repo",     RP_BROWSE   },
+        { "tree",     "git_repo",     RP_BROWSE   },
         { "issues",   "issues",       RP_ISSUES   },
         { "runs",     "git_pipeline", RP_RUNS     },
         { "edit",     "git_repo",     RP_EDIT     },
@@ -3023,10 +3230,17 @@ static void serve_one(struct yloop *l, struct yloop_stream *s, void *ud)
      * gate each page on its backing service — no service, no page. */
     if (method_len == 3 && memcmp(method, "GET", 3) == 0) {
         if (path_equals(path, path_len, "/")) {
-            send_redirect(s, "/repos", NULL, keep_alive);
-        } else if (path_equals(path, path_len, "/login")) {
-            route_login_get(s, keep_alive);
-        } else if (path_equals(path, path_len, "/register")) {
+            send_redirect(s, "/-/repos", NULL, keep_alive);
+        } else if (path_equals(path, path_len, "/-/login")) {
+            route_login_get(s, sud, keep_alive);
+        } else if (path_equals(path, path_len, "/-/auth/github")) {
+            route_github_start(s, sud, headers, num_headers, keep_alive);
+        } else if (starts_with(path, path_len, "/-/auth/github/callback")) {
+            char fp[1024];
+            size_t copy = path_len < sizeof(fp) - 1 ? path_len : sizeof(fp) - 1;
+            memcpy(fp, path, copy); fp[copy] = 0;
+            route_github_callback(l, s, sud, headers, num_headers, fp, keep_alive);
+        } else if (path_equals(path, path_len, "/-/register")) {
             route_register_get(s, keep_alive);
         } else if (starts_with(path, path_len, "/static/")) {
             char tmp[1024];
@@ -3056,42 +3270,42 @@ static void serve_one(struct yloop *l, struct yloop_stream *s, void *ud)
             memcpy(fp, path, copy); fp[copy] = 0;
 
             char acct[128], repo[128], verb[32];
-            if (path_equals(path, path_len, "/repos")) {
+            if (path_equals(path, path_len, "/-/repos")) {
                 if (service_active(sud, "git_repo")) route_repos_get(l, s, sud, sid, who, cl.uid, cl.is_admin, keep_alive);
                 else send_text(s, 404, "no such page (git_repo not active)\n", keep_alive);
-            } else if (path_equals(path, path_len, "/search") ||
-                       starts_with(path, path_len, "/search?")) {
+            } else if (path_equals(path, path_len, "/-/search") ||
+                       starts_with(path, path_len, "/-/search?")) {
                 if (service_active(sud, "git_repo")) page_search(l, s, sud, sid, who, fp, cl.is_admin, keep_alive);
                 else send_text(s, 404, "no such page (git_repo not active)\n", keep_alive);
-            } else if (path_equals(path, path_len, "/repos/new")) {
+            } else if (path_equals(path, path_len, "/-/repos/new")) {
                 if (service_active(sud, "git_repo")) page_repos_new_form(l, s, sud, sid, who, cl.is_admin, keep_alive);
                 else send_text(s, 404, "no such page (git_repo not active)\n", keep_alive);
-            } else if (path_equals(path, path_len, "/admin") ||
-                       starts_with(path, path_len, "/admin/")) {
+            } else if (path_equals(path, path_len, "/-/admin") ||
+                       starts_with(path, path_len, "/-/admin/")) {
                 /* Admin space: prove a signed-in site admin BEFORE rendering
-                 * any admin content. Anonymous → /login; non-admin → 403. */
+                 * any admin content. Anonymous → /-/login; non-admin → 403. */
                 if (require_admin(s, &cl, keep_alive)) {
-                    if (path_equals(path, path_len, "/admin")) {
+                    if (path_equals(path, path_len, "/-/admin")) {
                         page_admin_overview(l, s, sud, sid, who, keep_alive);
-                    } else if (path_equals(path, path_len, "/admin/users")) {
+                    } else if (path_equals(path, path_len, "/-/admin/users")) {
                         if (service_active(sud, "accounts")) page_admin_users(l, s, sud, sid, who, keep_alive);
                         else send_text(s, 404, "no such page (accounts not active)\n", keep_alive);
-                    } else if (path_equals(path, path_len, "/admin/repos")) {
+                    } else if (path_equals(path, path_len, "/-/admin/repos")) {
                         if (service_active(sud, "git_repo")) page_admin_repos(l, s, sud, sid, who, keep_alive);
                         else send_text(s, 404, "no such page (git_repo not active)\n", keep_alive);
-                    } else if (path_equals(path, path_len, "/admin/tokens")) {
+                    } else if (path_equals(path, path_len, "/-/admin/tokens")) {
                         page_admin_tokens(l, s, sud, sid, who, keep_alive);
-                    } else if (path_equals(path, path_len, "/admin/services")) {
+                    } else if (path_equals(path, path_len, "/-/admin/services")) {
                         page_admin_services(l, s, sud, who, keep_alive);
-                    } else if (path_equals(path, path_len, "/admin/namespaces")) {
+                    } else if (path_equals(path, path_len, "/-/admin/namespaces")) {
                         if (service_active(sud, "accounts")) page_admin_namespaces(l, s, sud, sid, who, keep_alive);
                         else send_text(s, 404, "no such page (accounts not active)\n", keep_alive);
-                    } else if (starts_with(path, path_len, "/admin/namespaces/")) {
-                        /* /admin/namespaces/<path> — the namespace path may itself
+                    } else if (starts_with(path, path_len, "/-/admin/namespaces/")) {
+                        /* /-/admin/namespaces/<path> — the namespace path may itself
                          * contain '/' (a subgroup), so take everything after the
                          * prefix and URL-decode it. */
                         char nspath[256];
-                        size_t pfx = strlen("/admin/namespaces/");
+                        size_t pfx = strlen("/-/admin/namespaces/");
                         size_t rest = path_len > pfx ? path_len - pfx : 0;
                         if (rest >= sizeof(nspath)) rest = sizeof(nspath) - 1;
                         memcpy(nspath, path + pfx, rest);
@@ -3102,30 +3316,33 @@ static void serve_one(struct yloop *l, struct yloop_stream *s, void *ud)
                         send_text(s, 404, "not found\n", keep_alive);
                     }
                 }
-            } else if (path_equals(path, path_len, "/dashboard/issues") ||
-                       starts_with(path, path_len, "/dashboard/issues?")) {
+            } else if (path_equals(path, path_len, "/-/dashboard/issues") ||
+                       starts_with(path, path_len, "/-/dashboard/issues?")) {
                 if (service_active(sud, "git_repo")) page_dashboard_issues(l, s, sud, sid, who, cl.is_admin, keep_alive);
                 else send_text(s, 404, "no such page (git_repo not active)\n", keep_alive);
-            } else if (path_equals(path, path_len, "/dashboard/runs")) {
+            } else if (path_equals(path, path_len, "/-/dashboard/runs")) {
                 if (service_active(sud, "git_pipeline")) page_dashboard_runs(l, s, sud, sid, who, cl.is_admin, keep_alive);
                 else send_text(s, 404, "no such page (git_pipeline not active)\n", keep_alive);
-            } else if (path_equals(path, path_len, "/groups")) {
+            } else if (path_equals(path, path_len, "/-/groups")) {
                 if (service_active(sud, "accounts")) page_groups(l, s, sud, sid, who, cl.is_admin, keep_alive);
                 else send_text(s, 404, "no such page (accounts not active)\n", keep_alive);
-            } else if (starts_with(path, path_len, "/groups/")) {
-                /* /groups/<path> — the path may contain '/' (a subgroup). */
+            } else if (starts_with(path, path_len, "/-/groups/")) {
+                /* /-/groups/<path> — the path may contain '/' (a subgroup). */
                 char gpath[256];
-                size_t pfx = strlen("/groups/");
+                size_t pfx = strlen("/-/groups/");
                 size_t rest = path_len > pfx ? path_len - pfx : 0;
                 if (rest >= sizeof(gpath)) rest = sizeof(gpath) - 1;
                 memcpy(gpath, path + pfx, rest);
                 gpath[rest] = 0;
                 url_decode(gpath);
                 page_group_detail(l, s, sud, sid, who, gpath, cl.is_admin, keep_alive);
+            } else if (starts_with(path, path_len, "/-/")) {
+                /* Unknown top-level command. */
+                send_text(s, 404, "not found\n", keep_alive);
             } else if (parse_repo_path(path, path_len, acct, sizeof(acct),
                                        repo, sizeof(repo), verb, sizeof(verb))) {
-                /* /<account>/<repo>[/<verb>] — looked up in the route table,
-                 * gated on the verb's backing service. */
+                /* GitLab-style project sub-page: /<namespace>/<repo>/-/<verb>
+                 * (verb in the route table, gated on its backing service). */
                 const struct repo_route *rt = repo_route_for(verb);
                 if (!rt) {
                     send_text(s, 404, "not found\n", keep_alive);
@@ -3139,15 +3356,18 @@ static void serve_one(struct yloop *l, struct yloop_stream *s, void *ud)
                 case RP_SETTINGS: page_repo_settings(l, s, sud, sid, who, acct, repo, cl.is_admin, keep_alive); break;
                 }
             } else {
-                /* Single-segment /<account> → account landing. */
-                char seg[128];
+                /* Any other path (no "/-/") is a NAMESPACE path: /<group>[/<subgroup>…].
+                 * Render the namespace landing — its repos (each linking to the
+                 * project under /-/tree) and, for a member, its subgroups. */
+                char nspath[256];
                 const char *qm = memchr(path, '?', path_len);
                 size_t plen = qm ? (size_t)(qm - path) : path_len;
-                if (plen > 1 && path[0] == '/' &&
-                    !memchr(path + 1, '/', plen - 1) && plen - 1 < sizeof(seg)) {
-                    memcpy(seg, path + 1, plen - 1); seg[plen - 1] = 0;
-                    if (!is_reserved_top(seg) && service_active(sud, "git_repo"))
-                        page_account_landing(l, s, sud, sid, who, seg, cl.is_admin, keep_alive);
+                if (plen > 1 && path[0] == '/' && plen - 1 < sizeof(nspath) &&
+                    !memchr(path, '\\', plen)) {
+                    memcpy(nspath, path + 1, plen - 1); nspath[plen - 1] = 0;
+                    url_decode(nspath);
+                    if (!strstr(nspath, "..") && service_active(sud, "git_repo"))
+                        page_account_landing(l, s, sud, sid, who, nspath, cl.is_admin, keep_alive);
                     else
                         send_text(s, 404, "not found\n", keep_alive);
                 } else {
@@ -3197,19 +3417,19 @@ static void serve_one(struct yloop *l, struct yloop_stream *s, void *ud)
                 body_buf[cl] = 0;
 
                 char acct[128], repo[128], sect[64], act[64];
-                if (path_equals(path, path_len, "/login")) {
+                if (path_equals(path, path_len, "/-/login")) {
                     route_login_post(l, s, sud, body_buf, (size_t)cl, keep_alive);
-                } else if (path_equals(path, path_len, "/register")) {
+                } else if (path_equals(path, path_len, "/-/register")) {
                     route_register_post(l, s, sud, body_buf, (size_t)cl, keep_alive);
-                } else if (path_equals(path, path_len, "/logout")) {
+                } else if (path_equals(path, path_len, "/-/logout")) {
                     char *sid = cookie_get(headers, num_headers, "picomesh-sid");
                     route_logout(l, s, sud, sid, keep_alive);
                     free(sid);
-                } else if (path_equals(path, path_len, "/repos/new")) {
+                } else if (path_equals(path, path_len, "/-/repos/new")) {
                     char *sid = cookie_get(headers, num_headers, "picomesh-sid");
                     webapp_repos_new(l, s, sud, sid, body_buf, (size_t)cl, keep_alive);
                     free(sid);
-                } else if (starts_with(path, path_len, "/admin/")) {
+                } else if (starts_with(path, path_len, "/-/admin/")) {
                     /* Admin mutations: relay to the gateway only for a
                      * signed-in site admin. The gateway enforces this too —
                      * this is defense in depth so the webapp never knowingly
@@ -3222,21 +3442,23 @@ static void serve_one(struct yloop *l, struct yloop_stream *s, void *ud)
                         if (cl_admin.uid)
                             send_forbidden(s, cl_admin.username[0] ? cl_admin.username : NULL, keep_alive);
                         else
-                            send_redirect(s, "/login", NULL, keep_alive);
-                    } else if (path_equals(path, path_len, "/admin/tokens/mint_pat")) {
+                            send_redirect(s, "/-/login", NULL, keep_alive);
+                    } else if (path_equals(path, path_len, "/-/admin/tokens/mint_pat")) {
+                        /* First arg is the GATEWAY path (unchanged API), last is
+                         * the webapp redirect target (GitLab-style /-/). */
                         relay_post(l, s, sud, sid, "/admin/tokens/mint_pat",
-                                   body_buf, (size_t)cl, "/admin/tokens", keep_alive);
-                    } else if (path_equals(path, path_len, "/admin/namespaces/create")) {
-                        webapp_ns_create(l, s, sud, sid, "/admin/namespaces", body_buf, (size_t)cl, keep_alive);
-                    } else if (path_equals(path, path_len, "/admin/namespaces/add_member")) {
-                        webapp_ns_add_member(l, s, sud, sid, "/admin/namespaces", body_buf, (size_t)cl, keep_alive);
-                    } else if (path_equals(path, path_len, "/admin/namespaces/remove_member")) {
-                        webapp_ns_remove_member(l, s, sud, sid, "/admin/namespaces", body_buf, (size_t)cl, keep_alive);
+                                   body_buf, (size_t)cl, "/-/admin/tokens", keep_alive);
+                    } else if (path_equals(path, path_len, "/-/admin/namespaces/create")) {
+                        webapp_ns_create(l, s, sud, sid, "/-/admin/namespaces", body_buf, (size_t)cl, keep_alive);
+                    } else if (path_equals(path, path_len, "/-/admin/namespaces/add_member")) {
+                        webapp_ns_add_member(l, s, sud, sid, "/-/admin/namespaces", body_buf, (size_t)cl, keep_alive);
+                    } else if (path_equals(path, path_len, "/-/admin/namespaces/remove_member")) {
+                        webapp_ns_remove_member(l, s, sud, sid, "/-/admin/namespaces", body_buf, (size_t)cl, keep_alive);
                     } else {
                         send_text(s, 404, "not found\n", keep_alive);
                     }
                     free(sid);
-                } else if (starts_with(path, path_len, "/groups/")) {
+                } else if (starts_with(path, path_len, "/-/groups/")) {
                     /* Non-admin group management: any signed-in user; the backend
                      * enforces maintainer-on-namespace (or site bypass). Failures
                      * are surfaced by the handlers. */
@@ -3244,20 +3466,20 @@ static void serve_one(struct yloop *l, struct yloop_stream *s, void *ud)
                     struct claims cl_g;
                     resolve_claims(l, sud, sid, &cl_g);
                     if (!cl_g.uid) {
-                        send_redirect(s, "/login", NULL, keep_alive);
-                    } else if (path_equals(path, path_len, "/groups/go")) {
+                        send_redirect(s, "/-/login", NULL, keep_alive);
+                    } else if (path_equals(path, path_len, "/-/groups/go")) {
                         /* Jump to a namespace's management page by typed path. */
                         char *p = form_get(body_buf, (size_t)cl, "path");
-                        char to[300] = "/groups";
-                        if (p && *p) snprintf(to, sizeof(to), "/groups/%s", p);
+                        char to[300] = "/-/groups";
+                        if (p && *p) snprintf(to, sizeof(to), "/-/groups/%s", p);
                         free(p);
                         send_redirect(s, to, NULL, keep_alive);
-                    } else if (path_equals(path, path_len, "/groups/create")) {
-                        webapp_ns_create(l, s, sud, sid, "/groups", body_buf, (size_t)cl, keep_alive);
-                    } else if (path_equals(path, path_len, "/groups/add_member")) {
-                        webapp_ns_add_member(l, s, sud, sid, "/groups", body_buf, (size_t)cl, keep_alive);
-                    } else if (path_equals(path, path_len, "/groups/remove_member")) {
-                        webapp_ns_remove_member(l, s, sud, sid, "/groups", body_buf, (size_t)cl, keep_alive);
+                    } else if (path_equals(path, path_len, "/-/groups/create")) {
+                        webapp_ns_create(l, s, sud, sid, "/-/groups", body_buf, (size_t)cl, keep_alive);
+                    } else if (path_equals(path, path_len, "/-/groups/add_member")) {
+                        webapp_ns_add_member(l, s, sud, sid, "/-/groups", body_buf, (size_t)cl, keep_alive);
+                    } else if (path_equals(path, path_len, "/-/groups/remove_member")) {
+                        webapp_ns_remove_member(l, s, sud, sid, "/-/groups", body_buf, (size_t)cl, keep_alive);
                     } else {
                         send_text(s, 404, "not found\n", keep_alive);
                     }

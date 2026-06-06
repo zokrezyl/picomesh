@@ -2,6 +2,8 @@
 #include "github_authn.internal.h"
 
 __attribute__((unused))
+static github_authn_github_authn_exchange_code_fn _github_authn_github_authn_github_authn_github_authn_exchange_code_check = github_authn_github_authn_exchange_code_impl;
+__attribute__((unused))
 static github_authn_github_authn_set_credentials_fn _github_authn_github_authn_github_authn_github_authn_set_credentials_check = github_authn_github_authn_set_credentials_impl;
 __attribute__((unused))
 static github_authn_github_authn_register_code_fn _github_authn_github_authn_github_authn_github_authn_register_code_check = github_authn_github_authn_register_code_impl;
@@ -26,6 +28,7 @@ struct class_ptr_result github_authn_github_authn_class_get(void)
         .data_size = sizeof(struct github_authn_github_authn_data),
     };
     static const struct op ops[] = {
+        {"github_authn", "github_authn_exchange_code", (method_id_t)github_authn_github_authn_exchange_code, (impl_t)github_authn_github_authn_exchange_code_impl},
         {"github_authn", "github_authn_set_credentials", (method_id_t)github_authn_github_authn_set_credentials, (impl_t)github_authn_github_authn_set_credentials_impl},
         {"github_authn", "github_authn_register_code", (method_id_t)github_authn_github_authn_register_code, (impl_t)github_authn_github_authn_register_code_impl},
         {"github_authn", "github_authn_resolve", (method_id_t)github_authn_github_authn_resolve, (impl_t)github_authn_github_authn_resolve_impl},

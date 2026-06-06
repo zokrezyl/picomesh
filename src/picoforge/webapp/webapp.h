@@ -13,6 +13,9 @@ struct webapp_config {
     const char *static_dir;     /* may be NULL → no static files */
     const char *console_url;    /* generic /_alpine service console URL, shown
                                  * on /admin/services; NULL/"" → no link */
+    const char *github_client_id; /* GitHub OAuth App client id; NULL/"" hides button */
+    const char *github_url;       /* GitHub web URL, default https://github.com */
+    const char *public_url;       /* externally visible webapp URL for OAuth callbacks */
 };
 
 /* Start the HTTP listener on host:port. Spawns serve coroutines via

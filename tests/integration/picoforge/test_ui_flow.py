@@ -89,10 +89,10 @@ def test_full_ui_flow(page, base_url):
     # 2. Create a repository via the dedicated /repos/new page. Scope the
     #    click to the form — the signed-in topbar also has a submit button
     #    (Sign out), so a bare button[type=submit] is ambiguous.
-    page.click("a[href='/repos/new']")
-    page.wait_for_url(re.compile(r"/repos/new$"))
+    page.click("a[href='/-/repos/new']")
+    page.wait_for_url(re.compile(r"/-/repos/new$"))
     page.fill("input[name=name]", REPO)
-    page.click("form[action='/repos/new'] button[type=submit]")
+    page.click("form[action='/-/repos/new'] button[type=submit]")
     page.wait_for_load_state("networkidle")
     expect(page).to_have_url(re.compile(r"/repos$"))
 
@@ -144,7 +144,7 @@ def test_full_ui_flow(page, base_url):
     # 10. Issues: navigate via the project tab, file one by clicking the button.
     page.click("nav.project-tabs a:has-text('Issues')")
     page.wait_for_url(re.compile(r"/issues$"))
-    page.click("form[action$='/issues/new'] button[type=submit]")
+    page.click("form[action$='/-/issues/new'] button[type=submit]")
     page.wait_for_load_state("networkidle")
     expect(page.locator("text=/[1-9][0-9]* open issue/")).to_be_visible()
 
@@ -170,7 +170,7 @@ def test_anonymous_redirected_from_admin(page, base_url):
     """An anonymous visitor must never see admin UI — the webapp resolves
     identity from the session and bounces an unauthenticated /admin to
     /login before rendering anything."""
-    page.goto(f"{base_url}/admin")
+    page.goto(f"{base_url}/-/admin")
     expect(page).to_have_url(re.compile(r"/login$"))
     assert not _signed_in(page)
 
@@ -186,13 +186,13 @@ def test_non_admin_forbidden_from_admin(page, base_url):
         _login(page, base_url, second, PASSWORD)
     assert _signed_in(page), "second account should be signed in"
 
-    resp = page.goto(f"{base_url}/admin")
+    resp = page.goto(f"{base_url}/-/admin")
     assert resp.status == 403, f"non-admin /admin should be 403, got {resp.status}"
     expect(page.locator("h1")).to_have_text("Forbidden")
 
     # The nav must not even advertise admin access to a non-admin: no Admin
     # link anywhere in the topbar on a normal page.
-    page.goto(f"{base_url}/repos")
+    page.goto(f"{base_url}/-/repos")
     assert page.locator("header.topbar a[href='/admin']").count() == 0, \
         "non-admin must not see an Admin link in the topbar"
 
@@ -205,9 +205,9 @@ def test_repo_owner_from_session_not_cookie(page, base_url):
     page.context.add_cookies([{
         "name": "picomesh-uname", "value": "attacker", "url": base_url}])
 
-    page.goto(f"{base_url}/repos/new")
+    page.goto(f"{base_url}/-/repos/new")
     page.fill("input[name=name]", "cookie-test")
-    page.click("form[action='/repos/new'] button[type=submit]")
+    page.click("form[action='/-/repos/new'] button[type=submit]")
     page.wait_for_load_state("networkidle")
     expect(page).to_have_url(re.compile(r"/repos$"))
 
@@ -221,7 +221,7 @@ def test_anonymous_cannot_create_issue(base_url):
     """A mutation with no session must be refused (redirect to /login), never
     attributed to a fallback uid."""
     status, loc = _request(
-        f"{base_url}/{USER}/{REPO}/issues/new", method="POST", data=b"")
+        f"{base_url}/{USER}/{REPO}/-/issues/new", method="POST", data=b"")
     assert status in (302, 303), f"anon issue create should redirect, got {status}"
     assert loc and "/login" in loc, f"should redirect to /login, got {loc!r}"
 
@@ -230,7 +230,7 @@ def test_anonymous_cannot_enqueue_run(base_url):
     """A pipeline enqueue with no session must be refused, not run as a
     fallback identity."""
     status, loc = _request(
-        f"{base_url}/{USER}/{REPO}/runs/new", method="POST", data=b"")
+        f"{base_url}/{USER}/{REPO}/-/runs/new", method="POST", data=b"")
     assert status in (302, 303), f"anon run enqueue should redirect, got {status}"
     assert loc and "/login" in loc, f"should redirect to /login, got {loc!r}"
 
@@ -240,7 +240,7 @@ def test_gateway_serves_no_html(base_url):
     the gh#5 invariant from the browser's side, via urllib."""
     host = base_url.rsplit(":", 1)[0]
     gateway = f"{host}:8090"
-    for path in ("/", "/login", "/repos"):
+    for path in ("/", "/-/login", "/-/repos"):
         try:
             code = urllib.request.urlopen(gateway + path, timeout=8).getcode()
         except urllib.error.HTTPError as e:

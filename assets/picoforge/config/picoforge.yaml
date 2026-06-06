@@ -322,6 +322,14 @@ mesh:
       workers: 8   # was single-worker → register/account writes serialized
       plugins: [accounts]
       config:
+        accounts:
+          # GitLab-style top-level group creation. When true (the default), any
+          # authenticated user may create a ROOT namespace (group). Set false to
+          # restrict root-group creation to site admins (the trusted internal
+          # bootstrap that creates a user's personal namespace, and the reserved
+          # `site` namespace, are unaffected — they always work). Mirrors
+          # GitLab's "Users can create top-level groups" setting.
+          allow_user_root_groups: true
         remotes:
           - service: sharded_storage
             port: auto
@@ -350,6 +358,15 @@ mesh:
       port: auto
       plugins: [github_authn]
       config:
+        github_authn:
+          # Woodpecker-style GitHub OAuth App credentials. Register an OAuth App
+          # with callback <webapp-public-url>/-/auth/github/callback and export:
+          #   PICOFORGE_GITHUB_CLIENT=<client id>
+          #   PICOFORGE_GITHUB_SECRET=<client secret>
+          client_id: "${PICOFORGE_GITHUB_CLIENT:}"
+          client_secret: "${PICOFORGE_GITHUB_SECRET:}"
+          oauth_url: "${PICOFORGE_GITHUB_OAUTH_URL:https://github.com/login/oauth/access_token}"
+          api_url: "${PICOFORGE_GITHUB_API_URL:https://api.github.com}"
         remotes:
           - service: sharded_storage
             port: auto
