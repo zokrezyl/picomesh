@@ -954,6 +954,12 @@ static int oauth_start_session(uint32_t uid, const char *username,
 
 static int ensure_oauth_account(uint32_t uid, const char *uname, const char **err)
 {
+    /* Trusting bare uid existence here is safe ONLY because this runs after
+     * github_authn.exchange_code, which binds the GitHub identity to `uid` 1:1
+     * and refuses to return success when `uid` already belongs to a different
+     * GitHub id (hash collision) or to a pre-existing non-GitHub account. So an
+     * existing account at this point is, by that upstream guarantee, this very
+     * GitHub identity returning. */
     SVC_OPEN(acc_chk, "accounts", accounts_accounts_create);
     if (!acc_chk.ok) { *err = "accounts service unreachable"; return 0; }
     struct picomesh_int_result exists_r = accounts_accounts_exists(&acc_chk.c, acc_chk.obj, NULL, uid);

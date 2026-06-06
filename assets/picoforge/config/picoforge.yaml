@@ -372,6 +372,11 @@ mesh:
             port: auto
           - service: trace_collector
             port: auto
+          # exchange_code checks accounts.exists to refuse binding a GitHub
+          # identity onto a pre-existing non-GitHub account (issue: OAuth
+          # existing-account binding).
+          - service: accounts
+            port: auto
 
     token_issuer:
       port: auto

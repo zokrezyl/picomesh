@@ -73,7 +73,7 @@ add_library(picomesh_runtime STATIC
     src/picomesh/authorizers/policy/policy.c
     src/picomesh/authorizers/none/none.c
     src/picomesh/msgpack/msgpack.c
-    vendor/cmp/cmp.c
+    src/cmp/cmp.c
     src/picomesh/yco/coro.c
     src/picomesh/yloop/yloop.c
     src/picomesh/yloop/yexec.c
@@ -99,8 +99,8 @@ target_include_directories(picomesh_runtime PUBLIC
 )
 # Vendored MessagePack codec (cmp, MIT). SYSTEM so its header doesn't trip the
 # tree's -Wall -Wextra; the .c is third-party, compiled with warnings off.
-target_include_directories(picomesh_runtime SYSTEM PUBLIC vendor/cmp)
-set_source_files_properties(vendor/cmp/cmp.c PROPERTIES COMPILE_OPTIONS "-w")
+target_include_directories(picomesh_runtime SYSTEM PUBLIC src/cmp)
+set_source_files_properties(src/cmp/cmp.c PROPERTIES COMPILE_OPTIONS "-w")
 
 # All plugin public headers now land in include/picomesh/plugin/<name>/
 # (codegen output target). They're reachable through the repo-wide
@@ -338,8 +338,8 @@ add_custom_command(
         -DBIN2C_SRC=${PICOTRACE_ECHARTS_SRC}
         -DBIN2C_DST=${PICOTRACE_ECHARTS_GEN}
         -DBIN2C_SYM=picotrace_echarts_js
-        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/bin2c.cmake
-    DEPENDS ${PICOTRACE_ECHARTS_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/bin2c.cmake
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/build-tools/cmake/bin2c.cmake
+    DEPENDS ${PICOTRACE_ECHARTS_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/build-tools/cmake/bin2c.cmake
     COMMENT "Embedding vendored echarts.min.js into picotrace"
     VERBATIM)
 

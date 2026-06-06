@@ -248,6 +248,43 @@ static void store_mapping(struct yheaders *hdrs, uint32_t uid, int64_t github_id
     object_release_in_ctx(&c, o.value);
 }
 
+/* The GitHub id currently bound to `uid` in storage: >0 if this uid already
+ * belongs to a GitHub identity, 0 if no binding exists, -1 on a storage error
+ * (callers fail closed). db_get reports a missing key as OK with an empty value,
+ * so absent vs. error are cleanly distinguishable. */
+static int64_t gh_lookup_github_id(struct yheaders *hdrs, uint32_t uid)
+{
+    struct picomesh_engine *e = picomesh_active_engine();
+    if (!e) return -1;
+    struct ctx c = picomesh_engine_service_ctx(e, "sharded_storage");
+    struct object_ptr_result o = sharded_storage_db_create(&c);
+    if (PICOMESH_IS_ERR(o)) { picomesh_error_destroy(o.error); return -1; }
+    char key[96];
+    snprintf(key, sizeof(key), "uid:%u:github_id", uid);
+    struct picomesh_string_result r = sharded_storage_db_get(&c, o.value, hdrs, "github_authn", key);
+    object_release_in_ctx(&c, o.value);
+    if (PICOMESH_IS_ERR(r)) { picomesh_error_destroy(r.error); return -1; }
+    int64_t id = (r.value && *r.value) ? strtoll(r.value, NULL, 10) : 0;
+    free(r.value);
+    return id < 0 ? 0 : id;
+}
+
+/* 1 if an account already exists for `uid`, 0 if not, -1 on error (fail closed).
+ * The accounts service is the authority on account existence; github_authn lists
+ * it as a remote. The internal backend-to-backend call carries no caller auth. */
+static int gh_account_exists(uint32_t uid)
+{
+    struct picomesh_engine *e = picomesh_active_engine();
+    if (!e) return -1;
+    struct ctx c = picomesh_engine_service_ctx(e, "accounts");
+    struct object_ptr_result o = accounts_accounts_create(&c);
+    if (PICOMESH_IS_ERR(o)) { picomesh_error_destroy(o.error); return -1; }
+    struct picomesh_int_result r = accounts_accounts_exists(&c, o.value, NULL, uid);
+    object_release_in_ctx(&c, o.value);
+    if (PICOMESH_IS_ERR(r)) { picomesh_error_destroy(r.error); return -1; }
+    return r.value ? 1 : 0;
+}
+
 PICOMESH_CLASS_ANNOTATE("override@github_authn:github_authn:github_authn_exchange_code")
 struct picomesh_json_result github_authn_github_authn_exchange_code_impl(struct ctx *ctx, struct object *obj, struct yheaders *hdrs, const char *code, const char *redirect_uri)
 {
@@ -270,6 +307,39 @@ struct picomesh_json_result github_authn_github_authn_exchange_code_impl(struct 
     if (github_id <= 0 || !username[0]) { free(token); return PICOMESH_ERR(picomesh_json, "github_authn_exchange_code: missing GitHub id/login"); }
     uint32_t uid = picomesh_fnv1a32(username);
     if (!uid) uid = 1;
+
+    /* Bind this GitHub identity to `uid` exactly once, and never to the wrong
+     * account. `uid` is derived from the normalized login via a 32-bit hash, so
+     * without this guard a hash collision — or a GitHub login that happens to
+     * match a pre-existing password account's name — could let GitHub sign-in
+     * adopt an account that is NOT this GitHub identity. Resolve the cases
+     * before persisting anything; any storage/lookup error fails closed. */
+    int64_t bound_github_id = gh_lookup_github_id(hdrs, uid);
+    if (bound_github_id < 0) {
+        free(token);
+        return PICOMESH_ERR(picomesh_json, "github_authn_exchange_code: identity lookup failed");
+    }
+    if (bound_github_id > 0 && bound_github_id != github_id) {
+        ywarn("github_authn: refusing to bind GitHub id=%lld to uid=%u already held by id=%lld (login collision)",
+              (long long)github_id, uid, (long long)bound_github_id);
+        free(token);
+        return PICOMESH_ERR(picomesh_json, "github_authn_exchange_code: GitHub login collides with an existing account");
+    }
+    if (bound_github_id == 0) {
+        /* No GitHub binding for this uid yet — refuse to adopt a uid that is
+         * already taken by a non-GitHub (e.g. password) account. */
+        int exists = gh_account_exists(uid);
+        if (exists < 0) {
+            free(token);
+            return PICOMESH_ERR(picomesh_json, "github_authn_exchange_code: account lookup failed");
+        }
+        if (exists) {
+            ywarn("github_authn: refusing to bind GitHub id=%lld to uid=%u — a non-GitHub account already holds it",
+                  (long long)github_id, uid);
+            free(token);
+            return PICOMESH_ERR(picomesh_json, "github_authn_exchange_code: an account with this name already exists");
+        }
+    }
     store_mapping(hdrs, uid, github_id, username, token);
     free(token);
     struct yjson_writer *w = yjson_writer_new();
