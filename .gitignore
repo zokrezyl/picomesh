@@ -1,0 +1,39 @@
+# ---------------------------------------------------------------------------
+# Build trees — out-of-source CMake/ninja dirs (build-desktop-*, build-yemu-*,
+# build-deploy, …). `build-tools/` is hand-written SOURCE, so re-include it.
+# ---------------------------------------------------------------------------
+/build-*/
+!/build-tools/
+
+# Local 3rdparty build outputs. The recipes (build-tools/3rdparty/<lib>/_build.sh)
+# normally write into ${CMAKE_BINARY_DIR}/3rdparty-cache; these are the paths a
+# manual/standalone recipe run drops tarballs into. Prebuilt tarballs are
+# fetched at configure time, never committed.
+/build-tools/3rdparty-out/
+/3rdparty-cache/
+/3rdparty-out/
+
+# CMake-generated compilation database.
+/compile_commands.json
+
+# Scratch space (build logs, run output — see CLAUDE.md: redirect to tmp/).
+/tmp/
+
+# Python bytecode (codegen / tooling).
+__pycache__/
+*.pyc
+
+# Generated FFI bindings — regenerated from the model by tools/ffi-codegen.
+/bindings/
+
+# ---------------------------------------------------------------------------
+# Stray runtime data droppings written into the repo root by a misconfigured
+# data path. The mesh/sqlite must NEVER write here (CLAUDE.md "No silent path
+# defaults"); these are listed so an accidental re-creation stays out of git.
+# ---------------------------------------------------------------------------
+/Picoforge
+/SQLite
+/sqlite
+/shard
+/shard_id
+/namespace

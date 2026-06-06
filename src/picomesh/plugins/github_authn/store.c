@@ -69,97 +69,151 @@ static const char *cfg_string(const char *path, const char *fallback)
     return out && *out ? out : fallback;
 }
 
-static int shell_quote(char *out, size_t cap, const char *s)
+/* Growable response sink for a libcurl transfer. */
+struct gh_http_buf {
+    char  *data;
+    size_t len;
+};
+
+/* CURLOPT_WRITEFUNCTION sink: append the body chunk, NUL-terminating as we go,
+ * with a hard ceiling so a hostile/huge response can't exhaust memory. */
+static size_t gh_http_write(char *ptr, size_t size, size_t nmemb, void *userdata)
 {
-    if (!s || !*s || cap < 3) return 0;
-    size_t o = 0;
-    out[o++] = '\'';
-    for (const unsigned char *p = (const unsigned char *)s; *p; ++p) {
-        if (*p < 0x20 || *p == 0x7f) return 0;
-        if (*p == '\'') {
-            if (o + 4 >= cap) return 0;
-            out[o++] = '\''; out[o++] = '\\'; out[o++] = '\''; out[o++] = '\'';
-        } else {
-            if (o + 1 >= cap) return 0;
-            out[o++] = (char)*p;
-        }
-    }
-    if (o + 2 > cap) return 0;
-    out[o++] = '\'';
-    out[o] = 0;
-    return 1;
+    struct gh_http_buf *buf = userdata;
+    size_t add = size * nmemb;
+    if (buf->len + add + 1 < buf->len) return 0;          /* size_t wrap */
+    if (buf->len + add > 4u * 1024 * 1024) return 0;      /* 4 MiB ceiling */
+    char *grown = realloc(buf->data, buf->len + add + 1);
+    if (!grown) return 0;
+    buf->data = grown;
+    memcpy(buf->data + buf->len, ptr, add);
+    buf->len += add;
+    buf->data[buf->len] = 0;
+    return add;
 }
 
-static char *read_command(const char *cmd)
+/* Common libcurl options for the GitHub calls (timeouts, no signals so it is
+ * safe on the engine's worker threads, no redirects). */
+static void gh_http_setup(CURL *curl, struct gh_http_buf *buf)
 {
-    FILE *fp = popen(cmd, "r");
-    if (!fp) return NULL;
-    size_t cap = 4096, len = 0;
-    char *buf = malloc(cap);
-    if (!buf) { pclose(fp); return NULL; }
-    for (;;) {
-        if (len + 1024 + 1 > cap) {
-            cap *= 2;
-            if (cap > 1024 * 1024) { free(buf); pclose(fp); return NULL; }
-            char *nb = realloc(buf, cap);
-            if (!nb) { free(buf); pclose(fp); return NULL; }
-            buf = nb;
-        }
-        size_t n = fread(buf + len, 1, cap - len - 1, fp);
-        len += n;
-        if (n == 0) break;
-    }
-    buf[len] = 0;
-    int rc = pclose(fp);
-    if (rc != 0 || len == 0) { free(buf); return NULL; }
-    return buf;
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "picoforge");
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, gh_http_write);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, buf);
 }
 
+/* 1 if the transfer succeeded with a 2xx status. */
+static int gh_http_ok(CURL *curl, CURLcode rc)
+{
+    if (rc != CURLE_OK) return 0;
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    return status >= 200 && status < 300;
+}
+
+/* Exchange the one-time OAuth code for a GitHub access token. The client_secret
+ * is set as CURLOPT_POSTFIELDS — it lives only in this process's heap, never on
+ * any argv. Returns the token (caller frees) or NULL. */
 static char *github_token_exchange(const char *code, const char *redirect_uri)
 {
     const char *client = cfg_string("github_authn.client_id", getenv("PICOFORGE_GITHUB_CLIENT"));
     const char *secret = cfg_string("github_authn.client_secret", getenv("PICOFORGE_GITHUB_SECRET"));
     const char *url = cfg_string("github_authn.oauth_url", "https://github.com/login/oauth/access_token");
-    char q_client[512], q_secret[512], q_code[1024], q_redirect[2048], q_url[1024];
-    if (!shell_quote(q_client, sizeof(q_client), client) ||
-        !shell_quote(q_secret, sizeof(q_secret), secret) ||
-        !shell_quote(q_code, sizeof(q_code), code) ||
-        !shell_quote(q_redirect, sizeof(q_redirect), redirect_uri) ||
-        !shell_quote(q_url, sizeof(q_url), url))
-        return NULL;
-    char cmd[4096];
-    int n = snprintf(cmd, sizeof(cmd),
-        "curl -fsS -X POST -H 'Accept: application/json' -H 'User-Agent: picoforge' "
-        "--data-urlencode client_id=%s --data-urlencode client_secret=%s "
-        "--data-urlencode code=%s --data-urlencode redirect_uri=%s %s",
-        q_client, q_secret, q_code, q_redirect, q_url);
-    if (n <= 0 || (size_t)n >= sizeof(cmd)) return NULL;
-    char *json = read_command(cmd);
-    if (!json) return NULL;
-    struct yjson_doc *doc = yjson_parse(json, strlen(json));
-    free(json);
-    if (!doc) return NULL;
-    const char *tok = yjson_as_string(yjson_object_get(yjson_doc_root(doc), "access_token"), NULL);
-    char *out = tok && *tok ? strdup(tok) : NULL;
-    yjson_doc_free(doc);
-    return out;
+    if (!client || !*client || !secret || !*secret) return NULL;
+
+    CURL *curl = curl_easy_init();
+    if (!curl) return NULL;
+
+    char *enc_client   = curl_easy_escape(curl, client, 0);
+    char *enc_secret   = curl_easy_escape(curl, secret, 0);
+    char *enc_code     = curl_easy_escape(curl, code, 0);
+    char *enc_redirect = curl_easy_escape(curl, redirect_uri, 0);
+    struct curl_slist *headers = NULL;
+    struct gh_http_buf buf = {0};
+    char *body = NULL, *token = NULL;
+
+    if (!enc_client || !enc_secret || !enc_code || !enc_redirect) goto done;
+    size_t need = strlen(enc_client) + strlen(enc_secret) +
+                  strlen(enc_code) + strlen(enc_redirect) + 64;
+    body = malloc(need);
+    if (!body) goto done;
+    snprintf(body, need, "client_id=%s&client_secret=%s&code=%s&redirect_uri=%s",
+             enc_client, enc_secret, enc_code, enc_redirect);
+
+    headers = curl_slist_append(NULL, "Accept: application/json");
+    if (!headers) goto done;
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
+    gh_http_setup(curl, &buf);
+
+    CURLcode rc = curl_easy_perform(curl);
+    if (gh_http_ok(curl, rc) && buf.data) {
+        struct yjson_doc *doc = yjson_parse(buf.data, strlen(buf.data));
+        if (doc) {
+            const char *tok = yjson_as_string(
+                yjson_object_get(yjson_doc_root(doc), "access_token"), NULL);
+            if (tok && *tok) token = strdup(tok);
+            yjson_doc_free(doc);
+        }
+    }
+done:
+    free(body);
+    free(buf.data);
+    curl_slist_free_all(headers);
+    curl_free(enc_client);
+    curl_free(enc_secret);
+    curl_free(enc_code);
+    curl_free(enc_redirect);
+    curl_easy_cleanup(curl);
+    return token;
 }
 
+/* Fetch the authenticated user's GitHub profile JSON. The access token is set
+ * as an Authorization header — in-process only, never on any argv. Returns the
+ * response body (caller frees) or NULL. */
 static char *github_user_json(const char *access_token)
 {
     const char *api = cfg_string("github_authn.api_url", "https://api.github.com");
-    char q_token[2048], q_api_user[1024];
+    if (!access_token || !*access_token) return NULL;
     char api_user[768];
     int un = snprintf(api_user, sizeof(api_user), "%s/user", api ? api : "");
-    if (un <= 0 || (size_t)un >= sizeof(api_user) ||
-        !shell_quote(q_token, sizeof(q_token), access_token) ||
-        !shell_quote(q_api_user, sizeof(q_api_user), api_user)) return NULL;
-    char cmd[4096];
-    int n = snprintf(cmd, sizeof(cmd),
-        "curl -fsS -H 'Accept: application/vnd.github+json' -H 'User-Agent: picoforge' "
-        "-H 'Authorization: Bearer %s' %s", q_token, q_api_user);
-    if (n <= 0 || (size_t)n >= sizeof(cmd)) return NULL;
-    return read_command(cmd);
+    if (un <= 0 || (size_t)un >= sizeof(api_user)) return NULL;
+
+    char auth[2200];
+    int an = snprintf(auth, sizeof(auth), "Authorization: Bearer %s", access_token);
+    if (an <= 0 || (size_t)an >= sizeof(auth)) return NULL;
+
+    CURL *curl = curl_easy_init();
+    if (!curl) return NULL;
+    struct curl_slist *headers = NULL;
+    struct gh_http_buf buf = {0};
+    char *out = NULL;
+
+    headers = curl_slist_append(NULL, "Accept: application/vnd.github+json");
+    struct curl_slist *with_auth = headers ? curl_slist_append(headers, auth) : NULL;
+    if (!with_auth) goto done;
+    headers = with_auth;
+
+    curl_easy_setopt(curl, CURLOPT_URL, api_user);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    gh_http_setup(curl, &buf);
+
+    CURLcode rc = curl_easy_perform(curl);
+    if (gh_http_ok(curl, rc) && buf.data) {
+        out = buf.data;
+        buf.data = NULL;
+    }
+done:
+    free(buf.data);
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    return out;
 }
 
 static void normalize_github_login(const char *login, char *out, size_t cap)
