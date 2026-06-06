@@ -40,6 +40,11 @@ WEBAPP_HOST="$REPO_ROOT/build-desktop-release/picoforge-webapp"
 YAML_SRC="$REPO_ROOT/assets/picoforge/config/picoforge-webasm.yaml"
 STATIC_SRC="$REPO_ROOT/assets/picoforge/static"
 RUNSH_SRC="$REPO_ROOT/tools/picoforge/deploy/run.sh.tmpl"
+# PID-1 init + the runit service tree (mesh / webapp / probe). These are the
+# single source of truth for how each service is launched; the VM supervises
+# them via runit, the host run.sh runs them as plain background children.
+INIT_SRC="$REPO_ROOT/tools/picoforge/deploy/init"
+SERVICE_SRC="$REPO_ROOT/tools/picoforge/deploy/service"
 
 for b in "$PICOMESH_HOST" "$WEBAPP_HOST"; do
     if [ ! -x "$b" ]; then
@@ -48,7 +53,7 @@ for b in "$PICOMESH_HOST" "$WEBAPP_HOST"; do
         exit 1
     fi
 done
-for f in "$YAML_SRC" "$STATIC_SRC" "$RUNSH_SRC"; do
+for f in "$YAML_SRC" "$STATIC_SRC" "$RUNSH_SRC" "$INIT_SRC" "$SERVICE_SRC"; do
     [ -e "$f" ] || { echo "FAIL: missing $f" >&2; exit 1; }
 done
 
@@ -60,7 +65,11 @@ cp -a "$WEBAPP_HOST"    "$DEPLOY.new/picoforge-webapp"
 cp -a "$YAML_SRC"    "$DEPLOY.new/picoforge.yaml"
 cp -a "$STATIC_SRC"  "$DEPLOY.new/frontend/static"
 cp -a "$RUNSH_SRC"   "$DEPLOY.new/run.sh"
-chmod +x "$DEPLOY.new/run.sh"
+cp -a "$INIT_SRC"    "$DEPLOY.new/init"
+cp -a "$SERVICE_SRC" "$DEPLOY.new/service"
+chmod +x "$DEPLOY.new/run.sh" "$DEPLOY.new/init" \
+    "$DEPLOY.new/service/mesh/run" "$DEPLOY.new/service/webapp/run" \
+    "$DEPLOY.new/service/probe/run"
 
 # Adjust the yaml's static_dir to the deploy-relative path. The source
 # yaml uses an in-repo path (assets/picoforge/static) so

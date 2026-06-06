@@ -31,9 +31,11 @@ QEMU="$(command -v qemu-system-riscv64)"
 
 SMP="${SMP:-2}"
 MEM="${MEM:-512M}"
-# init=/opt/picoforge/run.sh runs the launcher baked into the image
-# at PID 1. console=hvc0 wires the shell to our stdio chardev.
-CMDLINE="console=hvc0 earlycon=sbi root=/dev/vda rw init=/opt/picoforge/run.sh"
+# init=/opt/picoforge/init runs the PID-1 bring-up baked into the image:
+# it mounts /proc /sys /dev, brings up slirp net + a tmpfs /tmp, then hands
+# the mesh / webapp / probe services to runit (runsvdir /etc/service).
+# console=hvc0 wires the service output to our stdio chardev.
+CMDLINE="console=hvc0 earlycon=sbi root=/dev/vda rw init=/opt/picoforge/init"
 
 echo "==> launching qemu-system-riscv64 (picomesh demo)"
 echo "    kernel    $KERNEL"

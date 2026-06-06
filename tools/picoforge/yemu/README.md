@@ -67,20 +67,23 @@ with the riscv64 picomesh binary swapped in.
 ./run-vm.sh
 ```
 
-The launcher (baked at `/opt/picoforge/run.sh` inside the image)
-mounts /proc /sys /dev, brings up slirp net, starts a control picomesh
-on `127.0.0.1:8800`, then POSTs `/create` + `/invoke
-mesh_mesh_reconcile_from_config` so the full mesh comes up:
-gateway on `0.0.0.0:8080` plus 11 backends on `127.0.0.1:820X`.
-From the host:
+PID 1 inside the image is `/opt/picoforge/init`: it mounts /proc /sys
+/dev, brings up slirp net + a tmpfs `/tmp`, then hands the stack to
+**runit** (`runsvdir /etc/service`). runit supervises three services
+(each `/etc/service/<svc>` is a symlink into `/opt/picoforge/service/`):
 
-| Service        | Guest port | Host port forward |
-|----------------|------------|-------------------|
-| Gateway (HTTP) | 8080       | 18080             |
+| runit service | What it runs | Guest port | Host fwd |
+|---------------|--------------|------------|----------|
+| `mesh`   | the picomesh node — gateway + every backend + storage, collocated in one process (`picomesh --name app … serve`) | 8080 | 18080 |
+| `webapp` | the picoforge web app — HTML page tier, sources data from the mesh over `/_rpc` (waits for the gateway first) | 8081 | 18081 |
+| `probe`  | availability checker — a 1-second loop that polls the gateway `/_describe` + the webapp and prints each service's up/missing status to the console | — | — |
+
+If any of `mesh`/`webapp` exits, runit restarts it. Drive runit from a
+guest shell with `sv status mesh`, `sv restart webapp`, etc.
 
 Open `http://127.0.0.1:18080/login` in a browser to hit the C
-gateway (which serves the HTML UI directly and forwards everything
-to the backends over yrpc).
+gateway (API only), or `http://127.0.0.1:18081/login` for the webapp
+page tier. The probe's report streams on the qemu console.
 
 Quit with `Ctrl-A X`.
 

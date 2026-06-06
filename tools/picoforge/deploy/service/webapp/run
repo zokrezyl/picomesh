@@ -1,0 +1,33 @@
+#!/bin/sh
+# runit service: the picoforge web app — the browser-facing HTML page tier.
+#
+# Serves every GET page + static asset on :8081, sourcing all data from the
+# mesh gateway (:8080) over /_rpc + /_describe. It holds no plugins and no
+# backend ports. Waits for the gateway to accept before exec'ing so a cold
+# boot doesn't spew connection errors; if the mesh node is later restarted by
+# runit, runit restarts us too.
+# Resolve $0 physically: /etc/service/webapp is a symlink into the payload, so
+# a logical `../..` would escape through the symlink to /etc.
+PF_ROOT=$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)
+export PF_ROOT
+. "${PF_ROOT}/service/common.sh"
+cd "${PF_ROOT}"
+
+if [ ! -x "${WEBAPP}" ]; then
+    say webapp "FAIL: ${WEBAPP} not executable — parking"
+    exec sleep infinity
+fi
+
+say webapp "waiting for mesh gateway :${MESH_PORT}…"
+# The gateway is API-only and 404s GET /login, so probe /_describe (200 once
+# the node is up). Start anyway after the timeout — the webapp tolerates a
+# briefly-absent gateway and runit will keep us alive.
+wait_http "http://127.0.0.1:${MESH_PORT}/_describe" 120 \
+    && say webapp "gateway is up" \
+    || say webapp "gateway not up after 120s — starting anyway"
+
+say webapp "starting picoforge-webapp on ${WEBAPP_HTTP_HOST}:${WEBAPP_HTTP_PORT} (→ gateway :${MESH_PORT})"
+exec "${WEBAPP}" --gateway-url "http://127.0.0.1:${MESH_PORT}" \
+    --host "${WEBAPP_HTTP_HOST}" --port "${WEBAPP_HTTP_PORT}" \
+    --static "${STATIC_DIR}" --public-url "http://127.0.0.1:${WEBAPP_HTTP_PORT}" \
+    </dev/null 2>&1

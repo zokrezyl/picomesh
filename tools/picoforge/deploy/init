@@ -1,0 +1,59 @@
+#!/bin/sh
+# Runtime PID 1 for the picoforge riscv64 VM. Does only what genuinely
+# belongs in init: mount the kernel-managed pseudo-filesystems, bring up
+# the network *kernel state* (ip link/addr/route — these can't be files),
+# put runtime state on a tmpfs, then hand the whole service set over to
+# runit (runsvdir).
+#
+# Everything that is actually a *service* lives under /etc/service/<svc>/run
+# (symlinks into /opt/picoforge/service/) and is supervised by runsvdir:
+#   mesh    — the picomesh node (gateway + every backend, collocated)
+#   webapp  — the picoforge web app (HTML page tier)
+#   probe   — availability checker that pokes the mesh at boot
+#
+# Booted via the kernel cmdline `init=/opt/picoforge/init` (see run-vm.sh).
+# This mirrors yetty's alpine image: runit owns the daemons; init owns the
+# kernel-side bring-up.
+
+# The kernel hands PID 1 an empty PATH; runsvdir uses execvp() to spawn
+# runsv, so without this it fails with "unable to start runsv <svc>".
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+mount -t proc     proc /proc        2>/dev/null
+mount -t sysfs    sys  /sys         2>/dev/null
+mount -t devtmpfs dev  /dev         2>/dev/null || true
+mkdir -p /dev/pts
+mount -t devpts   devpts /dev/pts   2>/dev/null || true
+
+hostname picomesh-yemu
+
+ip link set lo up                       2>/dev/null
+ip link set eth0 up                     2>/dev/null
+ip addr add 10.0.2.15/24 dev eth0       2>/dev/null
+ip route add default via 10.0.2.2       2>/dev/null
+echo "nameserver 10.0.2.3" > /etc/resolv.conf 2>/dev/null
+
+# ALL runtime state goes in RAM (tmpfs on /tmp). Two reasons:
+#  1) The deployed rootfs is shrunk to ~minimum to keep the download small,
+#     so it has essentially NO free space — writing the sqlite dbs / repos /
+#     KV there fails with "No space left on device". tmpfs decouples runtime
+#     writes from the read-only rootfs.
+#  2) The rootfs is an emulated ext4 block device; every metadata op runs the
+#     full ext4 + virtio-block path on the emulated CPU (brutally slow). tmpfs
+#     hits the page cache directly — near-native speed, no journal.
+mount -t tmpfs -o size=512m tmpfs /tmp 2>/dev/null \
+    && echo "[init] tmpfs mounted at /tmp (runtime state in RAM)" \
+    || echo "[init] WARN: tmpfs mount on /tmp failed — writes hit the rootfs"
+mkdir -p /tmp/picoforge /tmp/picoforge/repos
+
+# The gateway mints HS256 JWTs (internal capability/session tokens) signed
+# with this secret; export it here so it is inherited by runsvdir and every
+# supervised service. A public-demo default — override by baking a different
+# PICOMESH_JWT_SECRET into the environment before boot.
+export PICOMESH_JWT_SECRET="${PICOMESH_JWT_SECRET:-picoforge-demo-jwt-secret}"
+
+echo "[init] handing off to runit (runsvdir /etc/service)"
+# runsvdir becomes the long-lived PID 1: it supervises everything under
+# /etc/service and never exits, so the kernel never sees init die. Absolute
+# path so it resolves regardless of how the kernel seeded PATH.
+exec /usr/bin/runsvdir /etc/service

@@ -1,0 +1,72 @@
+#!/bin/sh
+# runit service: the availability probe.
+#
+# It runs forever in a 1-second loop, each iteration sending messages to the
+# picomesh node to check whether the mesh's services are available: it polls
+# the gateway's /_describe surface (which enumerates every active service) and
+# the webapp page tier, and prints a one-line-per-service report to stdout
+# (runsvdir → /init → /dev/console under the VM). runit keeps it supervised.
+# Resolve $0 physically: /etc/service/probe is a symlink into the payload, so
+# a logical `../..` would escape through the symlink to /etc.
+PF_ROOT=$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)
+export PF_ROOT
+. "${PF_ROOT}/service/common.sh"
+cd "${PF_ROOT}"
+
+# Services the collocated mesh node is expected to expose (the `plugins:` set
+# from picoforge.yaml). The probe reports each as present/absent in /_describe.
+EXPECTED_SERVICES="portalloc sharded_storage session accounts password_authn github_authn token_issuer issues git_repo git_pipeline personal_access_tokens relational_storage"
+
+# Seed the site owner once the gateway answers. The FIRST account ever
+# registered becomes the deployment admin, so root/rootpw lands as site owner
+# on a fresh boot. Best-effort + idempotent: a duplicate /register on a
+# persisted rootfs just comes back "already taken". Raw HTTP over busybox nc
+# (the gateway closes on `Connection: close`, so the call returns at once).
+seed_root() {
+    sr_body='username=root&password=rootpw'
+    command -v nc >/dev/null 2>&1 || { say probe "no nc — cannot seed root"; return; }
+    if ! wait_http "http://127.0.0.1:${MESH_PORT}/_describe" 120; then
+        say probe "gateway never came up — skipping root seed"
+        return
+    fi
+    {
+        printf 'POST /register HTTP/1.1\r\n'
+        printf 'Host: picomesh-yemu\r\n'
+        printf 'Content-Type: application/x-www-form-urlencoded\r\n'
+        printf 'Content-Length: %s\r\n' "${#sr_body}"
+        printf 'Connection: close\r\n\r\n'
+        printf '%s' "${sr_body}"
+    } | nc -w 30 127.0.0.1 "${MESH_PORT}" 2>/dev/null | head -1 \
+        | grep -q '30[0-9]' \
+        && say probe "seeded site-owner root/rootpw" \
+        || say probe "root/rootpw already present (or seed not accepted)"
+}
+seed_root
+
+# Forever: poll the mesh + webapp, print availability to stdout, sleep 1s.
+while :; do
+    describe=$(wget -q -O - -T 2 "http://127.0.0.1:${MESH_PORT}/_describe" 2>/dev/null)
+    if [ -z "${describe}" ]; then
+        say probe "gateway :${MESH_PORT} unreachable"
+    else
+        up=0; down=0
+        for svc in ${EXPECTED_SERVICES}; do
+            if printf '%s' "${describe}" | grep -q "\"service\":\"${svc}\""; then
+                say probe "available: ${svc}"
+                up=$((up + 1))
+            else
+                say probe "MISSING:   ${svc}"
+                down=$((down + 1))
+            fi
+        done
+        say probe "summary: ${up} up, ${down} missing"
+    fi
+
+    if wget -q -O /dev/null -T 2 "http://127.0.0.1:${WEBAPP_HTTP_PORT}/login" 2>/dev/null; then
+        say probe "available: webapp page tier :${WEBAPP_HTTP_PORT}"
+    else
+        say probe "MISSING:   webapp page tier :${WEBAPP_HTTP_PORT}"
+    fi
+
+    sleep 1
+done

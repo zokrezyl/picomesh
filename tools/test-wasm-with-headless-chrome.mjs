@@ -125,18 +125,20 @@ try {
   check('demo page + wasm Module loaded', mod);
   if (!mod) throw new Error('Module/svc-form never appeared');
 
-  log('booting in-VM gateway — re-issuing GET /login until 200 (up to ' + BOOT_WAIT_S + 's)…');
+  // The HTML page tier is picoforge-webapp on :8081 (GitLab-style /-/ routes);
+  // the gateway on :8080 is API-only and 404s GET pages. Drive the webapp.
+  log('booting in-VM webapp — re-issuing GET /-/login until 200 (up to ' + BOOT_WAIT_S + 's)…');
   let up = false;
   for (let i = 0; i < BOOT_WAIT_S / 5; i++) {
-    await ev(c, `document.getElementById('svc-port').value='8080';
-      document.getElementById('svc-path').value='/login';
+    await ev(c, `document.getElementById('svc-port').value='8081';
+      document.getElementById('svc-path').value='/-/login';
       document.getElementById('svc-form').dispatchEvent(new Event('submit',{cancelable:true}));
       return 1;`);
     await sleep(5000);
-    if ((await netlog(c)).some(r => /\/login -> 200/.test(r))) { up = true; break; }
+    if ((await netlog(c)).some(r => /-\/login -> 200/.test(r))) { up = true; break; }
     if (i % 3 === 0) log('  …still booting; last netlog:', ((await netlog(c)).slice(-1)[0] || '(none)'));
   }
-  check('in-VM gateway boots and serves GET /login -> 200', up);
+  check('in-VM webapp boots and serves GET /-/login -> 200', up);
   if (!up) throw new Error('gateway never came up');
   log('GATEWAY UP');
 
@@ -147,7 +149,7 @@ try {
   //     generous window. This proves create-repo works *inside the VM*.
   log('BOOT SMOKE: logging in as demo/demo, polling /demo for hello + world (up to 180s)');
   await driveAndWait(c,
-    { type: 'picomesh-submit', method: 'POST', path: '/login', body: 'username=demo&password=demo' },
+    { type: 'picomesh-submit', method: 'POST', path: '/-/login', body: 'username=demo&password=demo' },
     /\/(login|demo)/, 30);
   let smokeOk = false;
   for (let i = 0; i < 36; i++) {
@@ -165,7 +167,7 @@ try {
   // --- register ---------------------------------------------------------
   log('REGISTER ' + u);
   const regRow = await driveAndWait(c,
-    { type: 'picomesh-submit', method: 'POST', path: '/register', body: `username=${u}&password=pw` },
+    { type: 'picomesh-submit', method: 'POST', path: '/-/register', body: `username=${u}&password=pw` },
     /\/register/, 30);
   check('POST /register returns a status', /-> [0-9]/.test(regRow), regRow || '(no row)');
 
@@ -183,9 +185,9 @@ try {
   // blocked by the init, that probe would stall behind it (~30s); with
   // the offload it answers promptly.
   log('CREATE REPO demo1 (git init offloaded to worker pool — loop must stay responsive)');
-  await ev(c, `window.postMessage({type:'picomesh-submit',method:'POST',path:'/repos/new',body:'name=demo1'},'*'); return 1;`);
+  await ev(c, `window.postMessage({type:'picomesh-submit',method:'POST',path:'/-/repos/new',body:'name=demo1'},'*'); return 1;`);
   await sleep(1500);
-  const probeRow = await driveAndWait(c, { type: 'picomesh-nav', path: '/login?probe=1' }, /\/login\?probe=1/, 12);
+  const probeRow = await driveAndWait(c, { type: 'picomesh-nav', path: '/-/login?probe=1' }, /\/login\?probe=1/, 12);
   const createRows0 = (await netlog(c)).filter(x => /\/repos\/new/.test(x));
   const createPending = createRows0.length > 0 && !/-> [0-9]/.test(createRows0.slice(-1)[0]);
   check('server stays responsive during slow create (loop not frozen)',

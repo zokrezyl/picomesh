@@ -1,0 +1,34 @@
+#!/bin/sh
+# runit service: the picomesh mesh node.
+#
+# ONE process hosts the gateway frontend PLUS every backend service PLUS
+# storage, calling each other in-process (--name app projects the all-in-one
+# config block, which has no `remotes:` — so every service_ctx() resolves to
+# a local object). This is the node that backs the whole mesh; runit keeps it
+# supervised and restarts it if it ever exits.
+#
+# runsv chdir's into the service dir and execs ./run, so $0 is "./run". In the
+# VM /etc/service/mesh is a symlink into /opt/picoforge/service/mesh, so resolve
+# $0 to its physical path (readlink -f) before walking two levels up to PF_ROOT
+# — a logical `../..` would escape through the symlink to /etc.
+PF_ROOT=$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)
+export PF_ROOT
+. "${PF_ROOT}/service/common.sh"
+cd "${PF_ROOT}"
+
+if [ ! -x "${PICOMESH}" ]; then
+    say mesh "FAIL: ${PICOMESH} not executable — parking"
+    exec sleep infinity
+fi
+if [ ! -f "${CFG}" ]; then
+    say mesh "FAIL: ${CFG} missing — parking"
+    exec sleep infinity
+fi
+
+say mesh "starting picomesh node (gateway + all services) on ${MESH_HOST}:${MESH_PORT}"
+# exec so runsv supervises the picomesh process directly (its PID == the run
+# script's PID); stderr folded into stdout, which runsvdir inherits from
+# /init → /dev/console under the VM.
+exec "${PICOMESH}" --config-file "${CFG}" --name app \
+    --frontend yhttp --host "${MESH_HOST}" --port "${MESH_PORT}" serve \
+    </dev/null 2>&1

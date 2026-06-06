@@ -54,7 +54,8 @@ if [ ! -d "$DEPLOY" ]; then
     echo "    make -C $REPO_ROOT build-deploy" >&2
     exit 1
 fi
-for f in picoforge.yaml run.sh frontend/static/style.css; do
+for f in picoforge.yaml run.sh frontend/static/style.css \
+         init service/common.sh service/mesh/run service/webapp/run service/probe/run; do
     [ -e "$DEPLOY/$f" ] || { echo "FAIL: $DEPLOY/$f missing" >&2; exit 1; }
 done
 
@@ -138,6 +139,38 @@ if [ ! -f "$ALPINE_TARBALL" ]; then
     mv "$ALPINE_TARBALL.part" "$ALPINE_TARBALL"
 fi
 
+#-----------------------------------------------------------------------
+# runit — the service supervisor. The minirootfs ships only busybox (no
+# runsvdir/runsv), so we pull the runit package straight from the same
+# Alpine CDN and extract its binaries into the rootfs below. runit lives
+# in `community`; its only dependency is musl libc, already in the rootfs.
+# Version is auto-resolved from the community APKINDEX so a CDN bump keeps
+# working; override with RUNIT_VERSION=2.3.0-r0 to pin.
+#-----------------------------------------------------------------------
+
+RUNIT_REPO="community"
+RUNIT_BASE="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_BRANCH}/${RUNIT_REPO}/riscv64"
+RUNIT_VERSION="${RUNIT_VERSION:-}"
+if [ -z "$RUNIT_VERSION" ]; then
+    echo "==> resolving runit version from ${RUNIT_REPO} APKINDEX"
+    RUNIT_IDX="$USER_CACHE/APKINDEX-${RUNIT_REPO}-${ALPINE_BRANCH}-riscv64.tar.gz"
+    curl -fL --retry 5 --retry-delay 3 -o "$RUNIT_IDX.part" "$RUNIT_BASE/APKINDEX.tar.gz"
+    mv "$RUNIT_IDX.part" "$RUNIT_IDX"
+    # Extract to a file first: piping tar → awk and exiting awk at the first
+    # match closes the pipe early, killing tar with SIGPIPE (rc 141) under
+    # `set -o pipefail`. A plain file read sidesteps that.
+    tar -xzOf "$RUNIT_IDX" APKINDEX > "$WORK/APKINDEX-${RUNIT_REPO}.txt" 2>/dev/null
+    RUNIT_VERSION="$(awk '/^P:runit$/{f=1} f&&/^V:/{print substr($0,3); exit}' \
+        "$WORK/APKINDEX-${RUNIT_REPO}.txt")"
+    [ -n "$RUNIT_VERSION" ] || { echo "FAIL: runit not in ${RUNIT_REPO} APKINDEX" >&2; exit 1; }
+fi
+RUNIT_APK="$USER_CACHE/runit-${RUNIT_VERSION}.apk"
+if [ ! -f "$RUNIT_APK" ]; then
+    echo "==> downloading runit ${RUNIT_VERSION} (${RUNIT_REPO})"
+    curl -fL --retry 8 --retry-delay 5 -o "$RUNIT_APK.part" "$RUNIT_BASE/runit-${RUNIT_VERSION}.apk"
+    mv "$RUNIT_APK.part" "$RUNIT_APK"
+fi
+
 # Size: 256 MiB by default — plenty for picomesh's static binary + sqlite/
 # mdbx working set. Override with DISK_MIB=512 etc.
 TARGET_MIB="${DISK_MIB:-256}"
@@ -171,23 +204,20 @@ sudo mount "$LOOP" "$MNT"
 echo "==> unpacking alpine minirootfs into image"
 sudo tar -C "$MNT" -xzf "$ALPINE_TARBALL"
 
-# Write a /init that boots straight into our /opt/picoforge/run.sh.
-# The kernel cmdline (set in run-vm.sh) is `init=/opt/picoforge/run.sh`,
-# so /init here is fall-back only — kept around because /init is the
-# alpine minirootfs convention.
-echo "==> installing fallback /init"
+# Extract runit's binaries into the rootfs. Member selection skips the apk's
+# .PKGINFO/.SIGN control dotfiles (they don't match usr/ or etc/); the
+# extended-header warnings GNU tar prints for apk checksums are harmless.
+echo "==> installing runit ($(basename "$RUNIT_APK")) into rootfs"
+sudo tar -xzf "$RUNIT_APK" -C "$MNT" usr etc/service etc/sv 2>/dev/null
+[ -x "$MNT/usr/sbin/runsvdir" ] || { echo "FAIL: runsvdir missing after runit extract" >&2; exit 1; }
+
+# /init is the runtime PID 1: the kernel cmdline (run-vm.sh) is
+# `init=/opt/picoforge/init`, so this /init is a fall-back that simply chains
+# into the real one — kept because /init is the alpine minirootfs convention.
+echo "==> installing fallback /init → /opt/picoforge/init"
 sudo tee "$MNT/init" >/dev/null <<'INIT_EOF'
 #!/bin/sh
-mount -t proc proc /proc
-mount -t sysfs sys /sys
-mount -t devtmpfs dev /dev 2>/dev/null || true
-hostname picomesh-yemu
-ip link set lo up
-ip link set eth0 up                       2>/dev/null
-ip addr add 10.0.2.15/24 dev eth0         2>/dev/null
-ip route add default via 10.0.2.2         2>/dev/null
-echo "nameserver 10.0.2.3" > /etc/resolv.conf
-exec /bin/sh
+exec /opt/picoforge/init
 INIT_EOF
 sudo chmod 755 "$MNT/init"
 
@@ -201,7 +231,23 @@ sudo install -d -m 755 "$MNT/opt/picoforge"
 sudo cp -a "$DEPLOY/picoforge.yaml" "$MNT/opt/picoforge/picoforge.yaml"
 sudo cp -a "$DEPLOY/frontend"   "$MNT/opt/picoforge/frontend"
 sudo cp -a "$DEPLOY/run.sh"     "$MNT/opt/picoforge/run.sh"
-sudo chmod 755 "$MNT/opt/picoforge/run.sh"
+sudo cp -a "$DEPLOY/init"       "$MNT/opt/picoforge/init"
+sudo cp -a "$DEPLOY/service"    "$MNT/opt/picoforge/service"
+sudo chmod 755 "$MNT/opt/picoforge/run.sh" "$MNT/opt/picoforge/init" \
+    "$MNT/opt/picoforge/service/mesh/run" \
+    "$MNT/opt/picoforge/service/webapp/run" \
+    "$MNT/opt/picoforge/service/probe/run"
+
+# Wire the runit service directory: /etc/service/<svc> → the payload's
+# service/<svc>. runsvdir (spawned by /opt/picoforge/init) supervises each:
+#   mesh    — the picomesh node (gateway + every backend, collocated)
+#   webapp  — the picoforge web app (HTML page tier)
+#   probe   — availability checker (1s loop, prints to the console)
+echo "==> wiring /etc/service → /opt/picoforge/service (runit)"
+sudo install -d -m 755 "$MNT/etc/service"
+for svc in mesh webapp probe; do
+    sudo ln -sfn "/opt/picoforge/service/$svc" "$MNT/etc/service/$svc"
+done
 
 echo "==> swapping in riscv64 picomesh binary → /opt/picoforge/picomesh"
 sudo install -m 755 "$PICOMESH_BIN" "$MNT/opt/picoforge/picomesh"

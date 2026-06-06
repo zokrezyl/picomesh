@@ -1,255 +1,58 @@
 #!/bin/sh
-# picomesh deploy launcher — single source of truth, runs identically on
-# the host (./build-deploy/run.sh) and inside the riscv64 VM
-# (/opt/picoforge/run.sh after build-image.sh copies this tree in).
+# picomesh deploy launcher — HOST convenience entry point.
 #
-# Layout next to this script:
-#   ./picomesh                  — picomesh binary (host-arch on host, riscv64
-#                              static under the VM; same name either way)
-#   ./picoforge.yaml             — mesh services config
-#   ./frontend/static/       — CSS + html + js the gateway serves
-#   ./run.sh                 — this file
+# Layout next to this script (the deploy / payload root):
+#   ./picomesh             picomesh binary (host-arch here, riscv64 in the VM)
+#   ./picoforge-webapp     browser-facing HTML page tier
+#   ./picoforge.yaml       mesh services config (collocated all-in-one)
+#   ./frontend/static/     CSS + html + js the webapp serves
+#   ./service/             runit run-scripts (the single source of truth for
+#                          how each service is launched):
+#       common.sh            shared env + helpers
+#       mesh/run             the picomesh node (gateway + all backends)
+#       webapp/run           the picoforge web app
+#       probe/run            availability checker (1s loop, prints to stdout)
+#   ./init                 PID-1 init used INSIDE the VM (mounts/net/tmpfs +
+#                          `exec runsvdir /etc/service`); unused on the host
+#   ./run.sh               this file
 #
-# Bootstrap mirrors tools/picoforge/mesh-up.sh: start a parent
-# picomesh on a control port (yhttp), POST /create + /invoke to spawn the
-# whole mesh — backends + gateway on 8080 with the real HTML UI.
+# Inside the riscv64 VM the kernel boots `init=/opt/picoforge/init`, which
+# brings the system up and hands the three services to runit. This run.sh is
+# NOT used in the VM — it exists so a developer can exercise the exact same
+# service scripts on the host:  cd build-deploy && ./run.sh
 #
-# IN-VM ONLY: when PID 1, also brings up /proc /sys /dev and slirp net
-# (those steps are no-ops on the host where init already set things up).
+# It launches the three service run-scripts as background children (each one
+# `exec`s its daemon / loop) and waits, tearing them down on Ctrl-C.
 
 set -u
 
-# Resolve dir of this script (works under busybox sh).
 HERE=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
 [ -n "${HERE}" ] || HERE=$(pwd)
 cd "${HERE}"
 
-export PATH="${HERE}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PF_ROOT="${HERE}"
+. "${HERE}/service/common.sh"
 
-# Error-only tracing on by default — the control parent's env is inherited by
-# every spawned backend, so yerror() across the deployed mesh is captured at low
-# overhead. Override: YTRACE_LOG_LEVEL=trace for full tracing, YTRACE_DEFAULT_ON=no.
-export YTRACE_DEFAULT_ON="${YTRACE_DEFAULT_ON:-yes}"
-export YTRACE_LOG_LEVEL="${YTRACE_LOG_LEVEL:-error}"
+say run "PID=$$ host launcher start (PF_ROOT=${PF_ROOT})"
 
-say() { echo "[run.sh] $*"; }
-say "PID=$$ launcher start (cwd=${HERE})"
+# mesh first; webapp + probe wait for / poll the gateway on their own.
+sh "${HERE}/service/mesh/run" &
+MESH_PID=$!
+say run "mesh service pid=${MESH_PID}"
 
-# In-VM bootstrap: only do this when we ARE PID 1 (i.e. the kernel
-# exec'd us directly as init). On a host invocation PID 1 is systemd
-# or similar, and these steps would be wrong / harmful.
-if [ "$$" = "1" ]; then
-    say "PID 1 — mounting /proc /sys /dev, bringing up slirp net"
-    mount -t proc     proc /proc 2>&1 || say "  proc mount failed (ok if already mounted)"
-    mount -t sysfs    sys  /sys  2>&1 || say "  sys mount failed"
-    mount -t devtmpfs dev  /dev  2>&1 || say "  devtmpfs mount failed (ok if already mounted)"
-    ip link set lo up                  2>&1 || say "  lo up failed"
-    ip link set eth0 up                2>&1 || say "  eth0 up failed"
-    ip addr add 10.0.2.15/24 dev eth0  2>&1 || say "  ip addr add failed"
-    ip route add default via 10.0.2.2  2>&1 || say "  ip route add failed"
+sh "${HERE}/service/webapp/run" &
+WEBAPP_PID=$!
+say run "webapp service pid=${WEBAPP_PID}"
 
-    # ALL runtime state goes in RAM (tmpfs on /tmp). Two reasons:
-    #  1) The deployed rootfs is shrunk to ~minimum (resize2fs -M) to keep the
-    #     Pages download small, so it has essentially NO free space — writing
-    #     the sqlite dbs / repos / KV there fails with "No space left on
-    #     device". tmpfs decouples runtime writes from the read-only rootfs.
-    #  2) The rootfs is an emulated ext4 block device; every metadata op runs
-    #     the full ext4 + virtio-block path on the emulated CPU (brutally slow).
-    #     tmpfs hits the page cache directly — near-native speed, no journal.
-    # size= is a lazily-allocated ceiling drawn from guest RAM; the demo's
-    # working set is a few MB so it never approaches it. PID 1 ⇒ in-VM only;
-    # on a host invocation /tmp is already a fast real filesystem.
-    mount -t tmpfs -o size=512m tmpfs /tmp 2>&1 \
-        && say "tmpfs mounted at /tmp (runtime state in RAM, off the shrunk rootfs)" \
-        || say "  tmpfs mount on /tmp failed — runtime writes will hit the rootfs"
-fi
+sh "${HERE}/service/probe/run" &
+PROBE_PID=$!
+say run "probe service pid=${PROBE_PID}"
 
-# Where the app writes per-service state — now on the in-RAM /tmp under the VM.
-mkdir -p /tmp/picoforge /tmp/picoforge/repos
+# Ctrl-C tears the whole group down. We started these children, so killing
+# the specific PIDs we captured is correct here (host-only path).
+trap 'say run "shutting down"; kill ${MESH_PID} ${WEBAPP_PID} ${PROBE_PID} 2>/dev/null; exit 0' INT TERM
 
-PICOMESH="${HERE}/picomesh"
-CFG="${HERE}/picoforge.yaml"
-
-if [ ! -x "${PICOMESH}" ]; then
-    say "FAIL: ${PICOMESH} not executable"
-    [ "$$" = "1" ] && exec sleep infinity
-    exit 1
-fi
-if [ ! -f "${CFG}" ]; then
-    say "FAIL: ${CFG} missing"
-    [ "$$" = "1" ] && exec sleep infinity
-    exit 1
-fi
-
-# The gateway mints HS256 JWTs (system capability tokens, session access tokens)
-# signed with this secret; without it, register/login fail with "registration
-# temporarily unavailable" / no access token. The split mesh inherits it from
-# the operator's env; the all-in-one demo has no such env, so default it here
-# (a public demo — overridable by exporting PICOMESH_JWT_SECRET before boot).
-export PICOMESH_JWT_SECRET="${PICOMESH_JWT_SECRET:-picoforge-demo-jwt-secret}"
-say "launching collocated all-in-one app (gateway + every service + storage, in-process)"
-# ONE process — no mesh bootstrap, no per-service children, no inter-service
-# TCP. `--name app` projects `mesh.services.app.config` as this process's
-# config; that block has NO `remotes:`, so every service_ctx() resolves to a
-# local in-process object. cwd = ${HERE} so the yaml's relative
-# ./frontend/static path resolves.
-#
-# Output sink: /dev/console under PID 1 (VM → printk → qemu/wasm console),
-# else inherit the parent's stdout/stderr (host `./run.sh` use).
-if [ "$$" = "1" ]; then
-    "${PICOMESH}" --config-file "${CFG}" --name app \
-        --frontend yhttp --host 0.0.0.0 --port 8080 serve \
-        </dev/null >/dev/console 2>&1 &
-else
-    "${PICOMESH}" --config-file "${CFG}" --name app \
-        --frontend yhttp --host 0.0.0.0 --port 8080 serve \
-        </dev/null &
-fi
-PARENT=$!
-say "app pid=${PARENT}"
-
-# Wait for the gateway port to accept.
-say "waiting for gateway :8080…"
-i=0
-while [ $i -lt 60 ]; do
-    if wget -q -O - --timeout=1 --tries=1 "http://127.0.0.1:8080/login" >/dev/null 2>&1 \
-        || curl -sf --max-time 1 "http://127.0.0.1:8080/login" >/dev/null 2>&1; then
-        break
-    fi
-    sleep 1
-    i=$((i + 1))
-done
-say "gateway up after ${i}s"
-
-# HTML page tier. The collocated app on :8080 is the gateway — API (/_rpc,
-# /_describe) + auth POSTs only; it serves NO GET pages. picoforge-webapp is the
-# browser-facing tier: it serves every GET page + static asset on :8081 (the
-# `HTML frontend` port run-vm.sh forwards to the browser as :18081), sourcing
-# all data from the gateway over /_rpc. Same output-sink rule as the gateway.
-WEBAPP="${HERE}/picoforge-webapp"
-if [ -x "${WEBAPP}" ]; then
-    if [ "$$" = "1" ]; then
-        "${WEBAPP}" --gateway-url http://127.0.0.1:8080 --host 0.0.0.0 --port 8081 \
-            --static "${HERE}/frontend/static" --public-url http://127.0.0.1:8081 \
-            </dev/null >/dev/console 2>&1 &
-    else
-        "${WEBAPP}" --gateway-url http://127.0.0.1:8080 --host 0.0.0.0 --port 8081 \
-            --static "${HERE}/frontend/static" --public-url http://127.0.0.1:8081 \
-            </dev/null &
-    fi
-    say "picoforge-webapp pid=$! on :8081 (HTML page tier → gateway :8080)"
-else
-    say "WARN: ${WEBAPP} missing — no HTML page tier on :8081"
-fi
-
-say "post-launch sockets:"
-netstat -ltn 2>&1 || ss -ltn 2>&1 || say "  no netstat/ss"
-
-# ----------------------------------------------------------------------
-# Boot smoke: prove the gateway works end-to-end and pre-populate a demo
-# account + a couple of repos, so a fresh VM lands with a working login
-# and real repos to browse. It goes through the gateway (:8080) exactly
-# like a browser would — register, then create repos — using raw HTTP
-# over busybox `nc` (the only HTTP client in the alpine guest that lets
-# us read the Set-Cookie session id and replay it). The HTML routes
-# authenticate from the `Cookie:` header (sid for the user, uname for
-# repo ownership), so the smoke replays BOTH cookies exactly as the
-# browser does. The gateway closes on `Connection: close`, so each nc
-# call returns the instant its response lands. Runs in the BACKGROUND so
-# it never delays the gateway becoming usable — its [smoke] lines stream
-# to the console as each repo is created.
-# ----------------------------------------------------------------------
-smoke_http() {  # METHOD PATH BODY [extra-header]  → raw response on stdout
-    # The 4th arg (extra header) is optional; ${4:-} keeps it safe under
-    # the script's `set -u` when callers pass only METHOD PATH BODY.
-    smoke_hdr=${4:-}
-    smoke_len=${#3}
-    {
-        printf '%s %s HTTP/1.1\r\n' "$1" "$2"
-        printf 'Host: picomesh-yemu\r\n'
-        [ -n "$smoke_hdr" ] && printf '%s\r\n' "$smoke_hdr"
-        printf 'Content-Type: application/x-www-form-urlencoded\r\n'
-        printf 'Content-Length: %s\r\n' "${smoke_len}"
-        printf 'Connection: close\r\n'
-        printf '\r\n'
-        printf '%s' "$3"
-    } | nc -w 120 127.0.0.1 8080 2>/dev/null
-}
-
-smoke_sid() {  # read a raw response on stdin, echo the picomesh-sid value
-    tr -d '\r' | sed -n 's/^[Ss]et-[Cc]ookie:[ ]*picomesh-sid=\([^;]*\).*/\1/p' | head -1
-}
-
-smoke_run() {
-    command -v nc >/dev/null 2>&1 || { say "[smoke] no nc in guest — skipping boot smoke"; return; }
-    s=0
-    while [ $s -lt 90 ]; do
-        # Readiness: the gateway is API-only and 404s GET /login, so probe an
-        # endpoint it actually serves (GET /_describe → 200 once it's up).
-        smoke_http GET /_describe '' | head -1 | grep -q ' 200' && break
-        sleep 1; s=$((s + 1))
-    done
-    say "[smoke] gateway answered after ${s}s — seeding accounts"
-
-    # Site-owner: the FIRST account ever registered becomes the deployment
-    # admin. Inject root/rootpw FIRST so the demo lands with a working admin.
-    smoke_http POST /register 'username=root&password=rootpw' >/dev/null 2>&1
-    say "[smoke] injected site-owner root/rootpw"
-
-    resp=$(smoke_http POST /register 'username=demo&password=demo')
-    sid=$(printf '%s' "$resp" | smoke_sid)
-    if [ -z "$sid" ]; then
-        # Already registered (e.g. persisted qemu rootfs) — log in instead.
-        resp=$(smoke_http POST /login 'username=demo&password=demo')
-        sid=$(printf '%s' "$resp" | smoke_sid)
-    fi
-    if [ -z "$sid" ]; then
-        say "[smoke] FAIL: no session for demo — $(printf '%s' "$resp" | head -1)"
-        return
-    fi
-    say "[smoke] PASS: demo session established"
-
-    # The HTML routes authenticate from the `Cookie:` header (resolve_uid),
-    # NOT a bare `picomesh-sid:` header — so replay the sid as a cookie, the
-    # same way the browser does. A bare header here would be ignored and
-    # the create would silently run anonymous (302 to /login).
-    for repo in hello world; do
-        loc=$(smoke_http POST /repos/new "name=${repo}" "Cookie: picomesh-sid=${sid}; picomesh-uname=demo" \
-              | tr -d '\r' | sed -n 's/^[Ll]ocation:[ ]*//p' | head -1)
-        case "$loc" in
-            /demo/*) say "[smoke] PASS: created repo demo/${repo}" ;;
-            /login)  say "[smoke] FAIL: create demo/${repo} bounced to /login (auth lost)" ;;
-            *)       say "[smoke] repo demo/${repo} -> ${loc:-(already exists?)}" ;;
-        esac
-    done
-
-    # Confirm both repos are actually listed under the account.
-    page=$(smoke_http GET /demo '' "Cookie: picomesh-sid=${sid}; picomesh-uname=demo")
-    have_hello=$(printf '%s' "$page" | grep -c '/demo/hello')
-    have_world=$(printf '%s' "$page" | grep -c '/demo/world')
-    if [ "$have_hello" -ge 1 ] && [ "$have_world" -ge 1 ]; then
-        say "[smoke] PASS: /demo lists both repos"
-    else
-        say "[smoke] WARN: /demo listing hello=${have_hello} world=${have_world}"
-    fi
-    say "[smoke] done — log in as demo/demo to browse repos hello + world"
-}
-
-say "app up — collocated gateway + all services on :8080 (single process)"
-
-# Fire the boot smoke without blocking the serve path.
-smoke_run &
-
-if [ "$$" = "1" ]; then
-    # In-VM: PID 1 must never exit (would kernel-panic). Wait for the
-    # parent picomesh to die, then sleep forever for diagnostics.
-    wait ${PARENT}
-    say "parent picomesh exited rc=$?"
-    exec sleep infinity
-else
-    # Host: wait blocks the shell. Trap signals so Ctrl-C tears
-    # everything down cleanly.
-    trap 'say "shutting down"; kill ${PARENT} 2>/dev/null; exit 0' INT TERM
-    wait ${PARENT}
-    say "parent picomesh exited rc=$?"
-fi
+# Block on the mesh node; if it exits, bring the others down too.
+wait ${MESH_PID}
+say run "mesh node exited rc=$? — stopping webapp + probe"
+kill ${WEBAPP_PID} ${PROBE_PID} 2>/dev/null
