@@ -21,8 +21,9 @@ BUILD_DIR_ASAN    := build-desktop-asan
 BUILD_DIR_RISCV   := build-linux-riscv64-release
 BUILD_DIR_YEMU    := build-yemu-release
 BUILD_DIR_DEPLOY  := build-deploy
+BUILD_DIR_CODEGEN := build-codegen
 
-.PHONY: help all build-desktop-release build-desktop-debug build-desktop-asan build-linux-riscv64-release build-deploy build-yemu-release build-webasm-yemu-release perf-picoforge perf-throughput-notracing perf-throughput-tracing clean
+.PHONY: help all build-desktop-release build-desktop-debug build-desktop-asan build-linux-riscv64-release build-deploy build-yemu-release run-qemu build-webasm-yemu-release run-codegen perf-picoforge perf-throughput-notracing perf-throughput-tracing clean
 
 # AddressSanitizer flags. Frame pointers for readable traces; the same flags
 # go on compile AND link so the asan runtime is pulled in. The vendored static
@@ -44,6 +45,12 @@ SEED_USERS       ?= 0
 
 help:
 	@awk 'BEGIN{FS=":"} /^## / {sub(/^## /,""); print "  " $$0}' $(MAKEFILE_LIST)
+
+## run-codegen            regenerate checked-in plugin codegen outputs
+run-codegen:
+	$(CMAKE) -S . -B $(BUILD_DIR_CODEGEN) -G Ninja -DCMAKE_BUILD_TYPE=Release \
+		-DPICOMESH_ENABLE_CODEGEN=ON
+	$(CMAKE) --build $(BUILD_DIR_CODEGEN) --target picomesh_codegen --parallel $(JOBS)
 
 ## build-desktop-release  configure + build the release variant
 build-desktop-release:
@@ -131,6 +138,18 @@ build-deploy: build-desktop-release
 build-yemu-release: build-linux-riscv64-release build-deploy
 	bash tools/picoforge/yemu/build-image.sh
 
+## run-qemu                 rebuild the riscv64 image from CURRENT source, then
+##                          boot it in qemu (gateway → host :18080, webapp →
+##                          host :18081). Depends on build-yemu-release so it
+##                          ALWAYS bakes the latest binaries — never boots a
+##                          stale image (the rebake needs sudo for losetup/
+##                          mount). Quit qemu with Ctrl-A X. Override SMP=/MEM=.
+##                          Open http://127.0.0.1:18081/-/login after boot
+##                          (default admin: root / rootpw, seeded by the probe).
+##                          To boot WITHOUT rebuilding, run run-vm.sh directly.
+run-qemu: build-yemu-release
+	bash tools/picoforge/yemu/run-vm.sh
+
 ## build-webasm-yemu-release  compile tinyemu to wasm (picomesh-yemu.{js,wasm})
 ##                            for the in-browser demo at
 ##                            build-webasm-yemu-release/. Stages kernel +
@@ -158,6 +177,6 @@ build-linux-riscv64-release:
 ## clean                  wipe every build-*/ artifact directory
 clean:
 	rm -rf $(BUILD_DIR_RELEASE) $(BUILD_DIR_DEBUG) $(BUILD_DIR_RISCV) \
-	       $(BUILD_DIR_YEMU) $(BUILD_DIR_DEPLOY) \
+	       $(BUILD_DIR_YEMU) $(BUILD_DIR_DEPLOY) $(BUILD_DIR_CODEGEN) \
 	       build-webasm-yemu-release compile_commands.json
 

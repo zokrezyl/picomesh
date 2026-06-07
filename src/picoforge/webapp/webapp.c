@@ -2079,7 +2079,7 @@ static void page_repo_issues(struct yloop *loop, struct yloop_stream *s,
     else             buf_puts(&b, "<span class=\"muted\">service unreachable</span>");
     buf_puts(&b, "</div><div class=\"panel-actions\"><form method=\"post\" action=\"/");
     buf_esc(&b, acct); buf_puts(&b, "/"); buf_esc(&b, repo);
-    buf_puts(&b, "/issues/new\"><button class=\"primary\" type=\"submit\">New issue</button></form></div></header>");
+    buf_puts(&b, "/-/issues/new\"><button class=\"primary\" type=\"submit\">New issue</button></form></div></header>");
 
     buf_puts(&b, "<div class=\"filters\"><a class=\"active\" href=\"?status=open\">Open</a>"
                  "<a href=\"?status=closed\">Closed</a></div>");
@@ -2100,7 +2100,7 @@ static void page_repo_issues(struct yloop *loop, struct yloop_stream *s,
     /* Close-by-id, until per-row close actions exist. */
     buf_puts(&b, "<div class=\"panel-body\"><form class=\"inline-form\" method=\"post\" action=\"/");
     buf_esc(&b, acct); buf_puts(&b, "/"); buf_esc(&b, repo);
-    buf_puts(&b, "/issues/close\"><label>Close issue <input type=\"number\" name=\"issue_id\" required></label>"
+    buf_puts(&b, "/-/issues/close\"><label>Close issue <input type=\"number\" name=\"issue_id\" required></label>"
                  "<button type=\"submit\">Close</button></form></div>");
     buf_puts(&b, "</section>");
     page_close_and_send(s, &b, keep_alive);
@@ -2139,7 +2139,7 @@ static void page_repo_runs(struct yloop *loop, struct yloop_stream *s,
                  "<strong>Pipeline runs</strong> <span class=\"muted\">queued, running, finished</span>"
                  "</div><div class=\"panel-actions\"><form method=\"post\" action=\"/");
     buf_esc(&b, acct); buf_puts(&b, "/"); buf_esc(&b, repo);
-    buf_puts(&b, "/runs/new\"><button class=\"primary\" type=\"submit\">Run pipeline</button></form></div></header>");
+    buf_puts(&b, "/-/runs/new\"><button class=\"primary\" type=\"submit\">Run pipeline</button></form></div></header>");
     buf_printf(&b,
         "<table class=\"pipeline-table\"><thead><tr>"
         "<th>Status</th><th>Run</th><th>Ref</th><th>Runner</th><th>Count</th></tr></thead><tbody>"

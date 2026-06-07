@@ -1871,6 +1871,28 @@ static uint32_t uid_for_token(const char *token)
     return lr.value;
 }
 
+/* Resolve an opaque session token to the STORED ACCESS JWT (the user credential
+ * the backend authorizes on). malloc'd; NULL if none. The gateway forwards THIS
+ * as the downstream `jwt` header so a collocated / no-`security`-block
+ * deployment authenticates backend calls the same way the split mesh's
+ * authenticator chain does — backends derive identity ONLY from the JWT, so a
+ * bare uid is not enough. */
+static char *session_jwt_for_token(const char *token)
+{
+    if (!token || !*token) return NULL;
+    struct picomesh_engine *e = picomesh_active_engine();
+    if (!e) return NULL;
+    struct ctx c = picomesh_engine_service_ctx(e, "session");
+    struct object_ptr_result o = session_session_create(&c);
+    if (PICOMESH_IS_ERR(o)) { picomesh_error_destroy(o.error); return NULL; }
+    struct picomesh_string_result jr = session_session_jwt(&c, o.value, NULL, token);
+    object_release_in_ctx(&c, o.value);
+    if (PICOMESH_IS_ERR(jr)) { picomesh_error_destroy(jr.error); return NULL; }
+    if (jr.value && jr.value[0]) return jr.value;
+    free(jr.value);
+    return NULL;
+}
+
 /* Resolve the caller's opaque session token to a VERIFIED auth context, the
  * same exchange the `session_cookie` authenticator performs for /_rpc: the
  * opaque sid → stored access JWT (session.session.jwt) → signature+expiry
@@ -2089,9 +2111,33 @@ static void route_json_rpc(struct yloop_stream *s,
         }
         picomesh_authn_outcome_free(&outcome);
     } else {
+        /* No `security` block (collocated / plain-bridge node): resolve the
+         * opaque session token to the user's stored access JWT and forward it
+         * downstream. Forwarding only a uid is NOT enough — backends derive
+         * identity solely from the JWT, so an authenticated mutation
+         * (ns_create, repo create, …) would otherwise be rejected as
+         * "authentication required". */
         char token[64];
-        if (extract_session_token(headers_raw, headers_raw_len, token, sizeof(token)))
-            uid = uid_for_token(token);
+        if (extract_session_token(headers_raw, headers_raw_len, token, sizeof(token))) {
+            verified_jwt = session_jwt_for_token(token);
+            if (verified_jwt) {
+                struct picomesh_string_result secret = picomesh_security_jwt_secret(e);
+                if (PICOMESH_IS_OK(secret)) {
+                    struct picomesh_authctx claims;
+                    struct picomesh_void_result ctx_r =
+                        picomesh_authctx_from_jwt(verified_jwt, secret.value, &claims);
+                    if (PICOMESH_IS_OK(ctx_r) && claims.authenticated) uid = claims.uid;
+                    else if (PICOMESH_IS_ERR(ctx_r)) picomesh_error_destroy(ctx_r.error);
+                    free(secret.value);
+                } else {
+                    picomesh_error_destroy(secret.error);
+                }
+            } else {
+                /* No stored JWT (anonymous or expired session) — still record
+                 * the uid for the trace line; the call goes out unauthenticated. */
+                uid = uid_for_token(token);
+            }
+        }
     }
 
     /* Request-header bag handed to the backend: the verified auth context +

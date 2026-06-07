@@ -162,7 +162,17 @@ def test_gateway_rpc_surface_reachable(gateway_url):
         status, body = _post_rpc(gateway_url, path, args)
         ok = (status == 200 and isinstance(body, dict)
               and "result" in body and "error" not in body)
-        if not ok:
+        # An authz denial ("forbidden …") proves the method is REACHABLE: it
+        # resolved, ran, and enforced its policy. That is exactly what this
+        # sweep checks. Some global reads (issues/pipeline list, list_all) are
+        # site-admin-only post-RBAC, so an anonymous probe is correctly denied
+        # — not a regression. Only a renamed/dropped method ("no method") or a
+        # crash should fail here.
+        err_msg = ""
+        if isinstance(body, dict) and isinstance(body.get("error"), dict):
+            err_msg = body["error"].get("message") or ""
+        denied = "forbidden" in err_msg.lower()
+        if not (ok or denied):
             failures.append(f"{path}(args={args}) -> HTTP {status} {body!r}")
 
     assert not failures, (
@@ -186,8 +196,8 @@ def test_accounts_roster_rpc(gateway_url):
     assert len(roster) == count_body["result"], \
         f"count ({count_body['result']}) != len(list_all) ({len(roster)})"
     for row in roster:
-        assert isinstance(row, dict) and "uid" in row and "name" in row, \
-            f"roster row should be {{uid,name}}, got {row!r}"
+        assert isinstance(row, dict) and "uid" in row and "username" in row, \
+            f"roster row should be {{uid,username}}, got {row!r}"
 
 
 def test_accounts_list_pagination(gateway_url):
@@ -242,6 +252,12 @@ def test_distributed_trace_reconstructs(gateway_url):
     span tree in the trace_collector. This exercises the span exporter end to
     end — a silent exporter break (e.g. a renamed ingest method) drops every
     span and is invisible to the page tests."""
+    # Tracing needs the trace_collector backend + the span exporter. A
+    # one-node / collocated config (e.g. the webasm/qemu image) doesn't run
+    # trace_collector, so there is nothing to reconstruct — skip rather than
+    # fail; the multi-node mesh runs it and exercises this path.
+    if "trace_collector" not in {s.get("service") for s in _describe_services(gateway_url)}:
+        pytest.skip("trace_collector not active (one-node/collocated) — tracing not exercised")
     trace_id = uuid.uuid4().hex          # 32 hex chars == a W3C trace-id
     parent_span = uuid.uuid4().hex[:16]  # 16 hex chars == a W3C span-id
 
@@ -281,8 +297,8 @@ def test_admin_users_roster(page, base_url):
     register(page, base_url, second, PASSWORD)
     sign_in_or_register(page, base_url)  # back to USER (admin)
 
-    resp = page.goto(f"{base_url}/admin/users")
-    assert resp.status == 200, f"/admin/users as admin should be 200, got {resp.status}"
+    resp = page.goto(f"{base_url}/-/admin/users")
+    assert resp.status == 200, f"/-/admin/users as admin should be 200, got {resp.status}"
     expect(page.locator("h1")).to_have_text("Users")
 
     body = page.content()
@@ -301,7 +317,7 @@ def test_admin_users_roster_count_tile(page, base_url):
     """The Users page stat tile reflects a real count (>= the two accounts we
     registered), proving accounts.accounts.count round-tripped."""
     sign_in_or_register(page, base_url)  # admin
-    page.goto(f"{base_url}/admin/users")
+    page.goto(f"{base_url}/-/admin/users")
     tile = page.locator("section.stats-grid")
     expect(tile).to_be_visible()
     # The tile shows "<n> users"; pull the integer and assert it is sane.

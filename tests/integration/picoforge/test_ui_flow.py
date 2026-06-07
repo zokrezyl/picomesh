@@ -84,9 +84,9 @@ def test_full_ui_flow(page, base_url):
     # 1. Sign up (or in) through the form. On a fresh stack USER is the first
     #    registrant → the bootstrap site admin, so the Admin link is present.
     sign_in_or_register(page, base_url)
-    expect(page.locator("header.topbar a[href='/admin']")).to_have_count(1)
+    expect(page.locator("header.topbar a[href='/-/admin']")).to_have_count(1)
 
-    # 2. Create a repository via the dedicated /repos/new page. Scope the
+    # 2. Create a repository via the dedicated /-/repos/new page. Scope the
     #    click to the form — the signed-in topbar also has a submit button
     #    (Sign out), so a bare button[type=submit] is ambiguous.
     page.click("a[href='/-/repos/new']")
@@ -94,16 +94,19 @@ def test_full_ui_flow(page, base_url):
     page.fill("input[name=name]", REPO)
     page.click("form[action='/-/repos/new'] button[type=submit]")
     page.wait_for_load_state("networkidle")
-    expect(page).to_have_url(re.compile(r"/repos$"))
+    # Repo creation lands on the new repo's tree page (GitHub/GitLab style).
+    expect(page).to_have_url(re.compile(rf"/{re.escape(USER)}/{REPO}/-/tree$"))
 
-    # 3. The new repo shows up in the list, linking to /<user>/<repo>.
-    repo_link = page.locator(f"a[href='/{USER}/{REPO}']").first
+    # 3. The new repo also shows up in the repos list, linking to the repo's
+    #    tree page (/<user>/<repo>/-/tree).
+    page.goto(f"{base_url}/-/repos")
+    repo_link = page.locator(f"a[href='/{USER}/{REPO}/-/tree']").first
     expect(repo_link).to_be_visible()
 
     # 4. Open the repository browser.
     repo_link.click()
     page.wait_for_load_state("networkidle")
-    expect(page).to_have_url(re.compile(rf"/{USER}/{REPO}$"))
+    expect(page).to_have_url(re.compile(rf"/{re.escape(USER)}/{REPO}/-/tree$"))
     # The project sub-nav (Code / Issues / Pipelines / Settings) is present.
     expect(page.locator("nav.project-tabs")).to_be_visible()
 
@@ -139,7 +142,7 @@ def test_full_ui_flow(page, base_url):
 
     # Back to the repo via the editor's Cancel link, so we can use the tabs.
     page.click("a.btn:has-text('Cancel')")
-    page.wait_for_url(re.compile(rf"/{USER}/{REPO}$"))
+    page.wait_for_url(re.compile(rf"/{re.escape(USER)}/{REPO}/-/tree$"))
 
     # 10. Issues: navigate via the project tab, file one by clicking the button.
     page.click("nav.project-tabs a:has-text('Issues')")
@@ -159,8 +162,8 @@ def test_full_ui_flow(page, base_url):
     assert int(queued.inner_text().strip()) >= 1, "queued run count should be >= 1"
 
     # 12. Sign out by clicking the topbar button — back to the sign-in page.
-    page.click("header.topbar form[action='/logout'] button[type=submit]")
-    page.wait_for_url(re.compile(r"/login$"))
+    page.click("header.topbar form[action='/-/logout'] button[type=submit]")
+    page.wait_for_url(re.compile(r"/-/login$"))
     expect(page.locator("h1")).to_have_text("Sign in")
 
 
@@ -193,7 +196,7 @@ def test_non_admin_forbidden_from_admin(page, base_url):
     # The nav must not even advertise admin access to a non-admin: no Admin
     # link anywhere in the topbar on a normal page.
     page.goto(f"{base_url}/-/repos")
-    assert page.locator("header.topbar a[href='/admin']").count() == 0, \
+    assert page.locator("header.topbar a[href='/-/admin']").count() == 0, \
         "non-admin must not see an Admin link in the topbar"
 
 
@@ -209,11 +212,14 @@ def test_repo_owner_from_session_not_cookie(page, base_url):
     page.fill("input[name=name]", "cookie-test")
     page.click("form[action='/-/repos/new'] button[type=submit]")
     page.wait_for_load_state("networkidle")
-    expect(page).to_have_url(re.compile(r"/repos$"))
+    # Repo creation lands on the new repo's tree page, under the SESSION user
+    # (not the forged cookie) — the URL itself proves ownership-from-session.
+    expect(page).to_have_url(re.compile(rf"/{re.escape(USER)}/cookie-test/-/tree$"))
 
-    # Owned by the real session user, NOT the forged cookie name.
-    expect(page.locator(f"a[href='/{USER}/cookie-test']")).to_be_visible()
-    assert page.locator("a[href='/attacker/cookie-test']").count() == 0, \
+    # Confirm on the repos list: owned by the real session user, NOT the cookie.
+    page.goto(f"{base_url}/-/repos")
+    expect(page.locator(f"a[href='/{USER}/cookie-test/-/tree']")).to_be_visible()
+    assert page.locator("a[href='/attacker/cookie-test/-/tree']").count() == 0, \
         "repo must not be created under the forged picomesh-uname cookie"
 
 
@@ -235,26 +241,24 @@ def test_anonymous_cannot_enqueue_run(base_url):
     assert loc and "/login" in loc, f"should redirect to /login, got {loc!r}"
 
 
-def test_gateway_serves_no_html(base_url):
+def test_gateway_serves_no_html(gateway_url):
     """The webapp owns pages; the gateway must 404 HTML GETs. Cross-checks
-    the gh#5 invariant from the browser's side, via urllib."""
-    host = base_url.rsplit(":", 1)[0]
-    gateway = f"{host}:8090"
+    the gh#5 invariant from the browser's side, via urllib. Targets the
+    gateway_url fixture (PICOFORGE_GATEWAY_URL) so it works against both the
+    multi-node mesh and a one-node / collocated gateway on any port."""
     for path in ("/", "/-/login", "/-/repos"):
         try:
-            code = urllib.request.urlopen(gateway + path, timeout=8).getcode()
+            code = urllib.request.urlopen(gateway_url + path, timeout=8).getcode()
         except urllib.error.HTTPError as e:
             code = e.code
         assert code == 404, f"gateway {path} returned {code}, expected 404 (API-only)"
 
 
-def test_gateway_whoami_anonymous(base_url):
+def test_gateway_whoami_anonymous(gateway_url):
     """The gateway's /_whoami returns anonymous claims (uid 0) when no
     session token is presented — and never leaks a JWT."""
     import json
-    host = base_url.rsplit(":", 1)[0]
-    gateway = f"{host}:8090"
-    body = urllib.request.urlopen(gateway + "/_whoami", timeout=8).read()
+    body = urllib.request.urlopen(gateway_url + "/_whoami", timeout=8).read()
     claims = json.loads(body)
     assert claims.get("uid") == 0, f"anon /_whoami should be uid 0, got {claims}"
     assert claims.get("is_admin") in (False, 0), "anon must not be admin"

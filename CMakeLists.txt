@@ -18,6 +18,8 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
+option(PICOMESH_ENABLE_CODEGEN "Regenerate checked-in plugin codegen outputs" OFF)
+
 add_compile_options(
     -Wall -Wextra -Wno-attributes
     -Werror=incompatible-pointer-types
@@ -172,22 +174,24 @@ function(picomesh_add_plugin NAME)
         list(APPEND _SOURCES_FULL "${_SRC_DIR}/${src}")
     endforeach()
 
-    add_custom_command(
-        OUTPUT ${_GEN_PUBLIC} ${_GEN_INTERNAL}
-        COMMAND ${CMAKE_COMMAND} -E env
-            "PICOMESH_CODEGEN_EXTRA_INCLUDES=${_EXTRA_INCLUDE_PATH}"
-            uv run ${PICOMESH_ROOT}/src/picomesh/yclass/gen/codegen.py
-                ${NAME}
-                ${PICOMESH_ROOT}/include
-                ${_SRC_DIR}
-                ${_SOURCES_FULL}
-        DEPENDS ${_SOURCES_FULL} ${PICOMESH_ROOT}/src/picomesh/yclass/gen/codegen.py
-        WORKING_DIRECTORY ${_SRC_DIR}
-        COMMENT "codegen[${NAME}]: regenerating public/internal artefacts"
-        VERBATIM
-    )
-    add_custom_target(picomesh_plugin_${NAME}_codegen
-                      DEPENDS ${_GEN_PUBLIC} ${_GEN_INTERNAL})
+    if(PICOMESH_ENABLE_CODEGEN)
+        add_custom_command(
+            OUTPUT ${_GEN_PUBLIC} ${_GEN_INTERNAL}
+            COMMAND ${CMAKE_COMMAND} -E env
+                "PICOMESH_CODEGEN_EXTRA_INCLUDES=${_EXTRA_INCLUDE_PATH}"
+                uv run ${PICOMESH_ROOT}/src/picomesh/yclass/gen/codegen.py
+                    ${NAME}
+                    ${PICOMESH_ROOT}/include
+                    ${_SRC_DIR}
+                    ${_SOURCES_FULL}
+            DEPENDS ${_SOURCES_FULL} ${PICOMESH_ROOT}/src/picomesh/yclass/gen/codegen.py
+            WORKING_DIRECTORY ${_SRC_DIR}
+            COMMENT "codegen[${NAME}]: regenerating public/internal artefacts"
+            VERBATIM
+        )
+        add_custom_target(picomesh_plugin_${NAME}_codegen
+                          DEPENDS ${_GEN_PUBLIC} ${_GEN_INTERNAL})
+    endif()
 
     # The annotated <stem>.c #include's its sibling <stem>.gen.c, so we
     # don't add the .gen.c files separately — only methods.gen.c and
@@ -197,7 +201,6 @@ function(picomesh_add_plugin NAME)
         ${_SRC_DIR}/methods.gen.c
         ${_SRC_DIR}/rpc.gen.c
     )
-    add_dependencies(picomesh_plugin_${NAME} picomesh_plugin_${NAME}_codegen)
     # All plugins (and the rest of the tree) reach generated public
     # headers via <picomesh/plugin/<name>/...>, which resolves under
     # the repo-wide include/ root.
@@ -235,42 +238,39 @@ foreach(_p ${PICOMESH_PLUGINS})
     add_subdirectory(src/picomesh/plugins/${_p})
 endforeach()
 
-# Some plugins #include other plugins' generated headers (session,
-# accounts, password_authn etc. delegate to storage_sql). The codegen
-# of each consumer must therefore run AFTER the codegen of every
-# plugin it pulls a header from, otherwise the AST-dump step fails
-# with "use of undeclared identifier" before the produces step has
-# regenerated the header. List the producer→consumer edges here.
-foreach(_consumer session accounts password_authn token_issuer
-                  personal_access_tokens issues git_repo git_pipeline
-                  github_authn runner_agent)
-    add_dependencies(picomesh_plugin_${_consumer}_codegen
-                     picomesh_plugin_storage_codegen)
-    # These consume sharded_storage's generated header too (db_get/db_set/…
-    # and now db_list), so their AST-dump must run after its codegen.
-    add_dependencies(picomesh_plugin_${_consumer}_codegen
-                     picomesh_plugin_sharded_storage_codegen)
-endforeach()
+if(PICOMESH_ENABLE_CODEGEN)
+    add_custom_target(picomesh_codegen)
+    foreach(_p ${PICOMESH_PLUGINS})
+        add_dependencies(picomesh_codegen picomesh_plugin_${_p}_codegen)
+    endforeach()
 
-# token_issuer.login delegates to password_authn and loads groups from
-# accounts (issue #19), so it #includes their generated headers — its
-# AST-dump must run after both have regenerated.
-add_dependencies(picomesh_plugin_token_issuer_codegen
-                 picomesh_plugin_password_authn_codegen
-                 picomesh_plugin_accounts_codegen)
+    # Some plugins #include other plugins' generated headers. When explicitly
+    # regenerating checked-in outputs, preserve producer-before-consumer order.
+    foreach(_consumer session accounts password_authn token_issuer
+                      personal_access_tokens issues git_repo git_pipeline
+                      github_authn runner_agent mesh)
+        add_dependencies(picomesh_plugin_${_consumer}_codegen
+                         picomesh_plugin_storage_codegen
+                         picomesh_plugin_sharded_storage_codegen)
+    endforeach()
 
-# runner_agent.exchange mints a runner JWT via token_issuer, so it #includes
-# token_issuer's generated header — AST-dump must run after token_issuer's codegen.
-add_dependencies(picomesh_plugin_runner_agent_codegen
-                 picomesh_plugin_token_issuer_codegen)
-
-# The runtime's frontend (yhttp/frontend.c) and ymain's smoke `client`
-# subcommand both pull in plugin public headers. They must therefore
-# wait for every plugin's codegen to have produced those headers
-# before they get compiled.
-foreach(_p ${PICOMESH_PLUGINS})
-    add_dependencies(picomesh_runtime picomesh_plugin_${_p}_codegen)
-endforeach()
+    add_dependencies(picomesh_plugin_token_issuer_codegen
+                     picomesh_plugin_password_authn_codegen
+                     picomesh_plugin_accounts_codegen)
+    add_dependencies(picomesh_plugin_runner_agent_codegen
+                     picomesh_plugin_token_issuer_codegen)
+    add_dependencies(picomesh_plugin_git_repo_codegen
+                     picomesh_plugin_accounts_codegen)
+    add_dependencies(picomesh_plugin_github_authn_codegen
+                     picomesh_plugin_accounts_codegen)
+    add_dependencies(picomesh_plugin_issues_codegen
+                     picomesh_plugin_git_repo_codegen)
+    add_dependencies(picomesh_plugin_git_pipeline_codegen
+                     picomesh_plugin_git_repo_codegen)
+    add_dependencies(picomesh_plugin_mesh_codegen
+                     picomesh_plugin_registry_codegen
+                     picomesh_plugin_portalloc_codegen)
+endif()
 
 # ---- driver entry point (ymain) -------------------------------------
 #
@@ -279,10 +279,6 @@ endforeach()
 # place for compiled picomesh sources; bin/ used to host the driver but
 # was a wart).
 add_subdirectory(src/picomesh/ymain)
-foreach(_p ${PICOMESH_PLUGINS})
-    add_dependencies(picomesh_ymain picomesh_plugin_${_p}_codegen)
-endforeach()
-
 # ---- driver binary ---------------------------------------------------
 #
 # Plugin object libraries are linked as *direct sources* of the
@@ -354,7 +350,14 @@ add_executable(picotrace
     src/picomesh/yplatform/longjmp_chk_stub.c
 )
 target_link_libraries(picotrace PRIVATE picomesh_runtime)
-add_dependencies(picotrace picomesh_plugin_trace_collector_codegen)
+# The per-plugin codegen targets only exist when PICOMESH_ENABLE_CODEGEN is ON
+# (see the guarded block above). picotrace links trace_collector via
+# TARGET_OBJECTS, which does not carry the codegen ordering dependency, so add
+# it explicitly — but ONLY when codegen is enabled, else a normal build
+# references a non-existent target and fails to configure.
+if(PICOMESH_ENABLE_CODEGEN)
+    add_dependencies(picotrace picomesh_plugin_trace_collector_codegen)
+endif()
 target_include_directories(picotrace PRIVATE
     src/picomesh/core-apps/picotrace
     include/picohttpparser
