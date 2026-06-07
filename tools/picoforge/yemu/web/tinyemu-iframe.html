@@ -300,25 +300,33 @@
         })();
 
         var svcRevealed = false;
-        function revealService() {
-            if (svcRevealed) return;
-            svcRevealed = true;
+        /* Minimize the boot overlay and reveal the virtual browser. Called ONLY
+         * once the startup smoke has PROVEN the webapp actually serves — never
+         * on the mere console marker (the process can log "listening" before it
+         * answers, and the gateway behind it may still be coming up). Until then
+         * the boot overlay stays open so the user sees waiting → came up and is
+         * not handed a half-booted app that 'gateways unreachable'. */
+        var virtualBrowserShown = false;
+        function showVirtualBrowser() {
+            if (virtualBrowserShown) return;
+            virtualBrowserShown = true;
             var svc = document.getElementById('svc');
-            /* Inline `flex` overrides the CSS `display: none` rule
-             * that hides #svc until the VM is ready. We need `flex`
-             * (not `block`) because the section is laid out as a
-             * flex column — header (form) on top, iframe filling the
-             * remainder. */
+            /* Inline `flex` overrides the CSS `display:none` (flex column:
+             * form on top, iframe filling the rest). */
             if (svc) svc.style.display = 'flex';
-            /* Auto-minimize boot status now that picomesh is reachable. */
             if (!ov.classList.contains('minimized')) {
                 ov.classList.add('minimized');
                 tog.textContent = '+';
             }
-            /* Run the one-shot startup smoke: it waits for the gateway/backend,
-             * exercises register/login/repos/create against :8081, reports
-             * PASS/FAIL into this overlay, then leaves the app on /-/login so
-             * the user can sign in. (Replaces the old bare auto-GET /-/login.) */
+        }
+        function revealService() {
+            if (svcRevealed) return;
+            svcRevealed = true;
+            /* The webapp PROCESS started (console marker), but it may not be
+             * answering yet. Do NOT minimize / show the app here — kick the
+             * one-shot startup smoke, which waits for the gateway/backend, then
+             * (only once GET /-/login actually returns 200) reveals the virtual
+             * browser and leaves it on /-/login. */
             runStartupSmoke();
         }
         window.__renderStatus = function (text, level, tag) {
@@ -960,7 +968,7 @@
             // it. Without this, every login/click is silently "ignored".
             svcLastPort = PORT;
             var loggedIn = /Sign out|\/-\/logout/;
-            smokeLine('startup smoke: waiting for webapp :' + PORT + ' …');
+            smokeLine('startup smoke: waiting for webapp :' + PORT + ' to come up …');
 
             // 1. Wait for the gateway/backend to be up (GET /-/login -> 200).
             var up = false;
@@ -969,8 +977,12 @@
                 catch (e) { /* not up yet */ }
                 if (!up) await new Promise(function (res) { setTimeout(res, 2000); });
             }
-            smokeLine('webapp serves GET /-/login (200)', up);
+            smokeLine('webapp :' + PORT + ' CAME UP — serves GET /-/login (200)', up);
             if (!up) { smokeLine('STARTUP SMOKE ABORTED — backend never came up', false); return; }
+            // CAME UP — only NOW minimize the boot overlay and reveal the
+            // virtual browser. (The remaining checks still log into the overlay,
+            // and renderResp at the end leaves the app on /-/login.)
+            showVirtualBrowser();
 
             var pass = 1, total = 1;
             function tally(ok) { total++; if (ok) pass++; return ok; }
