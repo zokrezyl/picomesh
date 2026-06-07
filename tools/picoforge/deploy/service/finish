@@ -1,0 +1,18 @@
+#!/bin/sh
+# runit `finish` hook — shared by every service (symlinked into each
+# /tmp/service/<svc>/finish by /opt/picoforge/init). runsv runs it each time a
+# service's `run` process exits, BEFORE restarting it ~1s later. Arguments
+# (runit convention): $1 = run's exit code (or -1 if it did not exit normally),
+# $2 = the signal number that killed it (0 if none).
+#
+# This is what makes runit's supervision visible in the console: a crash
+# (e.g. the mesh segfaulting → "gateway unreachable") now logs an explicit
+# line with the signal, paired with the "[<svc>] starting …" line the run
+# script prints on the restart. svc name = the service dir (cwd, via the
+# symlink, resolves to /opt/picoforge/service/<svc>).
+svc=$(basename "$(pwd)")
+if [ "${2:-0}" -ne 0 ] 2>/dev/null; then
+    echo "[runit] service '${svc}' KILLED by signal $2 (run exit=$1) — restarting"
+else
+    echo "[runit] service '${svc}' exited (code=$1) — restarting"
+fi
