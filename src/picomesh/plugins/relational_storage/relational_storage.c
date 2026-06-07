@@ -62,9 +62,21 @@
  * file, not in this plugin. A node that provides no `schema` gets empty
  * SQLite shards and runs its own DDL through `exec`. */
 
+/* Per-shard prepared-statement cache entry. Statements live the process
+ * lifetime (like the shard), so re-preparing the same SQL — which re-runs the
+ * SQLite parser + query planner on every request, a measured hot path — is
+ * avoided: each distinct query is parsed once, then reset+rebound per call. */
+struct rel_stmt {
+    char *sql;
+    sqlite3_stmt *stmt;
+};
+
 struct rel_shard {
     sqlite3 *db;
     pthread_mutex_t mu;
+    struct rel_stmt *cache;   /* prepared-statement cache, guarded by `mu` */
+    int cache_n;
+    int cache_cap;
 };
 
 /* One NAMED logical database == one shard set. A single relational_storage
@@ -390,8 +402,42 @@ struct rel_work {
     char err[256];
 };
 
-/* Runs on a worker-pool thread: prepare + bind + step on the shard_key's shard,
- * serialized by the shard mutex; build the JSON result. */
+/* Return a prepared, reset+cleared statement for `sql` from the shard's cache,
+ * preparing (and caching) it on first sight. Caller MUST hold sh->mu. Returns
+ * NULL and sets *errmsg on failure. The statement is owned by the cache (never
+ * finalized by the caller — reset it after use); the cache + statements live
+ * the process lifetime, matching the shard. */
+static sqlite3_stmt *rel_shard_stmt(struct rel_shard *sh, const char *sql, const char **errmsg)
+{
+    for (int i = 0; i < sh->cache_n; ++i) {
+        if (strcmp(sh->cache[i].sql, sql) == 0) {
+            sqlite3_reset(sh->cache[i].stmt);
+            sqlite3_clear_bindings(sh->cache[i].stmt);
+            return sh->cache[i].stmt;
+        }
+    }
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(sh->db, sql, -1, &st, NULL) != SQLITE_OK) {
+        if (errmsg) *errmsg = sqlite3_errmsg(sh->db);
+        return NULL;
+    }
+    if (sh->cache_n == sh->cache_cap) {
+        int ncap = sh->cache_cap ? sh->cache_cap * 2 : 16;
+        struct rel_stmt *nc = realloc(sh->cache, (size_t)ncap * sizeof(*nc));
+        if (!nc) { sqlite3_finalize(st); if (errmsg) *errmsg = "stmt cache: out of memory"; return NULL; }
+        sh->cache = nc;
+        sh->cache_cap = ncap;
+    }
+    char *sql_copy = strdup(sql);
+    if (!sql_copy) { sqlite3_finalize(st); if (errmsg) *errmsg = "stmt cache: out of memory"; return NULL; }
+    sh->cache[sh->cache_n].sql = sql_copy;
+    sh->cache[sh->cache_n].stmt = st;
+    sh->cache_n++;
+    return st;
+}
+
+/* Runs on a worker-pool thread: bind + step a (cached) prepared statement on
+ * the shard_key's shard, serialized by the shard mutex; build the JSON result. */
 static void rel_work_fn(void *arg)
 {
     struct rel_work *w = arg;
@@ -402,9 +448,12 @@ static void rel_work_fn(void *arg)
     struct rel_shard *sh = &s->shards[(uint64_t)w->shard_key % (uint64_t)s->n];
 
     pthread_mutex_lock(&sh->mu);
-    sqlite3_stmt *st = NULL;
-    if (sqlite3_prepare_v2(sh->db, w->sql, -1, &st, NULL) != SQLITE_OK) {
-        snprintf(w->err, sizeof(w->err), "prepare: %s", sqlite3_errmsg(sh->db));
+    /* Cached prepared statement (parsed once per distinct SQL, then reset+
+     * rebound) — avoids re-running the SQLite parser/planner on every call. */
+    const char *prep_err = NULL;
+    sqlite3_stmt *st = rel_shard_stmt(sh, w->sql, &prep_err);
+    if (!st) {
+        snprintf(w->err, sizeof(w->err), "prepare: %s", prep_err ? prep_err : "?");
         pthread_mutex_unlock(&sh->mu);
         return;
     }
@@ -416,13 +465,13 @@ static void rel_work_fn(void *arg)
     if (want != w->nbinds) {
         snprintf(w->err, sizeof(w->err),
                  "bind count mismatch: SQL has %d parameter(s), got %d", want, w->nbinds);
-        sqlite3_finalize(st);
+        sqlite3_reset(st);
         pthread_mutex_unlock(&sh->mu);
         return;
     }
     if (rel_bind_args(st, w->binds, w->nbinds) != SQLITE_OK) {
         snprintf(w->err, sizeof(w->err), "bind: %s", sqlite3_errmsg(sh->db));
-        sqlite3_finalize(st);
+        sqlite3_reset(st);
         pthread_mutex_unlock(&sh->mu);
         return;
     }
@@ -441,7 +490,7 @@ static void rel_work_fn(void *arg)
 
     if (w->op == REL_QUERY) {
         jw = yjson_writer_new();
-        if (!jw) { sqlite3_finalize(st); pthread_mutex_unlock(&sh->mu);
+        if (!jw) { sqlite3_reset(st); pthread_mutex_unlock(&sh->mu);
                    snprintf(w->err, sizeof(w->err), "writer alloc"); return; }
         yjson_writer_begin_array(jw);
         int ncol = sqlite3_column_count(st);
@@ -457,21 +506,21 @@ static void rel_work_fn(void *arg)
         yjson_writer_end_array(jw);
         if (rc != SQLITE_DONE) {
             snprintf(w->err, sizeof(w->err), "step: %s", sqlite3_errmsg(sh->db));
-            yjson_writer_free(jw); sqlite3_finalize(st); pthread_mutex_unlock(&sh->mu);
+            yjson_writer_free(jw); sqlite3_reset(st); pthread_mutex_unlock(&sh->mu);
             return;
         }
     } else { /* REL_EXEC */
         int rc = sqlite3_step(st);
         if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
             snprintf(w->err, sizeof(w->err), "exec: %s", sqlite3_errmsg(sh->db));
-            sqlite3_finalize(st); pthread_mutex_unlock(&sh->mu);
+            sqlite3_reset(st); pthread_mutex_unlock(&sh->mu);
             return;
         }
         exec_changes = sqlite3_changes(sh->db);
         exec_rowid   = sqlite3_last_insert_rowid(sh->db);
     }
 
-    sqlite3_finalize(st);
+    sqlite3_reset(st);
     pthread_mutex_unlock(&sh->mu);
     /* --- DB lock released: serialize + allocate the result OUTSIDE it. --- */
 

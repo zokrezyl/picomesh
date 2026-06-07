@@ -74,6 +74,22 @@ cp -vL "$YEMU_BUILD/kernel-riscv64.bin" "$OUT/assets/"
 cp -vL "$LOCAL_OPENSBI"                 "$OUT/assets/opensbi-fw_jump.elf"
 cp -vL "$YEMU_BUILD/alpine-rootfs.img"  "$OUT/assets/"
 
+# Stage the webapp static tree (CSS + the Monaco / EasyMDE rich-text editor
+# vendor) under $OUT/static. The in-browser pages render inside a `srcdoc`
+# iframe whose base origin is THIS dev server (serve.py / GitHub Pages), so
+# Monaco's runtime AMD require()/XHR for /static/vendor/monaco/vs/* resolves
+# HERE — not through the slirp bridge (which only inlines the initial <script>
+# tags, never Monaco's dynamically-loaded modules + workers). Without this the
+# rich-text editor can't load and the editor area is blank.
+STATIC_SRC="$REPO_ROOT/assets/picoforge/static"
+if [ -d "$STATIC_SRC" ]; then
+    echo "==> staging webapp static tree (Monaco/EasyMDE) under $OUT/static/"
+    rm -rf "$OUT/static"
+    cp -a "$STATIC_SRC" "$OUT/static"
+else
+    echo "WARN: $STATIC_SRC missing — the in-browser rich-text editor will not load" >&2
+fi
+
 echo
 echo "Build ready under $OUT/:"
 ls -lh "$OUT/picomesh-yemu.js" "$OUT/picomesh-yemu.wasm" "$OUT/assets/"
