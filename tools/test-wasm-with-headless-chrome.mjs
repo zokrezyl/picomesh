@@ -147,12 +147,16 @@ try {
   //     log in as demo/demo, then poll /demo until both repos are listed.
   //     Each git init is ~tens of seconds under the emulator, so allow a
   //     generous window. This proves create-repo works *inside the VM*.
-  log('BOOT SMOKE: logging in as demo/demo, polling /demo for hello + world (up to 180s)');
+  log('BOOT SMOKE: logging in as demo/demo, polling /demo for hello + world (up to 300s)');
   await driveAndWait(c,
     { type: 'picomesh-submit', method: 'POST', path: '/-/login', body: 'username=demo&password=demo' },
     /\/(login|demo)/, 30);
   let smokeOk = false;
-  for (let i = 0; i < 36; i++) {
+  // The probe seeds demo/hello + demo/world by creating real git repos inside
+  // the guest; git_repository_init under the emulated RISC-V CPU in a browser
+  // tab is slow (node-vm does it in seconds, the browser needs much longer),
+  // so allow a generous window — this is throughput, not correctness.
+  for (let i = 0; i < 60; i++) {
     await driveAndWait(c, { type: 'picomesh-nav', path: '/demo' }, /\/demo\b/, 20);
     const dsd = await srcdoc(c);
     if (dsd.includes('/demo/hello') && dsd.includes('/demo/world')) { smokeOk = true; break; }
@@ -171,11 +175,14 @@ try {
     /\/register/, 30);
   check('POST /register returns a status', /-> [0-9]/.test(regRow), regRow || '(no row)');
 
-  // Account landing should now render "@<user>".
+  // Account landing renders the namespace header (GitLab-style namespace
+  // page). The webapp shows the bare name in an <h1>; accept the @-prefixed
+  // form too for forward-compat.
   await driveAndWait(c, { type: 'picomesh-nav', path: '/' + u }, new RegExp('\\/' + u + ' '), 30);
   let sd = await srcdoc(c);
-  check('account page renders @' + u, sd.includes('@' + u),
-    sd.includes('@' + u) ? '' : 'page did not show the account header');
+  const acctHdr = sd.includes('<h1>' + u + '</h1>') || sd.includes('@' + u);
+  check('account page renders the ' + u + ' namespace header', acctHdr,
+    acctHdr ? '' : 'page did not show the account header');
 
   // --- create repo ------------------------------------------------------
   // git_repository_init is offloaded to the libuv worker pool, so the
@@ -187,11 +194,14 @@ try {
   log('CREATE REPO demo1 (git init offloaded to worker pool — loop must stay responsive)');
   await ev(c, `window.postMessage({type:'picomesh-submit',method:'POST',path:'/-/repos/new',body:'name=demo1'},'*'); return 1;`);
   await sleep(1500);
-  const probeRow = await driveAndWait(c, { type: 'picomesh-nav', path: '/-/login?probe=1' }, /\/login\?probe=1/, 12);
+  // Probe a real served path (a query string on a command path 404s — the
+  // route table matches the exact path). /-/login returns 200 fast iff the
+  // loop is not frozen behind the offloaded git init.
+  const probeRow = await driveAndWait(c, { type: 'picomesh-nav', path: '/-/login' }, /\/-\/login\b/, 12);
   const createRows0 = (await netlog(c)).filter(x => /\/repos\/new/.test(x));
   const createPending = createRows0.length > 0 && !/-> [0-9]/.test(createRows0.slice(-1)[0]);
   check('server stays responsive during slow create (loop not frozen)',
-    /\/login\?probe=1 -> 200/.test(probeRow),
+    /-> 200/.test(probeRow),
     createPending ? 'probe answered while create still in flight' : 'probe answered (create already finished)');
 
   // Now wait for the create itself to land its 303.
@@ -206,14 +216,15 @@ try {
   check('POST /repos/new -> 303 (repo created)', created303, repoRow || '(no row / timed out)');
 
   // --- get repo (the repo SHOW page must render, not "repo not found") --
-  log('GET REPO ' + u + '/demo1');
-  await driveAndWait(c, { type: 'picomesh-nav', path: `/${u}/demo1` }, new RegExp(`${u}\\/demo1`), 60);
+  // GitLab-style routing: the repo browser lives at /<u>/demo1/-/tree (a bare
+  // /<u>/demo1 is a NAMESPACE path). The page header is the repo name.
+  log('GET REPO ' + u + '/demo1/-/tree');
+  await driveAndWait(c, { type: 'picomesh-nav', path: `/${u}/demo1/-/tree` }, new RegExp(`${u}\\/demo1`), 60);
   sd = await srcdoc(c);
-  const showMarker = `<a href="/${u}">${u}</a>/demo1`;
   const notFound = /repo not found/i.test(sd);
-  check('GET /' + u + '/demo1 renders the repo page',
-    sd.includes(showMarker) && !notFound,
-    notFound ? 'page said "repo not found"' : (sd.includes(showMarker) ? '' : 'repo-show marker missing'));
+  const repoShown = sd.includes('<h1>demo1</h1>') && !notFound;
+  check('GET /' + u + '/demo1/-/tree renders the repo page', repoShown,
+    notFound ? 'page said "repo not found"' : (repoShown ? '' : 'repo-show marker missing'));
 
   // --- list account repos ----------------------------------------------
   log('LIST repos on /' + u);

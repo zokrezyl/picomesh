@@ -80,11 +80,23 @@ struct yexec *yexec_create(int n, void *(*shard_init)(void *), void (*shard_free
         uv_mutex_init(&s->mu);
         uv_cond_init(&s->cv);
         if (uv_thread_create(&s->thread, shard_main, s) != 0) {
-            /* Fewer shards than asked; keep the ones that started. A 1-shard
-             * executor is still correct (just less parallel). */
             uv_cond_destroy(&s->cv);
             uv_mutex_destroy(&s->mu);
-            e->n = i > 0 ? i : 1;
+            if (i == 0) {
+                /* NO worker thread could start — e.g. a wasm build with no
+                 * pthreads. Return NULL so callers fall back to running work
+                 * INLINE (yexec_submit's no-executor path). Leaving e->n=1
+                 * here would point submit at shard 0, whose mutex/cond we just
+                 * destroyed, so the next yexec_submit would lock a destroyed
+                 * mutex — hang or crash. This is the single-threaded-runtime
+                 * safety net. */
+                free(e->shards);
+                free(e);
+                return NULL;
+            }
+            /* Some shards started: keep exactly those (correct, just less
+             * parallel); submit routes by key % e->n. */
+            e->n = i;
             break;
         }
     }

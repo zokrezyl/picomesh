@@ -32,6 +32,10 @@ mesh:
       host: 0.0.0.0
       port: 8080
       frontend: yhttp
+      # SINGLE worker — the wasm runtime has no pthreads, so extra in-process
+      # worker threads can't be spawned. (This is also the default; set
+      # explicitly so the webasm deploy never accidentally multi-threads.)
+      workers: 1
       # Every service in ONE process. The list is documentation — all
       # plugin classes are linked and registered regardless; what makes
       # them LOCAL is the absence of a `remotes:` block below.
@@ -63,6 +67,12 @@ mesh:
           path: /tmp/picoforge/sharded
         git_repo:
           repos_dir: /tmp/picoforge/repos
+          # SINGLE-THREADED runtime: the wasm build has no pthreads, so the
+          # git commit executor must not try to spawn worker threads. Default
+          # is 8 (→ 8 uv_thread_create calls); pin to 1 so git ops run on the
+          # one shard (and yexec falls back to inline if even that can't
+          # start). Critical for the webasm/node VM where threads are absent.
+          commit_shards: 1
         # relational_storage hosts FOUR logical databases in this ONE process —
         # the collocated equivalent of the split mesh's rstore_uid / rstore_username
         # / rstore_session / rstore_token services. Consumers select their

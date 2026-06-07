@@ -22,8 +22,9 @@ BUILD_DIR_RISCV   := build-linux-riscv64-release
 BUILD_DIR_YEMU    := build-yemu-release
 BUILD_DIR_DEPLOY  := build-deploy
 BUILD_DIR_CODEGEN := build-codegen
+BUILD_DIR_WEBASM_YEMU := build-webasm-yemu-release
 
-.PHONY: help all build-desktop-release build-desktop-debug build-desktop-asan build-linux-riscv64-release build-deploy build-yemu-release run-qemu build-webasm-yemu-release run-codegen perf-picoforge perf-throughput-notracing perf-throughput-tracing clean
+.PHONY: help all build-desktop-release build-desktop-debug build-desktop-asan build-linux-riscv64-release build-deploy build-yemu-release run-qemu build-webasm-yemu-release run-node run-codegen perf-picoforge perf-throughput-notracing perf-throughput-tracing clean
 
 # AddressSanitizer flags. Frame pointers for readable traces; the same flags
 # go on compile AND link so the asan runtime is pulled in. The vendored static
@@ -161,6 +162,21 @@ run-qemu: build-yemu-release
 ##   - Emscripten SDK installed at $$HOME/.local/emsdk (or EMSDK=…)
 build-webasm-yemu-release:
 	bash tools/picoforge/yemu/web/build.sh
+
+## run-node                 boot the riscv64 Linux VM INSIDE Node.js (no qemu,
+##                          no browser) and proxy the in-guest services to the
+##                          host as plain HTTP:
+##                            guest :8080 gateway -> http://127.0.0.1:18080
+##                            guest :8081 webapp  -> http://127.0.0.1:18081
+##                          Builds the wasm VM first if missing. Default admin:
+##                          root / rootpw (seeded by the probe). Ctrl-C to stop.
+##                          --quiet passthrough: make run-node NODE_ARGS=--quiet
+run-node:
+	@if [ ! -f $(BUILD_DIR_WEBASM_YEMU)/picomesh-yemu.js ]; then \
+		echo "==> wasm VM missing — building it first"; \
+		$(MAKE) build-webasm-yemu-release; \
+	fi
+	node tools/picoforge/yemu/node/picomesh-vm.cjs $(NODE_ARGS)
 
 ## build-linux-riscv64-release  cross-compile picomesh + picoforge-webapp for
 ##                              riscv64 (static, for the yemu demo VM

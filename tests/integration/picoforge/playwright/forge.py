@@ -42,8 +42,12 @@ def ensure_group(page, base_url, slug):
     page.goto(f"{base_url}/-/groups")
     manage_href = f"/-/groups/{slug}"
     if page.locator(f"a[href='{manage_href}']").count() == 0:
-        page.fill("form[action='/-/groups/create'] input[name=slug]", slug)
-        page.click("form[action='/-/groups/create'] button[type=submit]")
+        slug_field = page.locator("form[action='/-/groups/create'] input[name=slug]")
+        slug_field.fill(slug)
+        # Submit via Enter rather than clicking the button: the create form sits
+        # below a namespace list that grows over a session, and the sticky
+        # app-footer can overlap the button, failing an obscured click.
+        slug_field.press("Enter")
         page.wait_for_load_state("networkidle")
         page.goto(f"{base_url}/-/groups")
 

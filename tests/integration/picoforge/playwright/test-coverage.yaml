@@ -1,0 +1,236 @@
+# picoforge webapp — test coverage map
+#
+# One section per webapp PAGE/surface; each lists the business-logic behaviours
+# worth testing and whether a test exists today. This is a living checklist:
+# when you add a behaviour to the webapp, add a row here; when you add a test,
+# flip its status and point `test:` at it.
+#
+# status:
+#   implemented  — a real test asserts this behaviour
+#   partial      — touched, but a meaningful sub-case is still untested
+#   todo         — no test yet
+#
+# test references:
+#   pw = tests/integration/picoforge/playwright/
+#   top-level = tests/integration/picoforge/   (test_ui_flow / test_mesh_correctness / test_rbac)
+
+meta:
+  driver: "Playwright + system Google Chrome, real browser, no JS injection"
+  invariant: "every action round-trips browser -> picoforge-webapp -> gateway /_rpc -> backends"
+  run: "PICOMESH_JWT_SECRET=<any-non-empty> ./run.sh playwright/"
+  totals:
+    implemented: 53          # passing playwright tests (+ the top-level suites)
+    pages_fully_covered: 22
+    open_gaps: 9
+
+pages:
+
+  - page: Login
+    routes: ["GET /-/login", "POST /-/login"]
+    behaviours:
+      - { behaviour: "GET renders sign-in form (username/password fields)", status: implemented, test: "pw/test_auth_lifecycle::test_login_page_renders" }
+      - { behaviour: "POST valid credentials -> session cookie -> /-/repos",  status: implemented, test: "pw/test_auth_lifecycle::test_register_then_logout_then_login_roundtrip" }
+      - { behaviour: "POST wrong password -> error, no session",               status: implemented, test: "pw/test_auth_lifecycle::test_login_wrong_password_shows_error" }
+      - { behaviour: "POST missing username/password -> error",                status: todo }
+
+  - page: Register
+    routes: ["GET /-/register", "POST /-/register"]
+    behaviours:
+      - { behaviour: "GET renders create-account form",                        status: implemented, test: "pw/test_auth_lifecycle::test_register_page_renders" }
+      - { behaviour: "POST new account -> signed in -> /-/repos",              status: implemented, test: "top-level/test_ui_flow::test_full_ui_flow" }
+      - { behaviour: "first registrant becomes site admin",                    status: implemented, test: "pw/test_admin_pages::test_admin_overview" }
+      - { behaviour: "POST duplicate username -> error",                       status: implemented, test: "pw/test_auth_lifecycle::test_duplicate_registration_shows_error" }
+      - { behaviour: "POST missing fields -> error",                           status: todo }
+
+  - page: Logout
+    routes: ["POST /-/logout"]
+    behaviours:
+      - { behaviour: "clears session, redirects to /-/login",                  status: implemented, test: "pw/test_auth_lifecycle::test_logout_clears_session" }
+      - { behaviour: "post-logout a protected page bounces to login",          status: implemented, test: "pw/test_auth_lifecycle::test_logout_clears_session" }
+
+  - page: GitHub OAuth
+    routes: ["GET /-/auth/github", "GET /-/auth/github/callback"]
+    behaviours:
+      - { behaviour: "Sign-in-with-GitHub button shown when configured",       status: todo, note: "harness launches webapp without --github-client-id, so the button is gated off" }
+      - { behaviour: "/-/auth/github redirects to GitHub authorize URL",       status: todo, note: "needs github_client_id in webapp config" }
+      - { behaviour: "callback exchanges code -> session",                     status: todo, note: "needs a GitHub stub / fixture" }
+
+  - page: App shell (topbar + sidebar)
+    routes: ["(rendered on every signed-in page)"]
+    behaviours:
+      - { behaviour: "brand, global search, New + Admin actions present",      status: implemented, test: "pw/test_shell_nav::test_topbar_and_sidebar_present" }
+      - { behaviour: "sidebar nav (Projects/Groups/Issues/Pipelines) present", status: implemented, test: "pw/test_shell_nav::test_topbar_and_sidebar_present" }
+      - { behaviour: "sidebar links navigate",                                 status: implemented, test: "pw/test_shell_nav::test_sidebar_navigates_to_groups" }
+      - { behaviour: "Admin link hidden from non-admins",                      status: implemented, test: "top-level/test_ui_flow::test_non_admin_forbidden_from_admin" }
+      - { behaviour: "anonymous shell shows Sign in, no username",             status: implemented, test: "pw/test_negative_routes::test_anonymous_dashboard_issues_leaks_no_repos" }
+
+  - page: Global search
+    routes: ["GET /-/search?q="]
+    behaviours:
+      - { behaviour: "match lists repo linking to tree",                       status: implemented, test: "pw/test_shell_nav::test_global_search_finds_repo" }
+      - { behaviour: "no match shows empty state",                             status: implemented, test: "pw/test_shell_nav::test_global_search_no_match" }
+      - { behaviour: "topbar box submits to /-/search?q=",                     status: implemented, test: "pw/test_shell_nav::test_search_box_submits_to_search_page" }
+      - { behaviour: "results scoped to caller's accessible repos (RBAC)",     status: implemented, test: "pw/test_rbac_ui::test_search_is_scoped_to_caller" }
+
+  - page: Projects list
+    routes: ["GET /-/repos"]
+    behaviours:
+      - { behaviour: "lists repos the caller can access",                      status: implemented, test: "top-level/test_ui_flow::test_full_ui_flow" }
+      - { behaviour: "isolation: another user's repo not shown",               status: implemented, test: "pw/test_rbac_ui::test_repos_list_is_isolated_per_user" }
+      - { behaviour: "anonymous -> /-/login",                                  status: implemented, test: "pw/test_negative_routes::test_anonymous_repos_redirects_to_login" }
+      - { behaviour: "empty state for a brand-new user",                       status: todo }
+
+  - page: New repository
+    routes: ["GET /-/repos/new", "POST /-/repos/new"]
+    behaviours:
+      - { behaviour: "form shape (namespace default + datalist, name, button)",status: implemented, test: "pw/test_more_coverage::test_repos_new_form_shape" }
+      - { behaviour: "create -> repo tree page",                              status: implemented, test: "top-level/test_ui_flow::test_full_ui_flow" }
+      - { behaviour: "owner from session, not picomesh-uname cookie",          status: implemented, test: "top-level/test_ui_flow::test_repo_owner_from_session_not_cookie" }
+      - { behaviour: "anonymous create refused (redirect login)",              status: implemented, test: "pw/test_negative_routes::test_anonymous_cannot_create_repo" }
+      - { behaviour: "create in a namespace caller can't push to -> denied",   status: implemented, test: "pw/test_more_coverage::test_non_member_cannot_create_repo_in_foreign_namespace" }
+      - { behaviour: "create in a group as developer+ (positive) via UI",      status: partial, note: "RPC-level enforcement in top-level/test_rbac; UI positive path not driven" }
+      - { behaviour: "duplicate repo name -> error",                           status: todo }
+
+  - page: Repo tree / file browser
+    routes: ["GET /<ns>/<repo>/-/tree[?dir=]"]
+    behaviours:
+      - { behaviour: "lists files/dirs; project sub-nav present",              status: implemented, test: "top-level/test_ui_flow::test_full_ui_flow" }
+      - { behaviour: "empty repo shows the empty-state prompt",                status: implemented, test: "pw/test_repo_files::test_empty_repo_shows_empty_state" }
+      - { behaviour: "subdirectory descend + parent '..' link",                status: implemented, test: "pw/test_repo_files::test_create_file_in_subdirectory" }
+      - { behaviour: "New-file button is dir-scoped (?dir=)",                  status: implemented, test: "pw/test_repo_files::test_create_file_in_subdirectory" }
+      - { behaviour: "unreadable/private repo shows read error",               status: todo }
+
+  - page: File editor (Monaco)
+    routes: ["GET /<ns>/<repo>/-/new", "GET /<ns>/<repo>/-/edit?path=", "POST /<ns>/<repo>/-/edit"]
+    behaviours:
+      - { behaviour: "new file: blank, editable path field",                   status: implemented, test: "pw/test_repo_files::test_new_file_editor_is_blank_with_editable_path" }
+      - { behaviour: "edit: readonly path + breadcrumb to tree",               status: implemented, test: "pw/test_repo_files::test_editor_path_is_readonly_when_editing" }
+      - { behaviour: "commit a new file (content round-trips)",                status: implemented, test: "top-level/test_ui_flow::test_full_ui_flow" }
+      - { behaviour: "edit persists via git_repo (round-trips)",               status: implemented, test: "top-level/test_ui_flow::test_full_ui_flow" }
+      - { behaviour: "commit into a subdirectory",                             status: implemented, test: "pw/test_repo_files::test_create_file_in_subdirectory" }
+
+  - page: Repo Issues
+    routes: ["GET /<ns>/<repo>/-/issues", "POST .../-/issues/new", "POST .../-/issues/close"]
+    behaviours:
+      - { behaviour: "open count renders; New + close forms present",          status: implemented, test: "pw/test_project_pages::test_issues_page_has_close_form" }
+      - { behaviour: "filing an issue raises the open count",                  status: implemented, test: "pw/test_project_pages::test_issue_count_increments_then_close_form_round_trips" }
+      - { behaviour: "close action route is live (round-trips back)",          status: implemented, test: "pw/test_project_pages::test_issue_count_increments_then_close_form_round_trips" }
+      - { behaviour: "anonymous cannot create an issue",                       status: implemented, test: "top-level/test_ui_flow::test_anonymous_cannot_create_issue" }
+      - { behaviour: "close-by-id actually decrements the count",              status: todo, note: "webapp doesn't surface the new issue id, so the id to close is unknown to the test" }
+
+  - page: Repo Pipelines
+    routes: ["GET /<ns>/<repo>/-/runs", "POST .../-/runs/new", "POST .../runs/lease"]
+    behaviours:
+      - { behaviour: "queued/running/finished counts render; actions present", status: implemented, test: "pw/test_project_pages::test_runs_page_has_lease_form" }
+      - { behaviour: "enqueue a run (queued count rises)",                     status: implemented, test: "pw/test_dashboard_consistency::test_enqueue_run_increments_runs_dashboard" }
+      - { behaviour: "anonymous cannot enqueue a run",                         status: implemented, test: "top-level/test_ui_flow::test_anonymous_cannot_enqueue_run" }
+      - { behaviour: "lease form submits and leases a job",                    status: todo, note: "KNOWN BUG: the lease form posts to bare '/<ns>/<repo>/runs/lease' (no '/-/'), which parse_action_path won't route; only form presence is asserted" }
+
+  - page: Repo Settings
+    routes: ["GET /<ns>/<repo>/-/settings"]
+    behaviours:
+      - { behaviour: "shows owner/default-branch/visibility; Settings active", status: implemented, test: "pw/test_project_pages::test_repo_settings_page" }
+
+  - page: Namespace landing
+    routes: ["GET /<ns>"]
+    behaviours:
+      - { behaviour: "lists the namespace's repositories",                     status: implemented, test: "pw/test_project_pages::test_namespace_landing_lists_repos" }
+      - { behaviour: "anonymous -> /-/login",                                  status: implemented, test: "pw/test_negative_routes::test_anonymous_namespace_path_redirects_to_login" }
+
+  - page: Groups list
+    routes: ["GET /-/groups", "POST /-/groups/create", "POST /-/groups/go"]
+    behaviours:
+      - { behaviour: "lists memberships with role + manage/browse link",       status: implemented, test: "pw/test_groups::test_groups_page_lists_personal_namespace" }
+      - { behaviour: "create a top-level group (owner role after re-login)",   status: implemented, test: "pw/test_groups::test_create_group_appears_with_owner_role" }
+      - { behaviour: "manage-by-path jumps to the group detail",               status: implemented, test: "pw/test_groups::test_groups_go_jumps_to_namespace" }
+      - { behaviour: "anonymous -> /-/login",                                  status: implemented, test: "pw/test_negative_routes::test_anonymous_groups_redirects_to_login" }
+
+  - page: Group detail
+    routes: ["GET /-/groups/<path>", "POST /-/groups/{add_member,remove_member,create}"]
+    behaviours:
+      - { behaviour: "members table + grant then revoke a member",             status: implemented, test: "pw/test_groups::test_group_detail_grant_and_revoke_member" }
+      - { behaviour: "create a subgroup (nested namespace appears)",           status: implemented, test: "pw/test_rbac_ui::test_create_subgroup_appears_in_admin_namespaces" }
+      - { behaviour: "non-maintainer forbidden (403)",                         status: implemented, test: "pw/test_rbac_ui::test_non_maintainer_forbidden_from_group_detail" }
+      - { behaviour: "grant to an unknown user -> Action failed",              status: implemented, test: "pw/test_rbac_ui::test_grant_unknown_user_surfaces_error" }
+
+  - page: Issues dashboard (cross-repo)
+    routes: ["GET /-/dashboard/issues"]
+    behaviours:
+      - { behaviour: "lists accessible repos with per-repo open counts",       status: implemented, test: "pw/test_dashboards::test_dashboard_issues_lists_repositories" }
+      - { behaviour: "reflects a freshly filed issue",                         status: implemented, test: "pw/test_dashboard_consistency::test_filed_issue_shows_on_issues_dashboard" }
+      - { behaviour: "anonymous sees empty state, no repo leak",               status: implemented, test: "pw/test_negative_routes::test_anonymous_dashboard_issues_leaks_no_repos" }
+
+  - page: Pipelines dashboard (cross-repo)
+    routes: ["GET /-/dashboard/runs"]
+    behaviours:
+      - { behaviour: "queued/running/finished summary with integer counts",    status: implemented, test: "pw/test_dashboards::test_dashboard_runs_shows_state_counts" }
+      - { behaviour: "reflects a freshly enqueued run",                        status: implemented, test: "pw/test_dashboard_consistency::test_enqueue_run_increments_runs_dashboard" }
+
+  - page: Admin overview
+    routes: ["GET /-/admin"]
+    behaviours:
+      - { behaviour: "stat tiles + Manage links to admin pages",              status: implemented, test: "pw/test_admin_pages::test_admin_overview" }
+      - { behaviour: "anonymous -> /-/login; non-admin -> 403",               status: implemented, test: "top-level/test_ui_flow::test_anonymous_redirected_from_admin" }
+
+  - page: Admin users
+    routes: ["GET /-/admin/users"]
+    behaviours:
+      - { behaviour: "roster table renders the real accounts",                 status: implemented, test: "top-level/test_mesh_correctness::test_admin_users_roster" }
+      - { behaviour: "users count tile reflects the roster",                   status: implemented, test: "top-level/test_mesh_correctness::test_admin_users_roster_count_tile" }
+      - { behaviour: "count + list_all agree at the RPC layer",                status: implemented, test: "top-level/test_mesh_correctness::test_accounts_roster_rpc" }
+
+  - page: Admin repositories
+    routes: ["GET /-/admin/repos"]
+    behaviours:
+      - { behaviour: "mesh-wide repository count tile renders an integer",     status: implemented, test: "pw/test_admin_pages::test_admin_repos_count_tile" }
+
+  - page: Admin tokens
+    routes: ["GET /-/admin/tokens", "POST /-/admin/tokens/mint_pat"]
+    behaviours:
+      - { behaviour: "mint form renders; admin mint relays and redirects back",status: implemented, test: "pw/test_admin_pages::test_admin_tokens_mint_relay" }
+      - { behaviour: "non-admin mint refused (via UI POST)",                   status: partial, note: "gateway+webapp both gate it; not driven as a browser POST" }
+      - { behaviour: "minted opaque PAT usable as Authorization: Bearer",      status: todo, note: "external-token flow; better as a gateway-level test" }
+
+  - page: Admin services
+    routes: ["GET /-/admin/services"]
+    behaviours:
+      - { behaviour: "lists live services from gateway /_describe (active)",   status: implemented, test: "pw/test_admin_pages::test_admin_services_roster" }
+
+  - page: Admin namespaces
+    routes: ["GET /-/admin/namespaces", "GET /-/admin/namespaces/<path>", "POST /-/admin/namespaces/{create,add_member,remove_member}"]
+    behaviours:
+      - { behaviour: "lists namespaces + create-group form",                   status: implemented, test: "pw/test_admin_pages::test_admin_namespaces_lists_and_creates" }
+      - { behaviour: "detail page: members table + grant form",                status: implemented, test: "pw/test_admin_pages::test_admin_namespace_detail_members" }
+      - { behaviour: "create group + add member + revoke (admin surface)",     status: implemented, test: "pw/test_more_coverage::test_admin_namespace_member_management" }
+
+  - page: Static assets / root
+    routes: ["GET /static/*", "GET /"]
+    behaviours:
+      - { behaviour: "webapp serves its own static assets (CSS)",             status: implemented, test: "pw/test_more_coverage::test_static_asset_served" }
+      - { behaviour: "missing static asset -> 404",                            status: implemented, test: "pw/test_more_coverage::test_static_missing_asset_404" }
+      - { behaviour: "GET / redirects signed-in user to /-/repos",            status: implemented, test: "pw/test_more_coverage::test_root_redirects_to_repos" }
+
+  - page: Routing negatives
+    routes: ["GET /-/<unknown>", "GET /<ns>/<repo>/-/<unknown-verb>"]
+    behaviours:
+      - { behaviour: "unknown /-/ command -> 404",                            status: implemented, test: "pw/test_negative_routes::test_unknown_command_404" }
+      - { behaviour: "unknown repo verb -> 404",                              status: implemented, test: "pw/test_negative_routes::test_unknown_repo_verb_404" }
+
+  # The gateway is API-only (no HTML). Listed for completeness — the webapp
+  # sources everything from here; these guard the boundary itself.
+  - page: Gateway API boundary
+    routes: ["POST /_rpc", "GET /_describe", "GET|POST /_whoami"]
+    behaviours:
+      - { behaviour: "gateway serves NO HTML pages (404s GET HTML)",          status: implemented, test: "top-level/test_ui_flow::test_gateway_serves_no_html" }
+      - { behaviour: "/_whoami anonymous = uid 0, never leaks a JWT",          status: implemented, test: "top-level/test_ui_flow::test_gateway_whoami_anonymous" }
+      - { behaviour: "/_describe reflects every core service",                 status: implemented, test: "top-level/test_mesh_correctness::test_gateway_describe_lists_core_services" }
+      - { behaviour: "every advertised read method reachable over /_rpc",     status: implemented, test: "top-level/test_mesh_correctness::test_gateway_rpc_surface_reachable" }
+      - { behaviour: "distributed trace reconstructs across services",        status: implemented, test: "top-level/test_mesh_correctness::test_distributed_trace_reconstructs" }
+
+  # Cross-cutting security properties spanning multiple pages.
+  - page: Security (cross-cutting)
+    routes: ["(spans gateway + webapp)"]
+    behaviours:
+      - { behaviour: "picomesh-uname cookie is cosmetic, never authoritative", status: implemented, test: "top-level/test_ui_flow::test_repo_owner_from_session_not_cookie" }
+      - { behaviour: "namespace RBAC enforced (reporter ro, developer rw, ...)",status: implemented, test: "top-level/test_rbac (RPC layer)" }
+      - { behaviour: "JWT never crosses the mesh boundary (exhaustive scan)",  status: partial, note: "anon /_whoami checks no JWT; not an exhaustive response/log scan" }
