@@ -77,6 +77,11 @@ expect "describe lists params x,y" '"name": "x"' "$out"
 out=$("$CLIENT" describe "$HOST" "$PORT" nope.calc.add 2>&1)
 expect "describe: inactive service rejected (gated)" '"code": "service_not_active"' "$out"
 
+# describe is positional-only too: non-empty kwargs is rejected before dispatch,
+# not silently ignored (mirrors the invoke behavior).
+out=$("$CLIENT" describe "$HOST" "$PORT" calculator.calc.add --kwargs '{"z":1}' 2>&1)
+expect "describe: non-empty kwargs rejected" '"code": "kwargs_unsupported"' "$out"
+
 echo
 echo "========================================"
 echo "PASS: $PASS    FAIL: $FAIL"

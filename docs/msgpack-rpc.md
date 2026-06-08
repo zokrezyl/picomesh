@@ -48,8 +48,9 @@ A msgpack **map**:
 - `headers` is the msgpack analogue of the internal header bag. `uid`/`sid` are
   ints; `trace_id` is a string. An anonymous caller sends `{}` (or omits it).
 - `kwargs` is **positional-only in v1**: a non-empty `kwargs` is rejected with
-  `kwargs_unsupported` (never silently ignored). The key is reserved for a
-  future keyword-binding version.
+  `kwargs_unsupported` (never silently ignored). This holds for **every** `op`,
+  including `describe` — the check runs before the op is dispatched. The key is
+  reserved for a future keyword-binding version.
 
 ## Response envelope
 

@@ -31,8 +31,9 @@
  * (a relational SELECT on the session store) on EVERY request — the dominant
  * per-request cost on the read hot path. The cache returns a recently-resolved
  * JWT for up to `cache_ttl` seconds with no round-trip and no re-verify (the
- * JWT was verified when cached; the backend re-checks its signature + exp
- * regardless). It is per-worker (the authn chain is built once per worker) and
+ * JWT was verified when cached). The fast path still enforces the JWT's own
+ * `exp`, so a token cached just before expiry is not served past it. It is
+ * per-worker (the authn chain is built once per worker) and
  * touched only by that worker's cooperative coroutines — map ops never yield,
  * and we never hold an entry pointer across the lookup RPC — so no locking.
  * Bounded staleness: a logout/refresh is not observed until the entry ages out,
@@ -49,6 +50,7 @@ struct sid_cache_entry {
     char    sid[64];     /* key (an sid is 32 hex chars; 64 is ample) */
     char   *jwt;         /* malloc'd resolved JWT */
     int64_t inserted;    /* unix seconds (picomesh_security_now) */
+    int64_t jwt_exp;     /* the cached JWT's own `exp` (unix seconds) */
     UT_hash_handle hh;
 };
 
@@ -116,12 +118,16 @@ static struct picomesh_authn_outcome session_cookie_authenticate(void *state_ptr
         struct sid_cache_entry *e = NULL;
         HASH_FIND_STR(state->cache, sid, e);
         if (e) {
-            if ((now - e->inserted) < state->cache_ttl) {
+            /* Honor BOTH the insertion TTL and the JWT's own expiry: a token
+             * cached just before `exp` must not stay valid for the rest of the
+             * TTL window. An expired cached JWT is dropped; the slow path then
+             * re-resolves and fails closed if the session's JWT is truly expired. */
+            if ((now - e->inserted) < state->cache_ttl && e->jwt_exp > now) {
                 char *hit = strdup(e->jwt);
                 if (hit) { outcome.jwt = hit; outcome.source = "session_cookie"; return outcome; }
                 /* strdup OOM → fall through to the slow path */
             } else {
-                /* stale → drop it; the slow path re-resolves and re-inserts */
+                /* stale TTL or expired JWT → drop it; the slow path re-resolves */
                 HASH_DEL(state->cache, e); free(e->jwt); free(e);
             }
         }
@@ -138,6 +144,7 @@ static struct picomesh_authn_outcome session_cookie_authenticate(void *state_ptr
 
     struct picomesh_string_result claims = picomesh_jwt_verifier_verify(state->verifier, jwt);
     if (PICOMESH_IS_ERR(claims)) { picomesh_error_destroy(claims.error); free(jwt); return fail("session JWT failed verification"); }
+    int64_t jwt_exp = authn_claims_exp(claims.value);
     free(claims.value);
 
     /* Populate the cache for subsequent requests on this worker. Re-find rather
@@ -148,13 +155,13 @@ static struct picomesh_authn_outcome session_cookie_authenticate(void *state_ptr
         HASH_FIND_STR(state->cache, sid, e);
         if (e) {
             char *dup = strdup(jwt);
-            if (dup) { free(e->jwt); e->jwt = dup; e->inserted = now; }
+            if (dup) { free(e->jwt); e->jwt = dup; e->inserted = now; e->jwt_exp = jwt_exp; }
         } else {
             e = calloc(1, sizeof(*e));
             char *dup = e ? strdup(jwt) : NULL;
             if (e && dup) {
                 snprintf(e->sid, sizeof(e->sid), "%s", sid);
-                e->jwt = dup; e->inserted = now;
+                e->jwt = dup; e->inserted = now; e->jwt_exp = jwt_exp;
                 HASH_ADD_STR(state->cache, sid, e);
                 /* FIFO memory backstop: over the cap, evict the oldest (head). */
                 if (state->cache_max && HASH_COUNT(state->cache) > state->cache_max) {

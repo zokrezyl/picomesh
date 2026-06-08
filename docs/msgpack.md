@@ -59,6 +59,22 @@ generators need only the YAML — no clang, no C sources.
   `calculator.calc.add(2,3)` → 200 `{result:5}`; `nope.calc.add` → 404
   `service_not_active`; malformed → 400; unknown method → 404.
 
+#### Resolver scope: service-path vs object-handle transports
+
+The active-service resolver gate applies **only** to inbound transports that
+accept a `service.class.method` **path** — today the gateway `/_rpc` and the
+`msgpack` frontend. Those are the boundaries where an ungated path could reach
+a globally-registered class, so the gate lives there.
+
+`yttp` and `cli` are **object-handle dispatchers**: a client first creates (or
+is handed) an object handle and then calls ops against that handle. They do not
+resolve a dotted service path, so the same service-path gate does not map onto
+them — this is a deliberate scope boundary, not an omission. Earlier wording
+(gh#17) that listed `yttp`/`cli` alongside the service-path transports referred
+to the shared *dispatch* plumbing, not the service-path gate. If `yttp`/`cli`
+ever grow a service-path entry point, they must adopt `picomesh_resolve_service_call`
+at that point.
+
 ### Part 1a — vendored codec
 
 - `vendor/cmp/{cmp.c,cmp.h,LICENSE}` — cmp (MIT, single-file, zero-alloc).

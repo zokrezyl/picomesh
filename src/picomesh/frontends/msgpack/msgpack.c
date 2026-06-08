@@ -140,15 +140,12 @@ static size_t pack_success(uint8_t *resp, size_t resp_cap, const uint8_t *value,
 
 /* op == "invoke". Resolve+gate the path, run the minvoke, build the response
  * envelope into `resp`. `args_present`/`args_offset` locate the args array in
- * the original frame; `kwargs_nonempty` triggers the v1 rejection. */
+ * the original frame. The caller has already rejected any non-empty kwargs. */
 static size_t handle_invoke(struct picomesh_engine *engine, const char *path, const uint8_t *frame,
                             size_t frame_len, int args_present, size_t args_offset,
-                            int kwargs_nonempty, struct yheaders *hdrs, uint8_t *value_buf,
-                            uint8_t *resp, size_t resp_cap)
+                            struct yheaders *hdrs, uint8_t *value_buf, uint8_t *resp,
+                            size_t resp_cap)
 {
-    if (kwargs_nonempty)
-        return pack_error(resp, resp_cap, "kwargs_unsupported",
-                          "msgpack v1 binds positional args only; kwargs must be empty");
     if (!path || !*path)
         return pack_error(resp, resp_cap, "bad_path", "missing 'path'");
 
@@ -325,12 +322,20 @@ static size_t dispatch_frame(struct picomesh_engine *engine, const uint8_t *fram
         }
     }
 
+    /* v1 is positional-only: a non-empty `kwargs` is rejected for every op
+     * (invoke AND describe) before dispatch, never silently ignored. */
+    if (kwargs_nonempty) {
+        yheaders_free(hdrs);
+        return pack_error(resp, resp_cap, "kwargs_unsupported",
+                          "msgpack v1 binds positional args only; kwargs must be empty");
+    }
+
     size_t n;
     if (strcmp(op, "describe") == 0)
         n = handle_describe(engine, path, resp, resp_cap);
     else
-        n = handle_invoke(engine, path, frame, frame_len, args_present, args_offset, kwargs_nonempty,
-                          hdrs, value_buf, resp, resp_cap);
+        n = handle_invoke(engine, path, frame, frame_len, args_present, args_offset, hdrs, value_buf,
+                          resp, resp_cap);
     yheaders_free(hdrs);
     return n;
 }
@@ -345,6 +350,9 @@ static void serve_one(struct yloop *l, struct yloop_stream *s, void *ud)
     uint8_t *value_buf = malloc(MSGPACK_FRAME_MAX);
     uint8_t *resp = malloc(MSGPACK_FRAME_MAX);
     if (!frame || !value_buf || !resp) {
+        /* Root coroutine: nowhere to propagate, but local resource exhaustion
+         * must be visible rather than a silently dropped connection. */
+        yerror("msgpack: per-connection scratch alloc failed (%u bytes ×3)", MSGPACK_FRAME_MAX);
         free(frame);
         free(value_buf);
         free(resp);
@@ -370,8 +378,12 @@ static void serve_one(struct yloop *l, struct yloop_stream *s, void *ud)
             break;
 
         size_t resp_len = dispatch_frame(engine, frame, frame_len, value_buf, resp, MSGPACK_FRAME_MAX);
-        if (resp_len == 0)
-            break; /* response overflow — drop the connection */
+        if (resp_len == 0) {
+            /* Response could not be framed (overflow) — log before dropping the
+             * connection so the failure isn't silent at the root boundary. */
+            yerror("msgpack: response framing overflow, dropping connection");
+            break;
+        }
         uint8_t outlen[4];
         write_be32(outlen, (uint32_t)resp_len);
         yloop_write(s, outlen, 4);

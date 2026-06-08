@@ -276,6 +276,14 @@ static void on_handle_close(uv_handle_t *h)
     free(s);
 }
 
+/* uv_close completion for a listener handle: the embedded uv_tcp_t is now off
+ * the loop, so the surrounding listener struct can be freed. */
+static void on_listener_close(uv_handle_t *h)
+{
+    struct yloop_listener *L = h->data;
+    free(L);
+}
+
 void yloop_close(struct yloop_stream *s)
 {
     if (!s || s->closing) return;
@@ -786,21 +794,10 @@ struct picomesh_void_result yloop_listen_tcp(struct yloop *l, const char *host, 
     if (!l || !host || !serve) {
         return PICOMESH_ERR(picomesh_void, "yloop_listen_tcp: bad args");
     }
-    struct yloop_listener *L = calloc(1, sizeof(*L));
-    if (!L) return PICOMESH_ERR(picomesh_void, "yloop_listen_tcp: calloc failed");
-    L->owner = l;
-    L->serve = serve;
-    L->ud = ud;
-
-    int rc = uv_tcp_init(&l->loop, &L->tcp);
-    if (rc < 0) {
-        free(L);
-        return PICOMESH_ERR(picomesh_void, "yloop_listen_tcp: uv_tcp_init failed");
-    }
-    L->tcp.data = L;
-
+    /* Validate the address and bind the socket BEFORE allocating/initializing
+     * any libuv handle, so these early failures need no handle teardown. */
     struct sockaddr_in addr;
-    rc = uv_ip4_addr(host, port, &addr);
+    int rc = uv_ip4_addr(host, port, &addr);
     if (rc < 0) {
         return PICOMESH_ERR(picomesh_void, "yloop_listen_tcp: uv_ip4_addr failed");
     }
@@ -821,13 +818,35 @@ struct picomesh_void_result yloop_listen_tcp(struct yloop *l, const char *host, 
         close(fd);
         return PICOMESH_ERR(picomesh_void, "yloop_listen_tcp: bind failed");
     }
-    rc = uv_tcp_open(&L->tcp, fd);
+
+    struct yloop_listener *L = calloc(1, sizeof(*L));
+    if (!L) {
+        close(fd);
+        return PICOMESH_ERR(picomesh_void, "yloop_listen_tcp: calloc failed");
+    }
+    L->owner = l;
+    L->serve = serve;
+    L->ud = ud;
+
+    rc = uv_tcp_init(&l->loop, &L->tcp);
     if (rc < 0) {
         close(fd);
+        free(L);
+        return PICOMESH_ERR(picomesh_void, "yloop_listen_tcp: uv_tcp_init failed");
+    }
+    L->tcp.data = L;
+
+    /* From here the handle is initialized: every failure must close it via
+     * uv_close (which frees L in on_listener_close), not free L directly. */
+    rc = uv_tcp_open(&L->tcp, fd);
+    if (rc < 0) {
+        close(fd); /* fd not adopted by the handle on failure */
+        uv_close((uv_handle_t *)&L->tcp, on_listener_close);
         return PICOMESH_ERR(picomesh_void, "yloop_listen_tcp: uv_tcp_open failed");
     }
     rc = uv_listen((uv_stream_t *)&L->tcp, 128, on_connection);
     if (rc < 0) {
+        uv_close((uv_handle_t *)&L->tcp, on_listener_close);
         return PICOMESH_ERR(picomesh_void, "yloop_listen_tcp: uv_listen failed");
     }
     yinfo("yloop: listening on %s:%d", host, port);

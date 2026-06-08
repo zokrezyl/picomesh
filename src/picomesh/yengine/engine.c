@@ -858,7 +858,13 @@ static void worker_start_flush_timer(struct picomesh_worker *w)
 {
     struct picomesh_coro_ptr_result cr =
         picomesh_coro_spawn(telemetry_flush_loop, w->loop, 0, "ytel-flush");
-    if (PICOMESH_IS_ERR(cr)) { picomesh_error_destroy(cr.error); return; }
+    if (PICOMESH_IS_ERR(cr)) {
+        /* Telemetry delivery silently stopping on a worker is an observability
+         * hole — log the root failure before dropping it. */
+        picomesh_error_print(stderr, "worker_start_flush_timer: spawn ytel-flush", cr.error);
+        picomesh_error_destroy(cr.error);
+        return;
+    }
     picomesh_coro_resume(cr.value); /* runs to its first yloop_sleep_ms yield */
 }
 
@@ -876,7 +882,12 @@ static void *worker_thread_main(void *arg)
     }
     worker_start_flush_timer(w);
     struct picomesh_void_result rr = yloop_run(w->loop);
-    if (PICOMESH_IS_ERR(rr)) picomesh_error_destroy(rr.error);
+    if (PICOMESH_IS_ERR(rr)) {
+        /* Worker libuv root: a dead worker loop must be visible, not silently
+         * dropped while the rest of the process keeps serving. */
+        picomesh_error_print(stderr, "worker_thread_main: yloop_run", rr.error);
+        picomesh_error_destroy(rr.error);
+    }
     return NULL;
 }
 

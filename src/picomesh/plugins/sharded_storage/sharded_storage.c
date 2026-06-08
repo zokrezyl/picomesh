@@ -347,13 +347,28 @@ static void shard_work_fn(void *arg)
         size_t total = 0;
         for (int i = 0; i < s->n; ++i) {
             MDBX_txn *txn = NULL;
-            if (mdbx_txn_begin(s->shards[i].env, NULL, MDBX_TXN_RDONLY, &txn) != MDBX_SUCCESS)
-                continue;
+            if (mdbx_txn_begin(s->shards[i].env, NULL, MDBX_TXN_RDONLY, &txn) != MDBX_SUCCESS) {
+                /* A shard we cannot read makes the aggregate count unreliable —
+                 * fail rather than report a silently-low total. */
+                w->rc = SHARD_INTERNAL;
+                return;
+            }
             MDBX_dbi dbi = 0;
-            if (mdbx_dbi_open(txn, w->ns, 0, &dbi) == MDBX_SUCCESS) {
+            int dr = mdbx_dbi_open(txn, w->ns, 0, &dbi);
+            if (dr == MDBX_SUCCESS) {
                 MDBX_stat st;
-                if (mdbx_dbi_stat(txn, dbi, &st, sizeof(st)) == MDBX_SUCCESS)
-                    total += (size_t)st.ms_entries;
+                if (mdbx_dbi_stat(txn, dbi, &st, sizeof(st)) != MDBX_SUCCESS) {
+                    mdbx_txn_abort(txn);
+                    w->rc = SHARD_INTERNAL;
+                    return;
+                }
+                total += (size_t)st.ms_entries;
+            } else if (dr != MDBX_NOTFOUND) {
+                /* NOTFOUND == this shard simply has no rows for the namespace
+                 * (counts as 0); any other open error is a real failure. */
+                mdbx_txn_abort(txn);
+                w->rc = SHARD_INTERNAL;
+                return;
             }
             mdbx_txn_abort(txn);
         }
@@ -381,12 +396,31 @@ static void shard_work_fn(void *arg)
         yjson_writer_begin_array(jw);
         for (int i = 0; i < s->n && (limit < 0 || emitted < limit); ++i) {
             MDBX_txn *txn = NULL;
-            if (mdbx_txn_begin(s->shards[i].env, NULL, MDBX_TXN_RDONLY, &txn) != MDBX_SUCCESS)
-                continue;
+            if (mdbx_txn_begin(s->shards[i].env, NULL, MDBX_TXN_RDONLY, &txn) != MDBX_SUCCESS) {
+                /* A shard we cannot read would silently truncate the list —
+                 * fail rather than return a partial result as authoritative. */
+                yjson_writer_free(jw);
+                w->rc = SHARD_INTERNAL;
+                return;
+            }
             MDBX_dbi dbi = 0;
             MDBX_cursor *cur = NULL;
-            if (mdbx_dbi_open(txn, w->ns, 0, &dbi) == MDBX_SUCCESS &&
-                mdbx_cursor_open(txn, dbi, &cur) == MDBX_SUCCESS) {
+            int dr = mdbx_dbi_open(txn, w->ns, 0, &dbi);
+            if (dr != MDBX_SUCCESS && dr != MDBX_NOTFOUND) {
+                /* NOTFOUND == no rows for this namespace on this shard (skip);
+                 * any other open error is a real backend failure. */
+                mdbx_txn_abort(txn);
+                yjson_writer_free(jw);
+                w->rc = SHARD_INTERNAL;
+                return;
+            }
+            if (dr == MDBX_SUCCESS && mdbx_cursor_open(txn, dbi, &cur) != MDBX_SUCCESS) {
+                mdbx_txn_abort(txn);
+                yjson_writer_free(jw);
+                w->rc = SHARD_INTERNAL;
+                return;
+            }
+            if (cur) {
                 MDBX_val k, v;
                 int cr = mdbx_cursor_get(cur, &k, &v, MDBX_FIRST);
                 while (cr == MDBX_SUCCESS && (limit < 0 || emitted < limit)) {
@@ -475,9 +509,20 @@ static void shard_work_fn(void *arg)
     }
     case OP_EXISTS: {
         MDBX_val v = {0};
-        w->out_i = (mdbx_get(txn, dbi, &k, &v) == MDBX_SUCCESS) ? 1 : 0;
+        int r = mdbx_get(txn, dbi, &k, &v);
+        if (r == MDBX_SUCCESS) {
+            w->out_i = 1;
+            w->rc = SHARD_OK;
+        } else if (r == MDBX_NOTFOUND) {
+            w->out_i = 0;
+            w->rc = SHARD_OK;
+        } else {
+            /* Corruption / I/O / txn errors must NOT masquerade as "key absent":
+             * a false negative here would silently break dedupe, idempotency,
+             * and authorization decisions. */
+            w->rc = SHARD_INTERNAL;
+        }
         mdbx_txn_abort(txn);
-        w->rc = SHARD_OK;
         return;
     }
     case OP_DEL: {

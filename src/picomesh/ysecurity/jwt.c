@@ -187,9 +187,13 @@ struct picomesh_string_result picomesh_jwt_verify(const char *jwt, const char *s
     /* Check expiry. */
     struct yjson_doc *payload_doc = yjson_parse(payload_json, payload_len);
     if (!payload_doc) { free(payload_json); return PICOMESH_ERR(picomesh_string, "jwt_verify: payload not JSON"); }
+    /* `exp` is mandatory: a token with a valid signature but no expiry must NOT
+     * be trusted indefinitely, regardless of whether the issuer always emits it.
+     * Treat a missing/zero/negative exp as a verification failure. */
     int64_t exp = yjson_as_int(yjson_object_get(yjson_doc_root(payload_doc), "exp"), 0);
     yjson_doc_free(payload_doc);
-    if (exp > 0 && now > exp) { free(payload_json); return PICOMESH_ERR(picomesh_string, "jwt_verify: expired"); }
+    if (exp <= 0) { free(payload_json); return PICOMESH_ERR(picomesh_string, "jwt_verify: missing exp claim"); }
+    if (now > exp) { free(payload_json); return PICOMESH_ERR(picomesh_string, "jwt_verify: expired"); }
 
     return PICOMESH_OK(picomesh_string, payload_json);
 }

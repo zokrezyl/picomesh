@@ -88,7 +88,9 @@ def main() -> int:
     if a.op == "oversize":
         resp = oversize(a.host, a.port)
     elif a.op == "describe":
-        resp = call(a.host, a.port, "describe", a.path)
+        resp = call(a.host, a.port, "describe", a.path,
+                    kwargs=json.loads(a.kwargs),
+                    headers=json.loads(a.headers))
     else:
         resp = call(a.host, a.port, "invoke", a.path,
                     args=json.loads(a.args),

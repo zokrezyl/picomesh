@@ -71,7 +71,16 @@ static enum storage_backend resolve_configured_backend(void)
     if (!e) return STORAGE_BACKEND_SQLITE;
     struct yconfig_node_ptr_result r =
         yconfig_get(picomesh_engine_config(e), "storage.backend");
-    if (PICOMESH_IS_OK(r) && r.value) {
+    if (PICOMESH_IS_ERR(r)) {
+        /* An absent key returns OK+NULL; an error here is a real config-read
+         * failure. Defaulting silently could pick the wrong backend and write
+         * data to the wrong store, so make it loud (and don't leak the chain). */
+        yerror("storage: reading 'storage.backend' failed: %s",
+               r.error.msg ? r.error.msg : "?");
+        picomesh_error_destroy(r.error);
+        return STORAGE_BACKEND_SQLITE;
+    }
+    if (r.value) {
         const char *s = yconfig_node_as_string(r.value, NULL);
         if (s && strcmp(s, "mdbx") == 0) return STORAGE_BACKEND_MDBX;
     }

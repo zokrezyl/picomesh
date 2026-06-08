@@ -71,7 +71,9 @@ static void yrpc_handler_entry(void *arg)
         memcpy(frame, &r->req_id, 4);
         memcpy(frame + 4, &rl, 4);
         if (resp_len) memcpy(frame + 8, resp, resp_len);
-        yloop_write(conn->stream, frame, frame_len);
+        size_t wrote = yloop_write(conn->stream, frame, frame_len);
+        if (wrote != frame_len)
+            yerror("yrpc: short/failed response write (%zu/%zu bytes)", wrote, frame_len);
         free(frame);
     }
     free(resp);
@@ -128,6 +130,9 @@ static void serve_one(struct yloop *l, struct yloop_stream *s, void *ud)
         struct picomesh_coro_ptr_result hr =
             picomesh_coro_spawn(yrpc_handler_entry, r, 0, "yrpc-handler");
         if (PICOMESH_IS_ERR(hr)) {
+            /* Root admission failure: a handler that can't be scheduled (e.g.
+             * resource exhaustion) must be visible, not a silent disconnect. */
+            yerror("yrpc: failed to spawn handler coroutine — dropping connection");
             picomesh_error_destroy(hr.error);
             free(body);
             free(r);

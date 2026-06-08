@@ -158,7 +158,14 @@ picomesh_engine_invoke_json(struct picomesh_engine *engine, const char *path,
     const struct yjson_value *args = NULL;
     if (args_json && *args_json) {
         args_doc = yjson_parse(args_json, strlen(args_json));
-        if (args_doc) args = yjson_doc_root(args_doc);
+        if (!args_doc) {
+            /* Non-empty but unparseable args must NOT silently become a
+             * no-argument call — for a mutating method that would invoke the
+             * wrong operation. Reject it as a client error. */
+            picomesh_service_call_release(&call);
+            return PICOMESH_ERR(picomesh_string, "engine_invoke: malformed args JSON");
+        }
+        args = yjson_doc_root(args_doc);
     }
 
     struct yjson_writer *writer = yjson_writer_new();

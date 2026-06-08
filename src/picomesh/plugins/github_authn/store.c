@@ -227,25 +227,57 @@ static void normalize_github_login(const char *login, char *out, size_t cap)
     out[o] = 0;
 }
 
-static void store_mapping(struct yheaders *hdrs, uint32_t uid, int64_t github_id, const char *username, const char *access_token)
+/* Persist the four KV records that bind a GitHub identity to `uid`. Returns an
+ * error on the first failed write so the caller can fail the OAuth exchange
+ * rather than complete it on a partially-written mapping. (These four writes
+ * are not transactional; full rollback would need a storage-level transaction.) */
+static struct picomesh_void_result store_mapping(struct yheaders *hdrs, uint32_t uid,
+                                                 int64_t github_id, const char *username,
+                                                 const char *access_token)
 {
     struct picomesh_engine *e = picomesh_active_engine();
-    if (!e || !access_token || !*access_token || github_id <= 0) return;
+    if (!e || !access_token || !*access_token || github_id <= 0)
+        return PICOMESH_ERR(picomesh_void, "store_mapping: bad args or no active engine");
     struct ctx c = picomesh_engine_service_ctx(e, "sharded_storage");
     struct object_ptr_result o = sharded_storage_db_create(&c);
-    if (PICOMESH_IS_ERR(o)) { picomesh_error_destroy(o.error); return; }
+    if (PICOMESH_IS_ERR(o))
+        return PICOMESH_ERR(picomesh_void, "store_mapping: storage handle create failed", o);
+
+    struct picomesh_void_result result = PICOMESH_OK_VOID();
     char key[96], val[512];
+    struct picomesh_int_result set_res;
+
     snprintf(key, sizeof(key), "github:%lld:token", (long long)github_id);
-    sharded_storage_db_set(&c, o.value, hdrs, "github_authn", key, access_token);
+    set_res = sharded_storage_db_set(&c, o.value, hdrs, "github_authn", key, access_token);
+    if (PICOMESH_IS_ERR(set_res)) {
+        result = PICOMESH_ERR(picomesh_void, "store_mapping: github token write failed", set_res);
+        goto done;
+    }
     snprintf(key, sizeof(key), "github:%lld:uid", (long long)github_id);
     snprintf(val, sizeof(val), "%u", uid);
-    sharded_storage_db_set(&c, o.value, hdrs, "github_authn", key, val);
+    set_res = sharded_storage_db_set(&c, o.value, hdrs, "github_authn", key, val);
+    if (PICOMESH_IS_ERR(set_res)) {
+        result = PICOMESH_ERR(picomesh_void, "store_mapping: github_id->uid write failed", set_res);
+        goto done;
+    }
     snprintf(key, sizeof(key), "uid:%u:github_id", uid);
     snprintf(val, sizeof(val), "%lld", (long long)github_id);
-    sharded_storage_db_set(&c, o.value, hdrs, "github_authn", key, val);
+    set_res = sharded_storage_db_set(&c, o.value, hdrs, "github_authn", key, val);
+    if (PICOMESH_IS_ERR(set_res)) {
+        result = PICOMESH_ERR(picomesh_void, "store_mapping: uid->github_id write failed", set_res);
+        goto done;
+    }
     snprintf(key, sizeof(key), "uid:%u:username", uid);
-    sharded_storage_db_set(&c, o.value, hdrs, "github_authn", key, username ? username : "");
+    set_res = sharded_storage_db_set(&c, o.value, hdrs, "github_authn", key,
+                                     username ? username : "");
+    if (PICOMESH_IS_ERR(set_res)) {
+        result = PICOMESH_ERR(picomesh_void, "store_mapping: uid->username write failed", set_res);
+        goto done;
+    }
+
+done:
     object_release_in_ctx(&c, o.value);
+    return result;
 }
 
 /* The GitHub id currently bound to `uid` in storage: >0 if this uid already
@@ -340,8 +372,12 @@ struct picomesh_json_result github_authn_github_authn_exchange_code_impl(struct 
             return PICOMESH_ERR(picomesh_json, "github_authn_exchange_code: an account with this name already exists");
         }
     }
-    store_mapping(hdrs, uid, github_id, username, token);
+    struct picomesh_void_result map_res = store_mapping(hdrs, uid, github_id, username, token);
     free(token);
+    if (PICOMESH_IS_ERR(map_res))
+        return PICOMESH_ERR(picomesh_json,
+                            "github_authn_exchange_code: persisting GitHub identity mapping failed",
+                            map_res);
     struct yjson_writer *w = yjson_writer_new();
     if (!w) return PICOMESH_ERR(picomesh_json, "github_authn_exchange_code: writer alloc failed");
     yjson_writer_begin_object(w);

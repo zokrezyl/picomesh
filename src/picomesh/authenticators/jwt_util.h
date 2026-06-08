@@ -34,4 +34,17 @@ static inline char *authn_extract_jwt(const char *envelope)
     return out;
 }
 
+/* Parse the `exp` claim (unix seconds) from a verified JWT claims-payload JSON.
+ * Returns 0 when absent or unparseable. Used so a per-request cache can honor
+ * the JWT's own expiry rather than only its insertion TTL. */
+static inline int64_t authn_claims_exp(const char *claims_json)
+{
+    if (!claims_json) return 0;
+    struct yjson_doc *doc = yjson_parse(claims_json, strlen(claims_json));
+    if (!doc) return 0;
+    int64_t exp = yjson_as_int(yjson_object_get(yjson_doc_root(doc), "exp"), 0);
+    yjson_doc_free(doc);
+    return exp;
+}
+
 #endif /* PICOMESH_AUTHENTICATORS_JWT_UTIL_H */
