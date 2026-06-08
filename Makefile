@@ -23,8 +23,9 @@ BUILD_DIR_YEMU    := build-yemu-release
 BUILD_DIR_DEPLOY  := build-deploy
 BUILD_DIR_CODEGEN := build-codegen
 BUILD_DIR_WEBASM_YEMU := build-webasm-yemu-release
+BUILD_DIR_QA      := build-qa-tools
 
-.PHONY: help all build-desktop-release build-desktop-debug build-desktop-asan build-linux-riscv64-release build-deploy build-yemu-release run-qemu build-webasm-yemu-release run-node run-webserver run-codegen perf-picoforge perf-throughput-notracing perf-throughput-tracing clean
+.PHONY: help all build-desktop-release build-desktop-debug build-desktop-asan build-linux-riscv64-release build-deploy build-yemu-release run-qemu build-webasm-yemu-release run-node run-webserver run-codegen result-checker perf-picoforge perf-throughput-notracing perf-throughput-tracing clean
 
 # AddressSanitizer flags. Frame pointers for readable traces; the same flags
 # go on compile AND link so the asan runtime is pulled in. The vendored static
@@ -52,6 +53,22 @@ run-codegen:
 	$(CMAKE) -S . -B $(BUILD_DIR_CODEGEN) -G Ninja -DCMAKE_BUILD_TYPE=Release \
 		-DPICOMESH_ENABLE_CODEGEN=ON
 	$(CMAKE) --build $(BUILD_DIR_CODEGEN) --target picomesh_codegen --parallel $(JOBS)
+
+## result-checker         build the clang-tooling result-checker (HOST compiler)
+#
+# Built with the HOST toolchain (/usr/bin/cc, /usr/bin/c++), deliberately NOT
+# the nix dev-profile gcc that the rest of the build uses. The checker links
+# the system libLLVM (/usr/lib/llvm-20); a nix-compiled binary gets a nix glibc
+# ELF interpreter whose loader never searches /lib/x86_64-linux-gnu, so it
+# cannot find libLLVM's deps (libffi, …) at runtime. The host compiler gives it
+# the system glibc interpreter, which resolves them via the normal ldconfig
+# path. Standalone build tree (no picomesh code is linked); it only reads
+# build-desktop-release's compile_commands.json at run time.
+result-checker:
+	PATH=/usr/bin:$$PATH $(CMAKE) -S qa-tools/analysis/result-checker \
+		-B $(BUILD_DIR_QA)/result-checker -G Ninja -DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_C_COMPILER=/usr/bin/cc -DCMAKE_CXX_COMPILER=/usr/bin/c++
+	$(CMAKE) --build $(BUILD_DIR_QA)/result-checker --parallel $(JOBS)
 
 ## build-desktop-release  configure + build the release variant
 build-desktop-release:
@@ -210,5 +227,5 @@ build-linux-riscv64-release:
 clean:
 	rm -rf $(BUILD_DIR_RELEASE) $(BUILD_DIR_DEBUG) $(BUILD_DIR_RISCV) \
 	       $(BUILD_DIR_YEMU) $(BUILD_DIR_DEPLOY) $(BUILD_DIR_CODEGEN) \
-	       build-webasm-yemu-release compile_commands.json
+	       $(BUILD_DIR_QA) build-webasm-yemu-release compile_commands.json
 
