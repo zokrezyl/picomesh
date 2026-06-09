@@ -13,8 +13,6 @@
 
 #include <setjmp.h>
 
-__attribute__((noreturn))
-void __longjmp_chk(jmp_buf env, int val)
-{
-    longjmp(env, val);
+__attribute__((noreturn)) void __longjmp_chk(jmp_buf env, int val) {
+  longjmp(env, val);
 }

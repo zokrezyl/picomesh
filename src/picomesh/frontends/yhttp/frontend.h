@@ -16,10 +16,9 @@
 
 struct loop_stream;
 
-struct picomesh_int_result yhttp_frontend_try(struct loop_stream *s,
-                       const char *method, const char *path,
-                       const char *headers_raw, size_t headers_raw_len,
-                       const char *body, size_t body_len,
-                       int keep_alive);
+struct picomesh_int_result
+yhttp_frontend_try(struct loop_stream *s, const char *method, const char *path,
+                   const char *headers_raw, size_t headers_raw_len,
+                   const char *body, size_t body_len, int keep_alive);
 
 #endif

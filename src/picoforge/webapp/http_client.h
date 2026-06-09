@@ -10,15 +10,15 @@
 struct loop;
 
 struct gateway_url {
-    char host[128];
-    int  port;
+  char host[128];
+  int port;
 };
 
 struct http_response {
-    int    status;
-    char  *body;
-    size_t body_len;
-    char   set_cookie[512];  /* first Set-Cookie value (multi support TBD) */
+  int status;
+  char *body;
+  size_t body_len;
+  char set_cookie[512]; /* first Set-Cookie value (multi support TBD) */
 };
 
 /* Parse "http://host:port" → struct. Returns 0 on success, -1 on error. */
@@ -32,18 +32,16 @@ int gateway_url_parse(const char *url, struct gateway_url *out);
  *
  * Must be called from inside a loop coroutine — internally yields
  * the calling coro across connect / read / write. */
-struct picomesh_int_result http_post(struct loop *loop, const struct gateway_url *gw,
-              const char *path, const char *content_type,
-              const char *bearer, const char *sid,
-              const char *body, size_t body_len,
-              struct http_response *resp);
+struct picomesh_int_result
+http_post(struct loop *loop, const struct gateway_url *gw, const char *path,
+          const char *content_type, const char *bearer, const char *sid,
+          const char *body, size_t body_len, struct http_response *resp);
 
 /* Convenience wrapper: POST with Content-Type: application/json. */
-struct picomesh_int_result http_post_json(struct loop *loop, const struct gateway_url *gw,
-                   const char *path,
-                   const char *bearer, const char *sid,
-                   const char *body, size_t body_len,
-                   struct http_response *resp);
+struct picomesh_int_result
+http_post_json(struct loop *loop, const struct gateway_url *gw,
+               const char *path, const char *bearer, const char *sid,
+               const char *body, size_t body_len, struct http_response *resp);
 
 void http_response_free(struct http_response *r);
 

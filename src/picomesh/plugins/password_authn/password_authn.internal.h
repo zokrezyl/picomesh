@@ -6,11 +6,26 @@
 
 #include <picomesh/plugin/password_authn/password_authn.h>
 
-typedef struct picomesh_int_result (*password_authn_password_authn_register_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t, int64_t);
-typedef struct picomesh_int_result (*password_authn_password_authn_authenticate_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t, int64_t);
-typedef struct picomesh_int_result (*password_authn_password_authn_change_password_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t, int64_t);
-typedef struct picomesh_size_result (*password_authn_password_authn_count_registered_fn)(struct ctx *, struct object *, struct yheaders *);
-typedef struct picomesh_json_result (*password_authn_password_authn_list_fn)(struct ctx *, struct object *, struct yheaders *, int64_t, int64_t);
-typedef struct picomesh_json_result (*password_authn_password_authn_list_all_fn)(struct ctx *, struct object *, struct yheaders *);
+typedef struct picomesh_int_result (*password_authn_password_authn_register_fn)(
+    struct ctx *, struct object *, struct yheaders *, uint32_t, int64_t);
+typedef struct picomesh_int_result (
+    *password_authn_password_authn_authenticate_fn)(struct ctx *,
+                                                    struct object *,
+                                                    struct yheaders *, uint32_t,
+                                                    int64_t);
+typedef struct picomesh_int_result (
+    *password_authn_password_authn_change_password_fn)(struct ctx *,
+                                                       struct object *,
+                                                       struct yheaders *,
+                                                       uint32_t, int64_t);
+typedef struct picomesh_size_result (
+    *password_authn_password_authn_count_registered_fn)(struct ctx *,
+                                                        struct object *,
+                                                        struct yheaders *);
+typedef struct picomesh_json_result (*password_authn_password_authn_list_fn)(
+    struct ctx *, struct object *, struct yheaders *, int64_t, int64_t);
+typedef struct picomesh_json_result (
+    *password_authn_password_authn_list_all_fn)(struct ctx *, struct object *,
+                                                struct yheaders *);
 
 #endif

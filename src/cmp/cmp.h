@@ -31,10 +31,10 @@ THE SOFTWARE.
 
 struct cmp_ctx_s;
 
-typedef bool   (*cmp_reader)(struct cmp_ctx_s *ctx, void *data, size_t limit);
-typedef bool   (*cmp_skipper)(struct cmp_ctx_s *ctx, size_t count);
+typedef bool (*cmp_reader)(struct cmp_ctx_s *ctx, void *data, size_t limit);
+typedef bool (*cmp_skipper)(struct cmp_ctx_s *ctx, size_t count);
 typedef size_t (*cmp_writer)(struct cmp_ctx_s *ctx, const void *data,
-                                                    size_t count);
+                             size_t count);
 
 enum {
   CMP_TYPE_POSITIVE_FIXNUM, /*  0 */
@@ -80,32 +80,32 @@ typedef struct cmp_ext_s {
 } cmp_ext_t;
 
 union cmp_object_data_u {
-  bool      boolean;
-  uint8_t   u8;
-  uint16_t  u16;
-  uint32_t  u32;
-  uint64_t  u64;
-  int8_t    s8;
-  int16_t   s16;
-  int32_t   s32;
-  int64_t   s64;
+  bool boolean;
+  uint8_t u8;
+  uint16_t u16;
+  uint32_t u32;
+  uint64_t u64;
+  int8_t s8;
+  int16_t s16;
+  int32_t s32;
+  int64_t s64;
 #ifndef CMP_NO_FLOAT
-  float     flt;
-  double    dbl;
+  float flt;
+  double dbl;
 #endif /* CMP_NO_FLOAT */
-  uint32_t  array_size;
-  uint32_t  map_size;
-  uint32_t  str_size;
-  uint32_t  bin_size;
+  uint32_t array_size;
+  uint32_t map_size;
+  uint32_t str_size;
+  uint32_t bin_size;
   cmp_ext_t ext;
 };
 
 typedef struct cmp_ctx_s {
-  uint8_t      error;
-  void        *buf;
-  cmp_reader   read;
-  cmp_skipper  skip;
-  cmp_writer   write;
+  uint8_t error;
+  void *buf;
+  cmp_reader read;
+  cmp_skipper skip;
+  cmp_writer write;
 } cmp_ctx_t;
 
 typedef struct cmp_object_s {
@@ -134,9 +134,8 @@ extern "C" {
  * If you don't intend to write, `write` may be NULL, but calling `*write*`
  * functions will crash; there is no check.
  */
-void cmp_init(cmp_ctx_t *ctx, void *buf, cmp_reader read,
-                                         cmp_skipper skip,
-                                         cmp_writer write);
+void cmp_init(cmp_ctx_t *ctx, void *buf, cmp_reader read, cmp_skipper skip,
+              cmp_writer write);
 
 /* Returns CMP's version */
 uint32_t cmp_version(void);
@@ -145,7 +144,7 @@ uint32_t cmp_version(void);
 uint32_t cmp_mp_version(void);
 
 /* Returns a string description of a CMP context's error */
-const char* cmp_strerror(const cmp_ctx_t *ctx);
+const char *cmp_strerror(const cmp_ctx_t *ctx);
 
 /* Writes a signed integer to the backend */
 bool cmp_write_integer(cmp_ctx_t *ctx, int64_t d);
@@ -225,7 +224,7 @@ bool cmp_write_map(cmp_ctx_t *ctx, uint32_t size);
 
 /* Writes an extended type to the backend */
 bool cmp_write_ext(cmp_ctx_t *ctx, int8_t type, uint32_t size,
-                                   const void *data);
+                   const void *data);
 
 /*
  * Writes the extended type marker to the backend.  This is useful if you want
@@ -298,7 +297,8 @@ bool cmp_read_str_size(cmp_ctx_t *ctx, uint32_t *size);
 
 /*
  * Reads a string from the backend; according to the spec, the string's data
- * ought to be encoded using UTF-8, but CMP leaves that job up to the programmer.
+ * ought to be encoded using UTF-8, but CMP leaves that job up to the
+ * programmer.
  */
 bool cmp_read_str(cmp_ctx_t *ctx, char *data, uint32_t *size);
 
@@ -385,9 +385,9 @@ bool cmp_skip_object_no_limit(cmp_ctx_t *ctx);
  */
 bool cmp_skip_object_limit(cmp_ctx_t *ctx, cmp_object_t *obj, uint32_t limit)
 #ifdef __GNUC__
-  __attribute__((deprecated))
+    __attribute__((deprecated))
 #endif
-;
+    ;
 
 #ifdef _MSC_VER
 #pragma deprecated(cmp_skip_object_limit)
@@ -456,13 +456,13 @@ bool cmp_write_fixext16(cmp_ctx_t *ctx, int8_t type, const void *data);
 
 bool cmp_write_ext8_marker(cmp_ctx_t *ctx, int8_t type, uint8_t size);
 bool cmp_write_ext8(cmp_ctx_t *ctx, int8_t type, uint8_t size,
-                                    const void *data);
+                    const void *data);
 bool cmp_write_ext16_marker(cmp_ctx_t *ctx, int8_t type, uint16_t size);
 bool cmp_write_ext16(cmp_ctx_t *ctx, int8_t type, uint16_t size,
-                                     const void *data);
+                     const void *data);
 bool cmp_write_ext32_marker(cmp_ctx_t *ctx, int8_t type, uint32_t size);
 bool cmp_write_ext32(cmp_ctx_t *ctx, int8_t type, uint32_t size,
-                                     const void *data);
+                     const void *data);
 
 bool cmp_read_pfix(cmp_ctx_t *ctx, uint8_t *c);
 bool cmp_read_nfix(cmp_ctx_t *ctx, int8_t *c);
@@ -547,8 +547,10 @@ bool cmp_object_as_array(const cmp_object_t *obj, uint32_t *size);
 bool cmp_object_as_map(const cmp_object_t *obj, uint32_t *size);
 bool cmp_object_as_ext(const cmp_object_t *obj, int8_t *type, uint32_t *size);
 
-bool cmp_object_to_str(cmp_ctx_t *ctx, const cmp_object_t *obj, char *data, uint32_t buf_size);
-bool cmp_object_to_bin(cmp_ctx_t *ctx, const cmp_object_t *obj, void *data, uint32_t buf_size);
+bool cmp_object_to_str(cmp_ctx_t *ctx, const cmp_object_t *obj, char *data,
+                       uint32_t buf_size);
+bool cmp_object_to_bin(cmp_ctx_t *ctx, const cmp_object_t *obj, void *data,
+                       uint32_t buf_size);
 
 #ifdef __cplusplus
 } /* extern "C" */
@@ -560,13 +562,12 @@ bool cmp_object_to_bin(cmp_ctx_t *ctx, const cmp_object_t *obj, void *data, uint
  * ============================================================================
  */
 
-#define cmp_write_int      cmp_write_integer
-#define cmp_write_sint     cmp_write_integer
+#define cmp_write_int cmp_write_integer
+#define cmp_write_sint cmp_write_integer
 #define cmp_write_sinteger cmp_write_integer
-#define cmp_write_uint     cmp_write_uinteger
-#define cmp_read_sinteger  cmp_read_integer
+#define cmp_write_uint cmp_write_uinteger
+#define cmp_read_sinteger cmp_read_integer
 
 #endif /* CMP_H_INCLUDED */
 
 /* vi: set et ts=2 sw=2: */
-

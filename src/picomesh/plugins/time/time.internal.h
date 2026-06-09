@@ -6,7 +6,10 @@
 
 #include <picomesh/plugin/time/time.h>
 
-typedef struct picomesh_int64_result (*time_clock_now_ms_fn)(struct ctx *, struct object *, struct yheaders *);
-typedef struct picomesh_int64_result (*time_clock_sleep_ms_fn)(struct ctx *, struct object *, struct yheaders *, uint32_t);
+typedef struct picomesh_int64_result (*time_clock_now_ms_fn)(struct ctx *,
+                                                             struct object *,
+                                                             struct yheaders *);
+typedef struct picomesh_int64_result (*time_clock_sleep_ms_fn)(
+    struct ctx *, struct object *, struct yheaders *, uint32_t);
 
 #endif

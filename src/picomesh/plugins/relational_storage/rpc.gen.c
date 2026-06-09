@@ -1,616 +1,793 @@
 /* GENERATED — do not edit. */
-#include <picomesh/picoclass/rpc.h>
-#include <picomesh/picoclass/jinvoke.h>
-#include <picomesh/picoclass/minvoke.h>
-#include <picomesh/picoclass/yheaders.h>
-#include <picomesh/json/json.h>
-#include <picomesh/core/result.h>
-#include <picomesh/core/ytrace.h>
-#include <picomesh/core/yspan.h>
-#include <picomesh/core/ytelemetry.h>
-#include <picomesh/picoclass/class.h>
 #include "relational_storage.internal.h"
 #include <limits.h>
+#include <picomesh/core/result.h>
+#include <picomesh/core/yspan.h>
+#include <picomesh/core/ytelemetry.h>
+#include <picomesh/core/ytrace.h>
+#include <picomesh/json/json.h>
+#include <picomesh/picoclass/class.h>
+#include <picomesh/picoclass/jinvoke.h>
+#include <picomesh/picoclass/minvoke.h>
+#include <picomesh/picoclass/rpc.h>
+#include <picomesh/picoclass/yheaders.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-static struct picomesh_size_result relational_storage_db_exec_skel(const void *_body, size_t _body_len,
-                          void *_resp, size_t _resp_max)
-{
-    size_t _off = 0;
-    struct ctx _local = {0};
-    /* The framework header section is first on every CALL body — parse
-     * it back into the `hdrs` argument before the packed business args. */
-    struct yheaders *_hdrs = NULL;
-    {
-        size_t _hconsumed = 0;
-        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
-        if (!_hdrs) goto _short_body;
-        _off = _hconsumed;
+static struct picomesh_size_result
+relational_storage_db_exec_skel(const void *_body, size_t _body_len,
+                                void *_resp, size_t _resp_max) {
+  size_t _off = 0;
+  struct ctx _local = {0};
+  /* The framework header section is first on every CALL body — parse
+   * it back into the `hdrs` argument before the packed business args. */
+  struct yheaders *_hdrs = NULL;
+  {
+    size_t _hconsumed = 0;
+    _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
+    if (!_hdrs)
+      goto _short_body;
+    _off = _hconsumed;
+  }
+  struct object *_obj = NULL;
+  {
+    if (_off + 8 > _body_len)
+      goto _short_body;
+    uint64_t _h;
+    memcpy(&_h, (const uint8_t *)_body + _off, 8);
+    _off += 8;
+    _obj = (struct object *)rpc_handle_resolve(_h);
+  }
+  char _s1[4096];
+  {
+    if (_off + 4 > _body_len)
+      goto _short_body;
+    uint32_t _slen;
+    memcpy(&_slen, (const uint8_t *)_body + _off, 4);
+    _off += 4;
+    if (_off + _slen > _body_len)
+      goto _short_body;
+    if (_slen >= sizeof(_s1))
+      goto _short_body;
+    if (_slen)
+      memcpy(_s1, (const uint8_t *)_body + _off, _slen);
+    _s1[_slen] = 0;
+    _off += _slen;
+  }
+  uint32_t _v2 = 0;
+  if (_off + sizeof(_v2) > _body_len)
+    goto _short_body;
+  memcpy(&_v2, (const uint8_t *)_body + _off, sizeof(_v2));
+  _off += sizeof(_v2);
+  char _s3[4096];
+  {
+    if (_off + 4 > _body_len)
+      goto _short_body;
+    uint32_t _slen;
+    memcpy(&_slen, (const uint8_t *)_body + _off, 4);
+    _off += 4;
+    if (_off + _slen > _body_len)
+      goto _short_body;
+    if (_slen >= sizeof(_s3))
+      goto _short_body;
+    if (_slen)
+      memcpy(_s3, (const uint8_t *)_body + _off, _slen);
+    _s3[_slen] = 0;
+    _off += _slen;
+  }
+  char _s4[4096];
+  {
+    if (_off + 4 > _body_len)
+      goto _short_body;
+    uint32_t _slen;
+    memcpy(&_slen, (const uint8_t *)_body + _off, 4);
+    _off += 4;
+    if (_off + _slen > _body_len)
+      goto _short_body;
+    if (_slen >= sizeof(_s4))
+      goto _short_body;
+    if (_slen)
+      memcpy(_s4, (const uint8_t *)_body + _off, _slen);
+    _s4[_slen] = 0;
+    _off += _slen;
+  }
+  struct ytelemetry_span _tsp;
+  ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.relational_storage_db_exec");
+  struct picomesh_json_result _r =
+      relational_storage_db_exec(&_local, _obj, _hdrs, _s1, _v2, _s3, _s4);
+  ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r),
+                      PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
+  yheaders_free(_hdrs);
+  _hdrs = NULL;
+  if (_resp_max < 1)
+    return PICOMESH_ERR(
+        picomesh_size,
+        "relational_storage_db_exec_skel: response buffer too small");
+  if (PICOMESH_IS_ERR(_r)) {
+    char _errbuf[8192] = {0};
+    picomesh_error_snprint(_errbuf, sizeof(_errbuf), _r.error);
+    const char *_msg =
+        _errbuf[0] ? _errbuf : (_r.error.msg ? _r.error.msg : "(no msg)");
+    uint32_t _ml = (uint32_t)strlen(_msg);
+    if (_resp_max <= 5)
+      _ml = 0;
+    else if (_ml > _resp_max - 5)
+      _ml = (uint32_t)(_resp_max - 5);
+    if (_resp_max < 1 + 4 + _ml) {
+      picomesh_error_destroy(_r.error);
+      ((uint8_t *)_resp)[0] = 1;
+      return PICOMESH_OK(picomesh_size, _resp_max >= 1 ? 1u : 0u);
     }
-    struct object *_obj = NULL;
-    {
-        if (_off + 8 > _body_len) goto _short_body;
-        uint64_t _h;
-        memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
-        _obj = (struct object *)rpc_handle_resolve(_h);
+    ((uint8_t *)_resp)[0] = 1;
+    memcpy((uint8_t *)_resp + 1, &_ml, 4);
+    memcpy((uint8_t *)_resp + 5, _msg, _ml);
+    picomesh_error_destroy(_r.error);
+    return PICOMESH_OK(picomesh_size, (size_t)(1 + 4 + _ml));
+  }
+  {
+    const char *_sv = _r.value ? _r.value : "";
+    uint32_t _svlen = (uint32_t)strlen(_sv);
+    if (_resp_max < 1 + 4 + (size_t)_svlen) {
+      free(_r.value);
+      return PICOMESH_ERR(
+          picomesh_size,
+          "relational_storage_db_exec_skel: response buffer too small");
     }
-    char _s1[4096];
-    {
-        if (_off + 4 > _body_len) goto _short_body;
-        uint32_t _slen;
-        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
-        if (_off + _slen > _body_len) goto _short_body;
-        if (_slen >= sizeof(_s1)) goto _short_body;
-        if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
-        _s1[_slen] = 0; _off += _slen;
-    }
-    uint32_t _v2 = 0;
-    if (_off + sizeof(_v2) > _body_len) goto _short_body;
-    memcpy(&_v2, (const uint8_t *)_body + _off, sizeof(_v2));
-    _off += sizeof(_v2);
-    char _s3[4096];
-    {
-        if (_off + 4 > _body_len) goto _short_body;
-        uint32_t _slen;
-        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
-        if (_off + _slen > _body_len) goto _short_body;
-        if (_slen >= sizeof(_s3)) goto _short_body;
-        if (_slen) memcpy(_s3, (const uint8_t *)_body + _off, _slen);
-        _s3[_slen] = 0; _off += _slen;
-    }
-    char _s4[4096];
-    {
-        if (_off + 4 > _body_len) goto _short_body;
-        uint32_t _slen;
-        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
-        if (_off + _slen > _body_len) goto _short_body;
-        if (_slen >= sizeof(_s4)) goto _short_body;
-        if (_slen) memcpy(_s4, (const uint8_t *)_body + _off, _slen);
-        _s4[_slen] = 0; _off += _slen;
-    }
-    struct ytelemetry_span _tsp;
-    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.relational_storage_db_exec");
-    struct picomesh_json_result _r = relational_storage_db_exec(&_local, _obj, _hdrs, _s1, _v2, _s3, _s4);
-    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
-    yheaders_free(_hdrs); _hdrs = NULL;
-    if (_resp_max < 1) return PICOMESH_ERR(picomesh_size, "relational_storage_db_exec_skel: response buffer too small");
-    if (PICOMESH_IS_ERR(_r)) {
-        char _errbuf[8192] = {0};
-        picomesh_error_snprint(_errbuf, sizeof(_errbuf), _r.error);
-        const char *_msg = _errbuf[0] ? _errbuf : (_r.error.msg ? _r.error.msg : "(no msg)");
-        uint32_t _ml = (uint32_t)strlen(_msg);
-        if (_resp_max <= 5) _ml = 0;
-        else if (_ml > _resp_max - 5) _ml = (uint32_t)(_resp_max - 5);
-        if (_resp_max < 1 + 4 + _ml) {
-            picomesh_error_destroy(_r.error);
-            ((uint8_t *)_resp)[0] = 1;
-            return PICOMESH_OK(picomesh_size, _resp_max >= 1 ? 1u : 0u);
-        }
-        ((uint8_t *)_resp)[0] = 1;
-        memcpy((uint8_t *)_resp + 1, &_ml, 4);
-        memcpy((uint8_t *)_resp + 5, _msg, _ml);
-        picomesh_error_destroy(_r.error);
-        return PICOMESH_OK(picomesh_size, (size_t)(1 + 4 + _ml));
-    }
-    {
-        const char *_sv = _r.value ? _r.value : "";
-        uint32_t _svlen = (uint32_t)strlen(_sv);
-        if (_resp_max < 1 + 4 + (size_t)_svlen) { free(_r.value); return PICOMESH_ERR(picomesh_size, "relational_storage_db_exec_skel: response buffer too small"); }
-        ((uint8_t *)_resp)[0] = 0;
-        memcpy((uint8_t *)_resp + 1, &_svlen, 4);
-        if (_svlen) memcpy((uint8_t *)_resp + 5, _sv, _svlen);
-        free(_r.value);
-        return PICOMESH_OK(picomesh_size, (size_t)(1 + 4 + (size_t)_svlen));
-    }
-_short_body:
-    yheaders_free(_hdrs);
-    if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
-    return PICOMESH_OK(picomesh_size, _resp_max >= 1 ? 1u : 0u);
-}
-
-static struct picomesh_size_result relational_storage_db_query_skel(const void *_body, size_t _body_len,
-                          void *_resp, size_t _resp_max)
-{
-    size_t _off = 0;
-    struct ctx _local = {0};
-    /* The framework header section is first on every CALL body — parse
-     * it back into the `hdrs` argument before the packed business args. */
-    struct yheaders *_hdrs = NULL;
-    {
-        size_t _hconsumed = 0;
-        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
-        if (!_hdrs) goto _short_body;
-        _off = _hconsumed;
-    }
-    struct object *_obj = NULL;
-    {
-        if (_off + 8 > _body_len) goto _short_body;
-        uint64_t _h;
-        memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
-        _obj = (struct object *)rpc_handle_resolve(_h);
-    }
-    char _s1[4096];
-    {
-        if (_off + 4 > _body_len) goto _short_body;
-        uint32_t _slen;
-        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
-        if (_off + _slen > _body_len) goto _short_body;
-        if (_slen >= sizeof(_s1)) goto _short_body;
-        if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
-        _s1[_slen] = 0; _off += _slen;
-    }
-    uint32_t _v2 = 0;
-    if (_off + sizeof(_v2) > _body_len) goto _short_body;
-    memcpy(&_v2, (const uint8_t *)_body + _off, sizeof(_v2));
-    _off += sizeof(_v2);
-    char _s3[4096];
-    {
-        if (_off + 4 > _body_len) goto _short_body;
-        uint32_t _slen;
-        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
-        if (_off + _slen > _body_len) goto _short_body;
-        if (_slen >= sizeof(_s3)) goto _short_body;
-        if (_slen) memcpy(_s3, (const uint8_t *)_body + _off, _slen);
-        _s3[_slen] = 0; _off += _slen;
-    }
-    char _s4[4096];
-    {
-        if (_off + 4 > _body_len) goto _short_body;
-        uint32_t _slen;
-        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
-        if (_off + _slen > _body_len) goto _short_body;
-        if (_slen >= sizeof(_s4)) goto _short_body;
-        if (_slen) memcpy(_s4, (const uint8_t *)_body + _off, _slen);
-        _s4[_slen] = 0; _off += _slen;
-    }
-    struct ytelemetry_span _tsp;
-    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.relational_storage_db_query");
-    struct picomesh_json_result _r = relational_storage_db_query(&_local, _obj, _hdrs, _s1, _v2, _s3, _s4);
-    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
-    yheaders_free(_hdrs); _hdrs = NULL;
-    if (_resp_max < 1) return PICOMESH_ERR(picomesh_size, "relational_storage_db_query_skel: response buffer too small");
-    if (PICOMESH_IS_ERR(_r)) {
-        char _errbuf[8192] = {0};
-        picomesh_error_snprint(_errbuf, sizeof(_errbuf), _r.error);
-        const char *_msg = _errbuf[0] ? _errbuf : (_r.error.msg ? _r.error.msg : "(no msg)");
-        uint32_t _ml = (uint32_t)strlen(_msg);
-        if (_resp_max <= 5) _ml = 0;
-        else if (_ml > _resp_max - 5) _ml = (uint32_t)(_resp_max - 5);
-        if (_resp_max < 1 + 4 + _ml) {
-            picomesh_error_destroy(_r.error);
-            ((uint8_t *)_resp)[0] = 1;
-            return PICOMESH_OK(picomesh_size, _resp_max >= 1 ? 1u : 0u);
-        }
-        ((uint8_t *)_resp)[0] = 1;
-        memcpy((uint8_t *)_resp + 1, &_ml, 4);
-        memcpy((uint8_t *)_resp + 5, _msg, _ml);
-        picomesh_error_destroy(_r.error);
-        return PICOMESH_OK(picomesh_size, (size_t)(1 + 4 + _ml));
-    }
-    {
-        const char *_sv = _r.value ? _r.value : "";
-        uint32_t _svlen = (uint32_t)strlen(_sv);
-        if (_resp_max < 1 + 4 + (size_t)_svlen) { free(_r.value); return PICOMESH_ERR(picomesh_size, "relational_storage_db_query_skel: response buffer too small"); }
-        ((uint8_t *)_resp)[0] = 0;
-        memcpy((uint8_t *)_resp + 1, &_svlen, 4);
-        if (_svlen) memcpy((uint8_t *)_resp + 5, _sv, _svlen);
-        free(_r.value);
-        return PICOMESH_OK(picomesh_size, (size_t)(1 + 4 + (size_t)_svlen));
-    }
-_short_body:
-    yheaders_free(_hdrs);
-    if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
-    return PICOMESH_OK(picomesh_size, _resp_max >= 1 ? 1u : 0u);
-}
-
-static struct picomesh_size_result relational_storage_db_shard_count_skel(const void *_body, size_t _body_len,
-                          void *_resp, size_t _resp_max)
-{
-    size_t _off = 0;
-    struct ctx _local = {0};
-    /* The framework header section is first on every CALL body — parse
-     * it back into the `hdrs` argument before the packed business args. */
-    struct yheaders *_hdrs = NULL;
-    {
-        size_t _hconsumed = 0;
-        _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
-        if (!_hdrs) goto _short_body;
-        _off = _hconsumed;
-    }
-    struct object *_obj = NULL;
-    {
-        if (_off + 8 > _body_len) goto _short_body;
-        uint64_t _h;
-        memcpy(&_h, (const uint8_t *)_body + _off, 8); _off += 8;
-        _obj = (struct object *)rpc_handle_resolve(_h);
-    }
-    char _s1[4096];
-    {
-        if (_off + 4 > _body_len) goto _short_body;
-        uint32_t _slen;
-        memcpy(&_slen, (const uint8_t *)_body + _off, 4); _off += 4;
-        if (_off + _slen > _body_len) goto _short_body;
-        if (_slen >= sizeof(_s1)) goto _short_body;
-        if (_slen) memcpy(_s1, (const uint8_t *)_body + _off, _slen);
-        _s1[_slen] = 0; _off += _slen;
-    }
-    struct ytelemetry_span _tsp;
-    ytelemetry_server_span_begin(&_tsp, _hdrs, "skel.relational_storage_db_shard_count");
-    struct picomesh_int_result _r = relational_storage_db_shard_count(&_local, _obj, _hdrs, _s1);
-    ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r), PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
-    yheaders_free(_hdrs); _hdrs = NULL;
-    if (_resp_max < 1) return PICOMESH_ERR(picomesh_size, "relational_storage_db_shard_count_skel: response buffer too small");
-    if (PICOMESH_IS_ERR(_r)) {
-        char _errbuf[8192] = {0};
-        picomesh_error_snprint(_errbuf, sizeof(_errbuf), _r.error);
-        const char *_msg = _errbuf[0] ? _errbuf : (_r.error.msg ? _r.error.msg : "(no msg)");
-        uint32_t _ml = (uint32_t)strlen(_msg);
-        if (_resp_max <= 5) _ml = 0;
-        else if (_ml > _resp_max - 5) _ml = (uint32_t)(_resp_max - 5);
-        if (_resp_max < 1 + 4 + _ml) {
-            picomesh_error_destroy(_r.error);
-            ((uint8_t *)_resp)[0] = 1;
-            return PICOMESH_OK(picomesh_size, _resp_max >= 1 ? 1u : 0u);
-        }
-        ((uint8_t *)_resp)[0] = 1;
-        memcpy((uint8_t *)_resp + 1, &_ml, 4);
-        memcpy((uint8_t *)_resp + 5, _msg, _ml);
-        picomesh_error_destroy(_r.error);
-        return PICOMESH_OK(picomesh_size, (size_t)(1 + 4 + _ml));
-    }
-    if (_resp_max < 1 + sizeof(_r.value)) return PICOMESH_ERR(picomesh_size, "relational_storage_db_shard_count_skel: response buffer too small");
     ((uint8_t *)_resp)[0] = 0;
-    memcpy((uint8_t *)_resp + 1, &_r.value, sizeof(_r.value));
-    return PICOMESH_OK(picomesh_size, (size_t)(1 + sizeof(_r.value)));
+    memcpy((uint8_t *)_resp + 1, &_svlen, 4);
+    if (_svlen)
+      memcpy((uint8_t *)_resp + 5, _sv, _svlen);
+    free(_r.value);
+    return PICOMESH_OK(picomesh_size, (size_t)(1 + 4 + (size_t)_svlen));
+  }
 _short_body:
-    yheaders_free(_hdrs);
-    if (_resp_max >= 1) ((uint8_t *)_resp)[0] = 1;
-    return PICOMESH_OK(picomesh_size, _resp_max >= 1 ? 1u : 0u);
+  yheaders_free(_hdrs);
+  if (_resp_max >= 1)
+    ((uint8_t *)_resp)[0] = 1;
+  return PICOMESH_OK(picomesh_size, _resp_max >= 1 ? 1u : 0u);
 }
 
-static struct picomesh_void_result relational_storage_db_exec_jinvoke(struct ctx *ctx, struct object *obj,
-                          struct yheaders *hdrs, const struct json_value *args,
-                          struct json_writer *result, char *err, size_t err_cap)
-{
-    yinfo("[rpc] relational_storage_db_exec");
-    const char *arg0 = json_as_string(json_array_at(args, 0), "");
-    uint32_t arg1 = (uint32_t)json_as_int(json_array_at(args, 1), 0);
-    const char *arg2 = json_as_string(json_array_at(args, 2), "");
-    const char *arg3 = json_as_string(json_array_at(args, 3), "");
-    struct ctx local_ctx = {0};
-    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct picomesh_json_result call_result = relational_storage_db_exec(call_ctx, obj, hdrs, arg0, arg1, arg2, arg3);
-    if (PICOMESH_IS_ERR(call_result)) {
-        char chain[8192] = {0};
-        picomesh_error_snprint(chain, sizeof(chain), call_result.error);
-        snprintf(err, err_cap, "%s: %s", "relational_storage_db_exec",
-                 chain[0] ? chain : (call_result.error.msg ? call_result.error.msg : "<no message>"));
-        return PICOMESH_ERR(picomesh_void, "relational_storage_db_exec", call_result);
+static struct picomesh_size_result
+relational_storage_db_query_skel(const void *_body, size_t _body_len,
+                                 void *_resp, size_t _resp_max) {
+  size_t _off = 0;
+  struct ctx _local = {0};
+  /* The framework header section is first on every CALL body — parse
+   * it back into the `hdrs` argument before the packed business args. */
+  struct yheaders *_hdrs = NULL;
+  {
+    size_t _hconsumed = 0;
+    _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
+    if (!_hdrs)
+      goto _short_body;
+    _off = _hconsumed;
+  }
+  struct object *_obj = NULL;
+  {
+    if (_off + 8 > _body_len)
+      goto _short_body;
+    uint64_t _h;
+    memcpy(&_h, (const uint8_t *)_body + _off, 8);
+    _off += 8;
+    _obj = (struct object *)rpc_handle_resolve(_h);
+  }
+  char _s1[4096];
+  {
+    if (_off + 4 > _body_len)
+      goto _short_body;
+    uint32_t _slen;
+    memcpy(&_slen, (const uint8_t *)_body + _off, 4);
+    _off += 4;
+    if (_off + _slen > _body_len)
+      goto _short_body;
+    if (_slen >= sizeof(_s1))
+      goto _short_body;
+    if (_slen)
+      memcpy(_s1, (const uint8_t *)_body + _off, _slen);
+    _s1[_slen] = 0;
+    _off += _slen;
+  }
+  uint32_t _v2 = 0;
+  if (_off + sizeof(_v2) > _body_len)
+    goto _short_body;
+  memcpy(&_v2, (const uint8_t *)_body + _off, sizeof(_v2));
+  _off += sizeof(_v2);
+  char _s3[4096];
+  {
+    if (_off + 4 > _body_len)
+      goto _short_body;
+    uint32_t _slen;
+    memcpy(&_slen, (const uint8_t *)_body + _off, 4);
+    _off += 4;
+    if (_off + _slen > _body_len)
+      goto _short_body;
+    if (_slen >= sizeof(_s3))
+      goto _short_body;
+    if (_slen)
+      memcpy(_s3, (const uint8_t *)_body + _off, _slen);
+    _s3[_slen] = 0;
+    _off += _slen;
+  }
+  char _s4[4096];
+  {
+    if (_off + 4 > _body_len)
+      goto _short_body;
+    uint32_t _slen;
+    memcpy(&_slen, (const uint8_t *)_body + _off, 4);
+    _off += 4;
+    if (_off + _slen > _body_len)
+      goto _short_body;
+    if (_slen >= sizeof(_s4))
+      goto _short_body;
+    if (_slen)
+      memcpy(_s4, (const uint8_t *)_body + _off, _slen);
+    _s4[_slen] = 0;
+    _off += _slen;
+  }
+  struct ytelemetry_span _tsp;
+  ytelemetry_server_span_begin(&_tsp, _hdrs,
+                               "skel.relational_storage_db_query");
+  struct picomesh_json_result _r =
+      relational_storage_db_query(&_local, _obj, _hdrs, _s1, _v2, _s3, _s4);
+  ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r),
+                      PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
+  yheaders_free(_hdrs);
+  _hdrs = NULL;
+  if (_resp_max < 1)
+    return PICOMESH_ERR(
+        picomesh_size,
+        "relational_storage_db_query_skel: response buffer too small");
+  if (PICOMESH_IS_ERR(_r)) {
+    char _errbuf[8192] = {0};
+    picomesh_error_snprint(_errbuf, sizeof(_errbuf), _r.error);
+    const char *_msg =
+        _errbuf[0] ? _errbuf : (_r.error.msg ? _r.error.msg : "(no msg)");
+    uint32_t _ml = (uint32_t)strlen(_msg);
+    if (_resp_max <= 5)
+      _ml = 0;
+    else if (_ml > _resp_max - 5)
+      _ml = (uint32_t)(_resp_max - 5);
+    if (_resp_max < 1 + 4 + _ml) {
+      picomesh_error_destroy(_r.error);
+      ((uint8_t *)_resp)[0] = 1;
+      return PICOMESH_OK(picomesh_size, _resp_max >= 1 ? 1u : 0u);
     }
-    json_writer_raw(result, call_result.value ? call_result.value : "null");
+    ((uint8_t *)_resp)[0] = 1;
+    memcpy((uint8_t *)_resp + 1, &_ml, 4);
+    memcpy((uint8_t *)_resp + 5, _msg, _ml);
+    picomesh_error_destroy(_r.error);
+    return PICOMESH_OK(picomesh_size, (size_t)(1 + 4 + _ml));
+  }
+  {
+    const char *_sv = _r.value ? _r.value : "";
+    uint32_t _svlen = (uint32_t)strlen(_sv);
+    if (_resp_max < 1 + 4 + (size_t)_svlen) {
+      free(_r.value);
+      return PICOMESH_ERR(
+          picomesh_size,
+          "relational_storage_db_query_skel: response buffer too small");
+    }
+    ((uint8_t *)_resp)[0] = 0;
+    memcpy((uint8_t *)_resp + 1, &_svlen, 4);
+    if (_svlen)
+      memcpy((uint8_t *)_resp + 5, _sv, _svlen);
+    free(_r.value);
+    return PICOMESH_OK(picomesh_size, (size_t)(1 + 4 + (size_t)_svlen));
+  }
+_short_body:
+  yheaders_free(_hdrs);
+  if (_resp_max >= 1)
+    ((uint8_t *)_resp)[0] = 1;
+  return PICOMESH_OK(picomesh_size, _resp_max >= 1 ? 1u : 0u);
+}
+
+static struct picomesh_size_result
+relational_storage_db_shard_count_skel(const void *_body, size_t _body_len,
+                                       void *_resp, size_t _resp_max) {
+  size_t _off = 0;
+  struct ctx _local = {0};
+  /* The framework header section is first on every CALL body — parse
+   * it back into the `hdrs` argument before the packed business args. */
+  struct yheaders *_hdrs = NULL;
+  {
+    size_t _hconsumed = 0;
+    _hdrs = yheaders_parse(_body, _body_len, &_hconsumed);
+    if (!_hdrs)
+      goto _short_body;
+    _off = _hconsumed;
+  }
+  struct object *_obj = NULL;
+  {
+    if (_off + 8 > _body_len)
+      goto _short_body;
+    uint64_t _h;
+    memcpy(&_h, (const uint8_t *)_body + _off, 8);
+    _off += 8;
+    _obj = (struct object *)rpc_handle_resolve(_h);
+  }
+  char _s1[4096];
+  {
+    if (_off + 4 > _body_len)
+      goto _short_body;
+    uint32_t _slen;
+    memcpy(&_slen, (const uint8_t *)_body + _off, 4);
+    _off += 4;
+    if (_off + _slen > _body_len)
+      goto _short_body;
+    if (_slen >= sizeof(_s1))
+      goto _short_body;
+    if (_slen)
+      memcpy(_s1, (const uint8_t *)_body + _off, _slen);
+    _s1[_slen] = 0;
+    _off += _slen;
+  }
+  struct ytelemetry_span _tsp;
+  ytelemetry_server_span_begin(&_tsp, _hdrs,
+                               "skel.relational_storage_db_shard_count");
+  struct picomesh_int_result _r =
+      relational_storage_db_shard_count(&_local, _obj, _hdrs, _s1);
+  ytelemetry_span_end(&_tsp, !PICOMESH_IS_ERR(_r),
+                      PICOMESH_IS_ERR(_r) ? _r.error.msg : NULL);
+  yheaders_free(_hdrs);
+  _hdrs = NULL;
+  if (_resp_max < 1)
+    return PICOMESH_ERR(
+        picomesh_size,
+        "relational_storage_db_shard_count_skel: response buffer too small");
+  if (PICOMESH_IS_ERR(_r)) {
+    char _errbuf[8192] = {0};
+    picomesh_error_snprint(_errbuf, sizeof(_errbuf), _r.error);
+    const char *_msg =
+        _errbuf[0] ? _errbuf : (_r.error.msg ? _r.error.msg : "(no msg)");
+    uint32_t _ml = (uint32_t)strlen(_msg);
+    if (_resp_max <= 5)
+      _ml = 0;
+    else if (_ml > _resp_max - 5)
+      _ml = (uint32_t)(_resp_max - 5);
+    if (_resp_max < 1 + 4 + _ml) {
+      picomesh_error_destroy(_r.error);
+      ((uint8_t *)_resp)[0] = 1;
+      return PICOMESH_OK(picomesh_size, _resp_max >= 1 ? 1u : 0u);
+    }
+    ((uint8_t *)_resp)[0] = 1;
+    memcpy((uint8_t *)_resp + 1, &_ml, 4);
+    memcpy((uint8_t *)_resp + 5, _msg, _ml);
+    picomesh_error_destroy(_r.error);
+    return PICOMESH_OK(picomesh_size, (size_t)(1 + 4 + _ml));
+  }
+  if (_resp_max < 1 + sizeof(_r.value))
+    return PICOMESH_ERR(
+        picomesh_size,
+        "relational_storage_db_shard_count_skel: response buffer too small");
+  ((uint8_t *)_resp)[0] = 0;
+  memcpy((uint8_t *)_resp + 1, &_r.value, sizeof(_r.value));
+  return PICOMESH_OK(picomesh_size, (size_t)(1 + sizeof(_r.value)));
+_short_body:
+  yheaders_free(_hdrs);
+  if (_resp_max >= 1)
+    ((uint8_t *)_resp)[0] = 1;
+  return PICOMESH_OK(picomesh_size, _resp_max >= 1 ? 1u : 0u);
+}
+
+static struct picomesh_void_result relational_storage_db_exec_jinvoke(
+    struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+    const struct json_value *args, struct json_writer *result, char *err,
+    size_t err_cap) {
+  yinfo("[rpc] relational_storage_db_exec");
+  const char *arg0 = json_as_string(json_array_at(args, 0), "");
+  uint32_t arg1 = (uint32_t)json_as_int(json_array_at(args, 1), 0);
+  const char *arg2 = json_as_string(json_array_at(args, 2), "");
+  const char *arg3 = json_as_string(json_array_at(args, 3), "");
+  struct ctx local_ctx = {0};
+  struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+  struct picomesh_json_result call_result =
+      relational_storage_db_exec(call_ctx, obj, hdrs, arg0, arg1, arg2, arg3);
+  if (PICOMESH_IS_ERR(call_result)) {
+    char chain[8192] = {0};
+    picomesh_error_snprint(chain, sizeof(chain), call_result.error);
+    snprintf(err, err_cap, "%s: %s", "relational_storage_db_exec",
+             chain[0] ? chain
+                      : (call_result.error.msg ? call_result.error.msg
+                                               : "<no message>"));
+    return PICOMESH_ERR(picomesh_void, "relational_storage_db_exec",
+                        call_result);
+  }
+  json_writer_raw(result, call_result.value ? call_result.value : "null");
+  free(call_result.value);
+  return PICOMESH_OK_VOID();
+}
+
+static struct picomesh_void_result relational_storage_db_query_jinvoke(
+    struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+    const struct json_value *args, struct json_writer *result, char *err,
+    size_t err_cap) {
+  yinfo("[rpc] relational_storage_db_query");
+  const char *arg0 = json_as_string(json_array_at(args, 0), "");
+  uint32_t arg1 = (uint32_t)json_as_int(json_array_at(args, 1), 0);
+  const char *arg2 = json_as_string(json_array_at(args, 2), "");
+  const char *arg3 = json_as_string(json_array_at(args, 3), "");
+  struct ctx local_ctx = {0};
+  struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+  struct picomesh_json_result call_result =
+      relational_storage_db_query(call_ctx, obj, hdrs, arg0, arg1, arg2, arg3);
+  if (PICOMESH_IS_ERR(call_result)) {
+    char chain[8192] = {0};
+    picomesh_error_snprint(chain, sizeof(chain), call_result.error);
+    snprintf(err, err_cap, "%s: %s", "relational_storage_db_query",
+             chain[0] ? chain
+                      : (call_result.error.msg ? call_result.error.msg
+                                               : "<no message>"));
+    return PICOMESH_ERR(picomesh_void, "relational_storage_db_query",
+                        call_result);
+  }
+  json_writer_raw(result, call_result.value ? call_result.value : "null");
+  free(call_result.value);
+  return PICOMESH_OK_VOID();
+}
+
+static struct picomesh_void_result relational_storage_db_shard_count_jinvoke(
+    struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
+    const struct json_value *args, struct json_writer *result, char *err,
+    size_t err_cap) {
+  yinfo("[rpc] relational_storage_db_shard_count");
+  const char *arg0 = json_as_string(json_array_at(args, 0), "");
+  struct ctx local_ctx = {0};
+  struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+  struct picomesh_int_result call_result =
+      relational_storage_db_shard_count(call_ctx, obj, hdrs, arg0);
+  if (PICOMESH_IS_ERR(call_result)) {
+    char chain[8192] = {0};
+    picomesh_error_snprint(chain, sizeof(chain), call_result.error);
+    snprintf(err, err_cap, "%s: %s", "relational_storage_db_shard_count",
+             chain[0] ? chain
+                      : (call_result.error.msg ? call_result.error.msg
+                                               : "<no message>"));
+    return PICOMESH_ERR(picomesh_void, "relational_storage_db_shard_count",
+                        call_result);
+  }
+  json_writer_int(result, (int64_t)call_result.value);
+  return PICOMESH_OK_VOID();
+}
+
+static struct picomesh_void_result relational_storage_db_exec_minvoke(
+    struct ctx *ctx, struct object *obj, struct yheaders *hdrs, cmp_ctx_t *_mr,
+    uint32_t _argc, cmp_ctx_t *_mw, char *_err, size_t _err_cap) {
+  (void)_mr;
+  if (_argc != 4u) {
+    snprintf(_err, _err_cap,
+             "relational_storage_db_exec: expected 4 arg(s), got %u", _argc);
+    return PICOMESH_ERR(picomesh_void,
+                        "relational_storage_db_exec: wrong argument count");
+  }
+  char _v0[4096];
+  {
+    uint32_t _sz = (uint32_t)sizeof(_v0);
+    if (!cmp_read_str(_mr, _v0, &_sz)) {
+      snprintf(_err, _err_cap, "db_name: expected str arg (%s)",
+               cmp_strerror(_mr));
+      return PICOMESH_ERR(picomesh_void, "minvoke: bad argument");
+    }
+  }
+  uint32_t _v1;
+  {
+    uint64_t _u;
+    if (!cmp_read_uinteger(_mr, &_u)) {
+      snprintf(_err, _err_cap, "shard_key: expected unsigned int (%s)",
+               cmp_strerror(_mr));
+      return PICOMESH_ERR(picomesh_void, "minvoke: bad argument");
+    }
+    if (_u > UINT32_MAX) {
+      snprintf(_err, _err_cap,
+               "shard_key: value %llu out of range for uint32_t",
+               (unsigned long long)_u);
+      return PICOMESH_ERR(picomesh_void, "minvoke: bad argument");
+    }
+    _v1 = (uint32_t)_u;
+  }
+  char _v2[4096];
+  {
+    uint32_t _sz = (uint32_t)sizeof(_v2);
+    if (!cmp_read_str(_mr, _v2, &_sz)) {
+      snprintf(_err, _err_cap, "sql: expected str arg (%s)", cmp_strerror(_mr));
+      return PICOMESH_ERR(picomesh_void, "minvoke: bad argument");
+    }
+  }
+  char _v3[4096];
+  {
+    uint32_t _sz = (uint32_t)sizeof(_v3);
+    if (!cmp_read_str(_mr, _v3, &_sz)) {
+      snprintf(_err, _err_cap, "args_json: expected str arg (%s)",
+               cmp_strerror(_mr));
+      return PICOMESH_ERR(picomesh_void, "minvoke: bad argument");
+    }
+  }
+  struct ctx local_ctx = {0};
+  struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+  struct picomesh_json_result call_result =
+      relational_storage_db_exec(call_ctx, obj, hdrs, _v0, _v1, _v2, _v3);
+  if (PICOMESH_IS_ERR(call_result)) {
+    char chain[8192] = {0};
+    picomesh_error_snprint(chain, sizeof(chain), call_result.error);
+    snprintf(_err, _err_cap, "%s: %s", "relational_storage_db_exec",
+             chain[0] ? chain
+                      : (call_result.error.msg ? call_result.error.msg
+                                               : "<no message>"));
+    return PICOMESH_ERR(picomesh_void, "relational_storage_db_exec",
+                        call_result);
+  }
+  {
+    const char *_sv = call_result.value ? call_result.value : "";
+    cmp_write_str(_mw, _sv, (uint32_t)strlen(_sv));
     free(call_result.value);
-    return PICOMESH_OK_VOID();
+  }
+  return PICOMESH_OK_VOID();
 }
 
-static struct picomesh_void_result relational_storage_db_query_jinvoke(struct ctx *ctx, struct object *obj,
-                          struct yheaders *hdrs, const struct json_value *args,
-                          struct json_writer *result, char *err, size_t err_cap)
-{
-    yinfo("[rpc] relational_storage_db_query");
-    const char *arg0 = json_as_string(json_array_at(args, 0), "");
-    uint32_t arg1 = (uint32_t)json_as_int(json_array_at(args, 1), 0);
-    const char *arg2 = json_as_string(json_array_at(args, 2), "");
-    const char *arg3 = json_as_string(json_array_at(args, 3), "");
-    struct ctx local_ctx = {0};
-    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct picomesh_json_result call_result = relational_storage_db_query(call_ctx, obj, hdrs, arg0, arg1, arg2, arg3);
-    if (PICOMESH_IS_ERR(call_result)) {
-        char chain[8192] = {0};
-        picomesh_error_snprint(chain, sizeof(chain), call_result.error);
-        snprintf(err, err_cap, "%s: %s", "relational_storage_db_query",
-                 chain[0] ? chain : (call_result.error.msg ? call_result.error.msg : "<no message>"));
-        return PICOMESH_ERR(picomesh_void, "relational_storage_db_query", call_result);
+static struct picomesh_void_result relational_storage_db_query_minvoke(
+    struct ctx *ctx, struct object *obj, struct yheaders *hdrs, cmp_ctx_t *_mr,
+    uint32_t _argc, cmp_ctx_t *_mw, char *_err, size_t _err_cap) {
+  (void)_mr;
+  if (_argc != 4u) {
+    snprintf(_err, _err_cap,
+             "relational_storage_db_query: expected 4 arg(s), got %u", _argc);
+    return PICOMESH_ERR(picomesh_void,
+                        "relational_storage_db_query: wrong argument count");
+  }
+  char _v0[4096];
+  {
+    uint32_t _sz = (uint32_t)sizeof(_v0);
+    if (!cmp_read_str(_mr, _v0, &_sz)) {
+      snprintf(_err, _err_cap, "db_name: expected str arg (%s)",
+               cmp_strerror(_mr));
+      return PICOMESH_ERR(picomesh_void, "minvoke: bad argument");
     }
-    json_writer_raw(result, call_result.value ? call_result.value : "null");
+  }
+  uint32_t _v1;
+  {
+    uint64_t _u;
+    if (!cmp_read_uinteger(_mr, &_u)) {
+      snprintf(_err, _err_cap, "shard_key: expected unsigned int (%s)",
+               cmp_strerror(_mr));
+      return PICOMESH_ERR(picomesh_void, "minvoke: bad argument");
+    }
+    if (_u > UINT32_MAX) {
+      snprintf(_err, _err_cap,
+               "shard_key: value %llu out of range for uint32_t",
+               (unsigned long long)_u);
+      return PICOMESH_ERR(picomesh_void, "minvoke: bad argument");
+    }
+    _v1 = (uint32_t)_u;
+  }
+  char _v2[4096];
+  {
+    uint32_t _sz = (uint32_t)sizeof(_v2);
+    if (!cmp_read_str(_mr, _v2, &_sz)) {
+      snprintf(_err, _err_cap, "sql: expected str arg (%s)", cmp_strerror(_mr));
+      return PICOMESH_ERR(picomesh_void, "minvoke: bad argument");
+    }
+  }
+  char _v3[4096];
+  {
+    uint32_t _sz = (uint32_t)sizeof(_v3);
+    if (!cmp_read_str(_mr, _v3, &_sz)) {
+      snprintf(_err, _err_cap, "args_json: expected str arg (%s)",
+               cmp_strerror(_mr));
+      return PICOMESH_ERR(picomesh_void, "minvoke: bad argument");
+    }
+  }
+  struct ctx local_ctx = {0};
+  struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+  struct picomesh_json_result call_result =
+      relational_storage_db_query(call_ctx, obj, hdrs, _v0, _v1, _v2, _v3);
+  if (PICOMESH_IS_ERR(call_result)) {
+    char chain[8192] = {0};
+    picomesh_error_snprint(chain, sizeof(chain), call_result.error);
+    snprintf(_err, _err_cap, "%s: %s", "relational_storage_db_query",
+             chain[0] ? chain
+                      : (call_result.error.msg ? call_result.error.msg
+                                               : "<no message>"));
+    return PICOMESH_ERR(picomesh_void, "relational_storage_db_query",
+                        call_result);
+  }
+  {
+    const char *_sv = call_result.value ? call_result.value : "";
+    cmp_write_str(_mw, _sv, (uint32_t)strlen(_sv));
     free(call_result.value);
-    return PICOMESH_OK_VOID();
+  }
+  return PICOMESH_OK_VOID();
 }
 
-static struct picomesh_void_result relational_storage_db_shard_count_jinvoke(struct ctx *ctx, struct object *obj,
-                          struct yheaders *hdrs, const struct json_value *args,
-                          struct json_writer *result, char *err, size_t err_cap)
-{
-    yinfo("[rpc] relational_storage_db_shard_count");
-    const char *arg0 = json_as_string(json_array_at(args, 0), "");
-    struct ctx local_ctx = {0};
-    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct picomesh_int_result call_result = relational_storage_db_shard_count(call_ctx, obj, hdrs, arg0);
-    if (PICOMESH_IS_ERR(call_result)) {
-        char chain[8192] = {0};
-        picomesh_error_snprint(chain, sizeof(chain), call_result.error);
-        snprintf(err, err_cap, "%s: %s", "relational_storage_db_shard_count",
-                 chain[0] ? chain : (call_result.error.msg ? call_result.error.msg : "<no message>"));
-        return PICOMESH_ERR(picomesh_void, "relational_storage_db_shard_count", call_result);
+static struct picomesh_void_result relational_storage_db_shard_count_minvoke(
+    struct ctx *ctx, struct object *obj, struct yheaders *hdrs, cmp_ctx_t *_mr,
+    uint32_t _argc, cmp_ctx_t *_mw, char *_err, size_t _err_cap) {
+  (void)_mr;
+  if (_argc != 1u) {
+    snprintf(_err, _err_cap,
+             "relational_storage_db_shard_count: expected 1 arg(s), got %u",
+             _argc);
+    return PICOMESH_ERR(
+        picomesh_void,
+        "relational_storage_db_shard_count: wrong argument count");
+  }
+  char _v0[4096];
+  {
+    uint32_t _sz = (uint32_t)sizeof(_v0);
+    if (!cmp_read_str(_mr, _v0, &_sz)) {
+      snprintf(_err, _err_cap, "db_name: expected str arg (%s)",
+               cmp_strerror(_mr));
+      return PICOMESH_ERR(picomesh_void, "minvoke: bad argument");
     }
-    json_writer_int(result, (int64_t)call_result.value);
-    return PICOMESH_OK_VOID();
+  }
+  struct ctx local_ctx = {0};
+  struct ctx *call_ctx = ctx ? ctx : &local_ctx;
+  struct picomesh_int_result call_result =
+      relational_storage_db_shard_count(call_ctx, obj, hdrs, _v0);
+  if (PICOMESH_IS_ERR(call_result)) {
+    char chain[8192] = {0};
+    picomesh_error_snprint(chain, sizeof(chain), call_result.error);
+    snprintf(_err, _err_cap, "%s: %s", "relational_storage_db_shard_count",
+             chain[0] ? chain
+                      : (call_result.error.msg ? call_result.error.msg
+                                               : "<no message>"));
+    return PICOMESH_ERR(picomesh_void, "relational_storage_db_shard_count",
+                        call_result);
+  }
+  cmp_write_integer(_mw, (int64_t)call_result.value);
+  return PICOMESH_OK_VOID();
 }
 
-static struct picomesh_void_result relational_storage_db_exec_minvoke(struct ctx *ctx, struct object *obj,
-                          struct yheaders *hdrs, cmp_ctx_t *_mr, uint32_t _argc,
-                          cmp_ctx_t *_mw, char *_err, size_t _err_cap)
-{
-    (void)_mr;
-    if (_argc != 4u) {
-        snprintf(_err, _err_cap, "relational_storage_db_exec: expected 4 arg(s), got %u", _argc);
-        return PICOMESH_ERR(picomesh_void, "relational_storage_db_exec: wrong argument count");
-    }
-    char _v0[4096];
-    {
-        uint32_t _sz = (uint32_t)sizeof(_v0);
-        if (!cmp_read_str(_mr, _v0, &_sz)) {
-            snprintf(_err, _err_cap, "db_name: expected str arg (%s)", cmp_strerror(_mr));
-            return PICOMESH_ERR(picomesh_void, "minvoke: bad argument");
-        }
-    }
-    uint32_t _v1;
-    {
-        uint64_t _u;
-        if (!cmp_read_uinteger(_mr, &_u)) { snprintf(_err, _err_cap, "shard_key: expected unsigned int (%s)", cmp_strerror(_mr)); return PICOMESH_ERR(picomesh_void, "minvoke: bad argument"); }
-        if (_u > UINT32_MAX) { snprintf(_err, _err_cap, "shard_key: value %llu out of range for uint32_t", (unsigned long long)_u); return PICOMESH_ERR(picomesh_void, "minvoke: bad argument"); }
-        _v1 = (uint32_t)_u;
-    }
-    char _v2[4096];
-    {
-        uint32_t _sz = (uint32_t)sizeof(_v2);
-        if (!cmp_read_str(_mr, _v2, &_sz)) {
-            snprintf(_err, _err_cap, "sql: expected str arg (%s)", cmp_strerror(_mr));
-            return PICOMESH_ERR(picomesh_void, "minvoke: bad argument");
-        }
-    }
-    char _v3[4096];
-    {
-        uint32_t _sz = (uint32_t)sizeof(_v3);
-        if (!cmp_read_str(_mr, _v3, &_sz)) {
-            snprintf(_err, _err_cap, "args_json: expected str arg (%s)", cmp_strerror(_mr));
-            return PICOMESH_ERR(picomesh_void, "minvoke: bad argument");
-        }
-    }
-    struct ctx local_ctx = {0};
-    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct picomesh_json_result call_result = relational_storage_db_exec(call_ctx, obj, hdrs, _v0, _v1, _v2, _v3);
-    if (PICOMESH_IS_ERR(call_result)) {
-        char chain[8192] = {0};
-        picomesh_error_snprint(chain, sizeof(chain), call_result.error);
-        snprintf(_err, _err_cap, "%s: %s", "relational_storage_db_exec",
-                 chain[0] ? chain : (call_result.error.msg ? call_result.error.msg : "<no message>"));
-        return PICOMESH_ERR(picomesh_void, "relational_storage_db_exec", call_result);
-    }
-    {
-        const char *_sv = call_result.value ? call_result.value : "";
-        cmp_write_str(_mw, _sv, (uint32_t)strlen(_sv));
-        free(call_result.value);
-    }
-    return PICOMESH_OK_VOID();
+struct object_ptr_result relational_storage_db_create(struct ctx *ctx) {
+  ydebug("class=relational_storage_db");
+  struct class_ptr_result _kr = relational_storage_db_class_get();
+  if (PICOMESH_IS_ERR(_kr))
+    return PICOMESH_ERR(
+        object_ptr, "relational_storage_db_create: class accessor failed", _kr);
+  /* A service dependency is acquired once and cached for the connection
+   * (remote) / process (in-process) lifetime — no per-call create. */
+  return rpc_object_acquire(ctx, _kr.value, "relational_storage_db");
 }
 
-static struct picomesh_void_result relational_storage_db_query_minvoke(struct ctx *ctx, struct object *obj,
-                          struct yheaders *hdrs, cmp_ctx_t *_mr, uint32_t _argc,
-                          cmp_ctx_t *_mw, char *_err, size_t _err_cap)
-{
-    (void)_mr;
-    if (_argc != 4u) {
-        snprintf(_err, _err_cap, "relational_storage_db_query: expected 4 arg(s), got %u", _argc);
-        return PICOMESH_ERR(picomesh_void, "relational_storage_db_query: wrong argument count");
-    }
-    char _v0[4096];
-    {
-        uint32_t _sz = (uint32_t)sizeof(_v0);
-        if (!cmp_read_str(_mr, _v0, &_sz)) {
-            snprintf(_err, _err_cap, "db_name: expected str arg (%s)", cmp_strerror(_mr));
-            return PICOMESH_ERR(picomesh_void, "minvoke: bad argument");
-        }
-    }
-    uint32_t _v1;
-    {
-        uint64_t _u;
-        if (!cmp_read_uinteger(_mr, &_u)) { snprintf(_err, _err_cap, "shard_key: expected unsigned int (%s)", cmp_strerror(_mr)); return PICOMESH_ERR(picomesh_void, "minvoke: bad argument"); }
-        if (_u > UINT32_MAX) { snprintf(_err, _err_cap, "shard_key: value %llu out of range for uint32_t", (unsigned long long)_u); return PICOMESH_ERR(picomesh_void, "minvoke: bad argument"); }
-        _v1 = (uint32_t)_u;
-    }
-    char _v2[4096];
-    {
-        uint32_t _sz = (uint32_t)sizeof(_v2);
-        if (!cmp_read_str(_mr, _v2, &_sz)) {
-            snprintf(_err, _err_cap, "sql: expected str arg (%s)", cmp_strerror(_mr));
-            return PICOMESH_ERR(picomesh_void, "minvoke: bad argument");
-        }
-    }
-    char _v3[4096];
-    {
-        uint32_t _sz = (uint32_t)sizeof(_v3);
-        if (!cmp_read_str(_mr, _v3, &_sz)) {
-            snprintf(_err, _err_cap, "args_json: expected str arg (%s)", cmp_strerror(_mr));
-            return PICOMESH_ERR(picomesh_void, "minvoke: bad argument");
-        }
-    }
-    struct ctx local_ctx = {0};
-    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct picomesh_json_result call_result = relational_storage_db_query(call_ctx, obj, hdrs, _v0, _v1, _v2, _v3);
-    if (PICOMESH_IS_ERR(call_result)) {
-        char chain[8192] = {0};
-        picomesh_error_snprint(chain, sizeof(chain), call_result.error);
-        snprintf(_err, _err_cap, "%s: %s", "relational_storage_db_query",
-                 chain[0] ? chain : (call_result.error.msg ? call_result.error.msg : "<no message>"));
-        return PICOMESH_ERR(picomesh_void, "relational_storage_db_query", call_result);
-    }
-    {
-        const char *_sv = call_result.value ? call_result.value : "";
-        cmp_write_str(_mw, _sv, (uint32_t)strlen(_sv));
-        free(call_result.value);
-    }
-    return PICOMESH_OK_VOID();
-}
+/* ---- relational_storage: jinvoke table ------------------------------------
+ */
 
-static struct picomesh_void_result relational_storage_db_shard_count_minvoke(struct ctx *ctx, struct object *obj,
-                          struct yheaders *hdrs, cmp_ctx_t *_mr, uint32_t _argc,
-                          cmp_ctx_t *_mw, char *_err, size_t _err_cap)
-{
-    (void)_mr;
-    if (_argc != 1u) {
-        snprintf(_err, _err_cap, "relational_storage_db_shard_count: expected 1 arg(s), got %u", _argc);
-        return PICOMESH_ERR(picomesh_void, "relational_storage_db_shard_count: wrong argument count");
-    }
-    char _v0[4096];
-    {
-        uint32_t _sz = (uint32_t)sizeof(_v0);
-        if (!cmp_read_str(_mr, _v0, &_sz)) {
-            snprintf(_err, _err_cap, "db_name: expected str arg (%s)", cmp_strerror(_mr));
-            return PICOMESH_ERR(picomesh_void, "minvoke: bad argument");
-        }
-    }
-    struct ctx local_ctx = {0};
-    struct ctx *call_ctx = ctx ? ctx : &local_ctx;
-    struct picomesh_int_result call_result = relational_storage_db_shard_count(call_ctx, obj, hdrs, _v0);
-    if (PICOMESH_IS_ERR(call_result)) {
-        char chain[8192] = {0};
-        picomesh_error_snprint(chain, sizeof(chain), call_result.error);
-        snprintf(_err, _err_cap, "%s: %s", "relational_storage_db_shard_count",
-                 chain[0] ? chain : (call_result.error.msg ? call_result.error.msg : "<no message>"));
-        return PICOMESH_ERR(picomesh_void, "relational_storage_db_shard_count", call_result);
-    }
-    cmp_write_integer(_mw, (int64_t)call_result.value);
-    return PICOMESH_OK_VOID();
-}
-
-struct object_ptr_result relational_storage_db_create(struct ctx *ctx)
-{
-    ydebug("class=relational_storage_db");
-    struct class_ptr_result _kr = relational_storage_db_class_get();
-    if (PICOMESH_IS_ERR(_kr))
-        return PICOMESH_ERR(object_ptr, "relational_storage_db_create: class accessor failed", _kr);
-    /* A service dependency is acquired once and cached for the connection
-     * (remote) / process (in-process) lifetime — no per-call create. */
-    return rpc_object_acquire(ctx, _kr.value, "relational_storage_db");
-}
-
-
-/* ---- relational_storage: jinvoke table ------------------------------------ */
-
-struct relational_storage_jinvoke_row { const char *name; jinvoke_fn fn; };
-
-static const struct relational_storage_jinvoke_row relational_storage_jinvoke_rows[] = {
-    {"relational_storage_db_exec", relational_storage_db_exec_jinvoke},
-    {"relational_storage_db_query", relational_storage_db_query_jinvoke},
-    {"relational_storage_db_shard_count", relational_storage_db_shard_count_jinvoke}
+struct relational_storage_jinvoke_row {
+  const char *name;
+  jinvoke_fn fn;
 };
 
-static jinvoke_fn relational_storage_jinvoke_lookup(const char *qname)
-{
-    for (size_t i = 0;
-         i < sizeof(relational_storage_jinvoke_rows) / sizeof(relational_storage_jinvoke_rows[0]); ++i)
-        if (strcmp(relational_storage_jinvoke_rows[i].name, qname) == 0)
-            return relational_storage_jinvoke_rows[i].fn;
-    return NULL;
+static const struct relational_storage_jinvoke_row
+    relational_storage_jinvoke_rows[] = {
+        {"relational_storage_db_exec", relational_storage_db_exec_jinvoke},
+        {"relational_storage_db_query", relational_storage_db_query_jinvoke},
+        {"relational_storage_db_shard_count",
+         relational_storage_db_shard_count_jinvoke}};
+
+static jinvoke_fn relational_storage_jinvoke_lookup(const char *qname) {
+  for (size_t i = 0; i < sizeof(relational_storage_jinvoke_rows) /
+                             sizeof(relational_storage_jinvoke_rows[0]);
+       ++i)
+    if (strcmp(relational_storage_jinvoke_rows[i].name, qname) == 0)
+      return relational_storage_jinvoke_rows[i].fn;
+  return NULL;
 }
 
-/* ---- relational_storage: minvoke table ------------------------------------ */
+/* ---- relational_storage: minvoke table ------------------------------------
+ */
 
-struct relational_storage_minvoke_row { const char *name; minvoke_fn fn; };
-
-static const struct relational_storage_minvoke_row relational_storage_minvoke_rows[] = {
-    {"relational_storage_db_exec", relational_storage_db_exec_minvoke},
-    {"relational_storage_db_query", relational_storage_db_query_minvoke},
-    {"relational_storage_db_shard_count", relational_storage_db_shard_count_minvoke}
+struct relational_storage_minvoke_row {
+  const char *name;
+  minvoke_fn fn;
 };
 
-static minvoke_fn relational_storage_minvoke_lookup(const char *qname)
-{
-    for (size_t i = 0;
-         i < sizeof(relational_storage_minvoke_rows) / sizeof(relational_storage_minvoke_rows[0]); ++i)
-        if (strcmp(relational_storage_minvoke_rows[i].name, qname) == 0)
-            return relational_storage_minvoke_rows[i].fn;
-    return NULL;
+static const struct relational_storage_minvoke_row
+    relational_storage_minvoke_rows[] = {
+        {"relational_storage_db_exec", relational_storage_db_exec_minvoke},
+        {"relational_storage_db_query", relational_storage_db_query_minvoke},
+        {"relational_storage_db_shard_count",
+         relational_storage_db_shard_count_minvoke}};
+
+static minvoke_fn relational_storage_minvoke_lookup(const char *qname) {
+  for (size_t i = 0; i < sizeof(relational_storage_minvoke_rows) /
+                             sizeof(relational_storage_minvoke_rows[0]);
+       ++i)
+    if (strcmp(relational_storage_minvoke_rows[i].name, qname) == 0)
+      return relational_storage_minvoke_rows[i].fn;
+  return NULL;
 }
 
-/* ---- relational_storage: per-method parameter signatures (runtime reflection) -- */
+/* ---- relational_storage: per-method parameter signatures (runtime reflection)
+ * -- */
 
 static const struct jinvoke_param relational_storage_db_exec_params[] = {
     {"db_name", "const char *"},
     {"shard_key", "uint32_t"},
     {"sql", "const char *"},
-    {"args_json", "const char *"}
-};
+    {"args_json", "const char *"}};
 static const struct jinvoke_param relational_storage_db_query_params[] = {
     {"db_name", "const char *"},
     {"shard_key", "uint32_t"},
     {"sql", "const char *"},
-    {"args_json", "const char *"}
-};
+    {"args_json", "const char *"}};
 static const struct jinvoke_param relational_storage_db_shard_count_params[] = {
-    {"db_name", "const char *"}
-};
-struct relational_storage_params_row { const char *name; struct jinvoke_params params; };
-
-static const struct relational_storage_params_row relational_storage_params_rows[] = {
-    {"relational_storage_db_exec", {relational_storage_db_exec_params, 4}},
-    {"relational_storage_db_query", {relational_storage_db_query_params, 4}},
-    {"relational_storage_db_shard_count", {relational_storage_db_shard_count_params, 1}}
+    {"db_name", "const char *"}};
+struct relational_storage_params_row {
+  const char *name;
+  struct jinvoke_params params;
 };
 
-static const struct jinvoke_params *relational_storage_params_lookup(const char *qname)
-{
-    for (size_t i = 0;
-         i < sizeof(relational_storage_params_rows) / sizeof(relational_storage_params_rows[0]); ++i)
-        if (strcmp(relational_storage_params_rows[i].name, qname) == 0)
-            return &relational_storage_params_rows[i].params;
-    return NULL;
+static const struct relational_storage_params_row
+    relational_storage_params_rows[] = {
+        {"relational_storage_db_exec", {relational_storage_db_exec_params, 4}},
+        {"relational_storage_db_query",
+         {relational_storage_db_query_params, 4}},
+        {"relational_storage_db_shard_count",
+         {relational_storage_db_shard_count_params, 1}}};
+
+static const struct jinvoke_params *
+relational_storage_params_lookup(const char *qname) {
+  for (size_t i = 0; i < sizeof(relational_storage_params_rows) /
+                             sizeof(relational_storage_params_rows[0]);
+       ++i)
+    if (strcmp(relational_storage_params_rows[i].name, qname) == 0)
+      return &relational_storage_params_rows[i].params;
+  return NULL;
 }
-/* ---- relational_storage: class name → accessor (lazy) ---------------------- */
+/* ---- relational_storage: class name → accessor (lazy) ----------------------
+ */
 
-static struct class_ptr_result relational_storage_accessor_lookup(const char *name)
-{
-    if (strcmp(name, "relational_storage_db") == 0) return relational_storage_db_class_get();
-    return PICOMESH_OK(class_ptr, NULL);
+static struct class_ptr_result
+relational_storage_accessor_lookup(const char *name) {
+  if (strcmp(name, "relational_storage_db") == 0)
+    return relational_storage_db_class_get();
+  return PICOMESH_OK(class_ptr, NULL);
 }
 
-/* ---- relational_storage: slot → skel, name-keyed static data --------------- */
+/* ---- relational_storage: slot → skel, name-keyed static data ---------------
+ */
 
-struct relational_storage_skel_row { const char *name; rpc_skel_fn fn; };
-
-static const struct relational_storage_skel_row relational_storage_skel_rows[] = {
-    {"relational_storage_db_exec", relational_storage_db_exec_skel},
-    {"relational_storage_db_query", relational_storage_db_query_skel},
-    {"relational_storage_db_shard_count", relational_storage_db_shard_count_skel}
+struct relational_storage_skel_row {
+  const char *name;
+  rpc_skel_fn fn;
 };
 
-static rpc_skel_fn relational_storage_skel_lookup(const char *name)
-{
-    /* rpc_skel_for has already resolved the slot to its qname (the only
-     * Result-returning step), so this hook is a pure name→fn lookup that
-     * never has to swallow an error. */
-    for (size_t i = 0; i < sizeof(relational_storage_skel_rows) / sizeof(relational_storage_skel_rows[0]); ++i)
-        if (strcmp(relational_storage_skel_rows[i].name, name) == 0)
-            return relational_storage_skel_rows[i].fn;
-    return NULL;
+static const struct relational_storage_skel_row relational_storage_skel_rows[] =
+    {{"relational_storage_db_exec", relational_storage_db_exec_skel},
+     {"relational_storage_db_query", relational_storage_db_query_skel},
+     {"relational_storage_db_shard_count",
+      relational_storage_db_shard_count_skel}};
+
+static rpc_skel_fn relational_storage_skel_lookup(const char *name) {
+  /* rpc_skel_for has already resolved the slot to its qname (the only
+   * Result-returning step), so this hook is a pure name→fn lookup that
+   * never has to swallow an error. */
+  for (size_t i = 0; i < sizeof(relational_storage_skel_rows) /
+                             sizeof(relational_storage_skel_rows[0]);
+       ++i)
+    if (strcmp(relational_storage_skel_rows[i].name, name) == 0)
+      return relational_storage_skel_rows[i].fn;
+  return NULL;
 }
 
 /* ---- relational_storage: registration entry point (called from the driver for
  *      config-ACTIVATED plugins only — registration is activation) ---- */
 
-struct picomesh_void_result picomesh_plugin_relational_storage_register(void)
-{
-    struct picomesh_void_result _ar = class_add_accessor_lookup(relational_storage_accessor_lookup);
-    PICOMESH_RETURN_IF_ERR(picomesh_void, _ar,
-                           "picomesh_plugin_relational_storage_register: add accessor lookup");
-    rpc_add_skel_lookup(relational_storage_skel_lookup);
-    jinvoke_add_lookup(relational_storage_jinvoke_lookup);
-    minvoke_add_lookup(relational_storage_minvoke_lookup);
-    jinvoke_params_add_lookup(relational_storage_params_lookup);
-    { struct class_ptr_result reg = relational_storage_db_class_get();
-      PICOMESH_RETURN_IF_ERR(picomesh_void, reg, "relational_storage register: prewarm relational_storage_db_class_get"); }
-    return PICOMESH_OK_VOID();
+struct picomesh_void_result picomesh_plugin_relational_storage_register(void) {
+  struct picomesh_void_result _ar =
+      class_add_accessor_lookup(relational_storage_accessor_lookup);
+  PICOMESH_RETURN_IF_ERR(
+      picomesh_void, _ar,
+      "picomesh_plugin_relational_storage_register: add accessor lookup");
+  rpc_add_skel_lookup(relational_storage_skel_lookup);
+  jinvoke_add_lookup(relational_storage_jinvoke_lookup);
+  minvoke_add_lookup(relational_storage_minvoke_lookup);
+  jinvoke_params_add_lookup(relational_storage_params_lookup);
+  {
+    struct class_ptr_result reg = relational_storage_db_class_get();
+    PICOMESH_RETURN_IF_ERR(
+        picomesh_void, reg,
+        "relational_storage register: prewarm relational_storage_db_class_get");
+  }
+  return PICOMESH_OK_VOID();
 }

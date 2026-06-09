@@ -4,11 +4,11 @@
  * that yields the calling coroutine on EAGAIN comes in the next layer
  * (see src/picomesh/picoco/) — this file stays portable. */
 
+#include <picomesh/core/result.h>
+#include <picomesh/core/ytrace.h>
 #include <picomesh/msgpack/msgpack.h>
 #include <picomesh/picoclass/rpc.h>
 #include <picomesh/picoclass/yheaders.h>
-#include <picomesh/core/result.h>
-#include <picomesh/core/ytrace.h>
 
 #include <uthash.h>
 
@@ -188,8 +188,8 @@ static int rpc_handle_release(uint64_t handle) {
   return 0;
 }
 
-static struct picomesh_size_result handle_destroy(const void *body, size_t body_len,
-                                                  void *resp, size_t resp_max) {
+static struct picomesh_size_result
+handle_destroy(const void *body, size_t body_len, void *resp, size_t resp_max) {
   if (body_len < sizeof(uint64_t) || resp_max < 1)
     return PICOMESH_ERR(picomesh_size, "handle_destroy: short body / resp");
   uint64_t handle;
@@ -201,14 +201,18 @@ static struct picomesh_size_result handle_destroy(const void *body, size_t body_
 
 /* Forward declarations for the admin op handlers, plus a unified
  * dispatcher used by the HTTP /_rpc endpoint. */
-static struct picomesh_size_result handle_resolve_slot(const void *body, size_t body_len,
-                                                       void *resp, size_t resp_max);
-static struct picomesh_size_result handle_get_class(const void *body, size_t body_len,
-                                                    void *resp, size_t resp_max);
-static struct picomesh_size_result handle_create(const void *body, size_t body_len,
-                                                 void *resp, size_t resp_max);
+static struct picomesh_size_result handle_resolve_slot(const void *body,
+                                                       size_t body_len,
+                                                       void *resp,
+                                                       size_t resp_max);
+static struct picomesh_size_result handle_get_class(const void *body,
+                                                    size_t body_len, void *resp,
+                                                    size_t resp_max);
+static struct picomesh_size_result
+handle_create(const void *body, size_t body_len, void *resp, size_t resp_max);
 
-struct picomesh_size_result rpc_handle_admin_op(enum rpc_op op, const void *body,
+struct picomesh_size_result rpc_handle_admin_op(enum rpc_op op,
+                                                const void *body,
                                                 size_t body_len, void *resp,
                                                 size_t resp_max) {
   switch (op) {
@@ -275,8 +279,10 @@ static int write_full(int fd, const void *buf, size_t count) {
   return fd_write(&io, buf, count) == count ? 0 : -1;
 }
 
-static struct picomesh_size_result handle_resolve_slot(const void *body, size_t body_len,
-                                                       void *resp, size_t resp_max) {
+static struct picomesh_size_result handle_resolve_slot(const void *body,
+                                                       size_t body_len,
+                                                       void *resp,
+                                                       size_t resp_max) {
   char name[128];
   size_t name_len = body_len < sizeof(name) - 1 ? body_len : sizeof(name) - 1;
   memcpy(name, body, name_len);
@@ -320,40 +326,46 @@ static void get_class_emit(const char *name, method_slot slot, void *userdata) {
   emit_ctx->off += 4;
 }
 
-static struct picomesh_size_result handle_get_class(const void *body, size_t body_len,
-                                                    void *resp, size_t resp_max) {
+static struct picomesh_size_result handle_get_class(const void *body,
+                                                    size_t body_len, void *resp,
+                                                    size_t resp_max) {
   char name[128];
   size_t name_len = body_len < sizeof(name) - 1 ? body_len : sizeof(name) - 1;
   memcpy(name, body, name_len);
   name[name_len] = 0;
   struct class_ptr_result class_res = class_by_name(name);
-  PICOMESH_RETURN_IF_ERR(picomesh_size, class_res, "handle_get_class: class_by_name");
+  PICOMESH_RETURN_IF_ERR(picomesh_size, class_res,
+                         "handle_get_class: class_by_name");
   struct get_class_ctx emit_ctx = {resp, 0, resp_max};
-  PICOMESH_RETURN_IF_ERR(picomesh_size,
-                         class_for_each_slot(class_res.value, get_class_emit, &emit_ctx),
-                         "handle_get_class: class_for_each_slot");
+  PICOMESH_RETURN_IF_ERR(
+      picomesh_size,
+      class_for_each_slot(class_res.value, get_class_emit, &emit_ctx),
+      "handle_get_class: class_for_each_slot");
   ydebug("get_class('%s') -> %zu entries (%zu bytes)", name, emit_ctx.off / 6,
          emit_ctx.off);
   return PICOMESH_OK(picomesh_size, emit_ctx.off);
 }
 
-static struct picomesh_size_result handle_create(const void *body, size_t body_len,
-                                                 void *resp, size_t resp_max) {
+static struct picomesh_size_result
+handle_create(const void *body, size_t body_len, void *resp, size_t resp_max) {
   char name[128];
   size_t name_len = body_len < sizeof(name) - 1 ? body_len : sizeof(name) - 1;
   memcpy(name, body, name_len);
   name[name_len] = 0;
   struct class_ptr_result class_res = class_by_name(name);
-  PICOMESH_RETURN_IF_ERR(picomesh_size, class_res, "handle_create: class_by_name");
+  PICOMESH_RETURN_IF_ERR(picomesh_size, class_res,
+                         "handle_create: class_by_name");
   struct object_ptr_result object_res = object_alloc(class_res.value);
-  PICOMESH_RETURN_IF_ERR(picomesh_size, object_res, "handle_create: object_alloc");
+  PICOMESH_RETURN_IF_ERR(picomesh_size, object_res,
+                         "handle_create: object_alloc");
   uint64_t handle = rpc_register_object(object_res.value);
   if (handle == 0) {
     /* Object table full: registration failed. Free the just-allocated object
      * (else it leaks, live but unreachable) and surface the failure rather
      * than handing back the invalid handle 0. */
     object_free(object_res.value);
-    return PICOMESH_ERR(picomesh_size, "handle_create: object handle table full");
+    return PICOMESH_ERR(picomesh_size,
+                        "handle_create: object handle table full");
   }
   if (resp_max < sizeof(handle))
     return PICOMESH_ERR(picomesh_size, "handle_create: resp too small");
@@ -371,7 +383,8 @@ struct picomesh_size_result rpc_dispatch_one(uint32_t header, const void *body,
   switch (op) {
   case RPC_OP_CALL: {
     struct rpc_skel_fn_result skel = rpc_skel_for((method_slot)id);
-    PICOMESH_RETURN_IF_ERR(picomesh_size, skel, "rpc_dispatch_one: skel lookup");
+    PICOMESH_RETURN_IF_ERR(picomesh_size, skel,
+                           "rpc_dispatch_one: skel lookup");
     if (!skel.value)
       return PICOMESH_ERR(picomesh_size, "rpc_dispatch_one: no skel for slot");
     ydebug("CALL slot=%u body_len=%zu", id, body_len);
@@ -389,7 +402,6 @@ struct picomesh_size_result rpc_dispatch_one(uint32_t header, const void *body,
     return PICOMESH_ERR(picomesh_size, "rpc_dispatch_one: unknown op");
   }
 }
-
 
 /* -------- client session ------------------------------------------- */
 
@@ -985,8 +997,9 @@ size_t rpc_call(struct peer_channel *channel, enum rpc_op op, uint32_t id,
   return resp_len;
 }
 
-struct picomesh_uint32_result peer_channel_ensure_remote_id(struct peer_channel *channel,
-                                       method_slot local_slot) {
+struct picomesh_uint32_result
+peer_channel_ensure_remote_id(struct peer_channel *channel,
+                              method_slot local_slot) {
   if (!channel)
     return PICOMESH_OK(picomesh_uint32, RPC_REMOTE_ID_UNRESOLVED);
   uint32_t cached = peer_channel_remote_id(channel, local_slot);
@@ -996,7 +1009,9 @@ struct picomesh_uint32_result peer_channel_ensure_remote_id(struct peer_channel 
   /* A slot the caller holds must have a name; a lookup failure is a real
    * error to propagate, not a silent "unresolved". */
   struct const_char_ptr_result name_res = method_slot_name(local_slot);
-  PICOMESH_RETURN_IF_ERR(picomesh_uint32, name_res, "peer_channel_ensure_remote_id: method slot name lookup failed");
+  PICOMESH_RETURN_IF_ERR(
+      picomesh_uint32, name_res,
+      "peer_channel_ensure_remote_id: method slot name lookup failed");
   const char *name = name_res.value;
 
   uint32_t remote = RPC_REMOTE_ID_UNRESOLVED;
@@ -1012,8 +1027,9 @@ struct picomesh_uint32_result peer_channel_ensure_remote_id(struct peer_channel 
   return PICOMESH_OK(picomesh_uint32, remote);
 }
 
-struct picomesh_int_result peer_channel_translate_class(struct peer_channel *channel,
-                                 const char *class_name) {
+struct picomesh_int_result
+peer_channel_translate_class(struct peer_channel *channel,
+                             const char *class_name) {
   if (!channel || !class_name)
     return PICOMESH_OK(picomesh_int, -1);
   struct translated_class *translated = NULL;
