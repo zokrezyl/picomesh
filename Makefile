@@ -14,6 +14,8 @@
 CMAKE   ?= cmake
 NINJA   ?= ninja
 JOBS    ?= $(shell nproc 2>/dev/null || echo 4)
+# Prefer a plain `clang-format`, else a versioned one on PATH (e.g. clang-format-20).
+CLANG_FORMAT ?= $(shell command -v clang-format 2>/dev/null || command -v clang-format-20 2>/dev/null || echo clang-format)
 
 BUILD_DIR_RELEASE := build-desktop-release
 BUILD_DIR_DEBUG   := build-desktop-debug
@@ -25,7 +27,7 @@ BUILD_DIR_CODEGEN := build-codegen
 BUILD_DIR_WEBASM_YEMU := build-webasm-yemu-release
 BUILD_DIR_QA      := build-qa-tools
 
-.PHONY: help all build-desktop-release build-desktop-debug build-desktop-asan build-linux-riscv64-release build-deploy build-yemu-release run-qemu build-webasm-yemu-release run-node run-webserver run-codegen result-checker perf-picoforge perf-throughput-notracing perf-throughput-tracing clean
+.PHONY: help all build-desktop-release build-desktop-debug build-desktop-asan build-linux-riscv64-release build-deploy build-yemu-release run-qemu build-webasm-yemu-release run-node run-webserver run-codegen format-code result-checker perf-picoforge perf-throughput-notracing perf-throughput-tracing clean
 
 # AddressSanitizer flags. Frame pointers for readable traces; the same flags
 # go on compile AND link so the asan runtime is pulled in. The vendored static
@@ -47,6 +49,23 @@ SEED_USERS       ?= 0
 
 help:
 	@awk 'BEGIN{FS=":"} /^## / {sub(/^## /,""); print "  " $$0}' $(MAKEFILE_LIST)
+
+## format-code            clang-format -i the C/C++ under ./include and ./src
+#
+# Formats every hand-written .c/.h/.cc/.cpp/.hpp in ./include and ./src in place.
+# Generated codegen outputs (*.gen.c / *.gen.h) are SKIPPED: they carry a
+# "GENERATED — do not edit" banner and are reproduced by `make run-codegen`, so
+# formatting them would only create drift the next codegen run overwrites.
+# Override the binary with `make format-code CLANG_FORMAT=clang-format-18`.
+format-code:
+	@command -v $(CLANG_FORMAT) >/dev/null 2>&1 || \
+		{ echo "format-code: '$(CLANG_FORMAT)' not found — install clang-format or set CLANG_FORMAT=<binary>"; exit 1; }
+	@echo "format-code: $$($(CLANG_FORMAT) --version)"
+	@find include src -type f \
+		\( -name '*.c' -o -name '*.h' -o -name '*.cc' -o -name '*.cpp' -o -name '*.hpp' \) \
+		! -name '*.gen.c' ! -name '*.gen.h' -print0 \
+		| xargs -0 -r $(CLANG_FORMAT) -i
+	@echo "format-code: done (include/ src/, generated *.gen.* skipped)"
 
 ## run-codegen            regenerate checked-in plugin codegen outputs
 run-codegen:

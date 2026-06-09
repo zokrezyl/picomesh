@@ -2270,19 +2270,43 @@ rpc_result_int(struct loop *loop, const struct serve_ud *sud, const char *sid,
                         post);
   }
 
-  long out = fallback;
   if (resp.body) {
     struct json_doc *doc = json_parse(resp.body, resp.body_len);
-    if (doc) {
-      const struct json_value *root = json_doc_root(doc);
-      const struct json_value *result = json_object_get(root, "result");
-      if (result)
-        out = (long)json_as_int(result, fallback);
-      json_doc_free(doc);
+    if (!doc) {
+      http_response_free(&resp);
+      return PICOMESH_ERR(picomesh_int64, "rpc_result_int: response parse failed");
     }
+    const struct json_value *root = json_doc_root(doc);
+    const struct json_value *result = json_object_get(root, "result");
+    if (result && !json_is_null(result)) {
+      long out = (long)json_as_int(result, fallback);
+      json_doc_free(doc);
+      http_response_free(&resp);
+      return PICOMESH_OK(picomesh_int64, out);
+    }
+    /* No result value — the gateway answered with an error envelope (auth /
+     * storage / not-found). Surface it as an ERROR so the page logs the real
+     * failure; returning `fallback` here would render a misleading 0/-1 as if it
+     * were live data and hide the backend problem (issue #32). Callers degrade
+     * to their own fallback for display AFTER logging. */
+    const struct json_value *err = json_object_get(root, "error");
+    const char *msg =
+        err ? json_as_string(json_object_get(err, "message"), NULL) : NULL;
+    char *owned = NULL;
+    if (msg) {
+      size_t mlen = strlen(msg) + 40;
+      owned = malloc(mlen);
+      if (owned)
+        snprintf(owned, mlen, "rpc_result_int: gateway error: %s", msg);
+    }
+    json_doc_free(doc);
+    http_response_free(&resp);
+    if (owned)
+      return PICOMESH_ERR_OWNED(picomesh_int64, owned);
+    return PICOMESH_ERR(picomesh_int64, "rpc_result_int: gateway returned no result");
   }
   http_response_free(&resp);
-  return PICOMESH_OK(picomesh_int64, out);
+  return PICOMESH_OK(picomesh_int64, fallback);
 }
 
 /* Resolve the caller's authenticated claims (uid, username, admin bit) via
@@ -2376,8 +2400,27 @@ rpc_invoke(struct loop *loop, const struct serve_ud *sud, const char *sid,
     struct json_doc *doc = json_parse(resp.body, resp.body_len);
     if (doc) {
       const struct json_value *root = json_doc_root(doc);
-      if (json_object_get(root, "result")) {
-        ok = 1;
+      const struct json_value *result = json_object_get(root, "result");
+      if (result && !json_is_null(result)) {
+        /* The backend mutation methods return a numeric/boolean APPLIED flag
+         * (issues.close, git_pipeline.complete_job, git_repo.make, …): a 0 /
+         * false result means the mutation was NOT applied (no such item, no
+         * state change, already in that state). Treat only a truthy result as
+         * success — the field merely EXISTING is not enough, or the handler
+         * would redirect as if a no-op had succeeded. A string/object/array
+         * result is itself a real returned value (e.g. a created id/name). */
+        int applied;
+        if (json_is_bool(result))
+          applied = json_as_bool(result, 0);
+        else if (json_is_int(result) || json_is_float(result))
+          applied = (json_as_int(result, 0) != 0);
+        else
+          applied = 1;
+        ok = applied ? 1 : 0;
+        if (!ok && errbuf && errcap)
+          snprintf(errbuf, errcap,
+                   "the action was not applied (no such item, no change, or "
+                   "already in that state)");
       } else {
         const struct json_value *err = json_object_get(root, "error");
         const char *msg =
