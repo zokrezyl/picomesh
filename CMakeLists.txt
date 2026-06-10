@@ -1,11 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
-project(picomesh C CXX)
-
-# C++17 is the floor (simdjson requires it). The C bits stay C17; only
-# src/picomesh/json/json.cpp gets compiled as C++.
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
+# Pure C: the only former C++ translation unit (the JSON shim over simdjson)
+# now parses with yyjson, a single-file C library, so the tree carries no C++
+# dependency and needs no C++ toolchain.
+project(picomesh C)
 
 set(PICOMESH_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" CACHE INTERNAL "")
 
@@ -31,7 +28,6 @@ find_package(Threads REQUIRED)
 include(build-tools/picomesh/libs/co.cmake)
 include(build-tools/picomesh/libs/uv.cmake)
 include(build-tools/picomesh/libs/yaml.cmake)
-include(build-tools/picomesh/libs/simdjson.cmake)
 include(build-tools/picomesh/libs/sqlite3.cmake)
 include(build-tools/picomesh/libs/libmdbx.cmake)
 include(build-tools/picomesh/libs/libgit2.cmake)
@@ -92,7 +88,8 @@ add_library(picomesh_runtime STATIC
     src/picohttpparser/picohttpparser.c
     src/picomesh/config/config.c
     src/picomesh/argv/argv.c
-    src/picomesh/json/json.cpp
+    src/picomesh/json/json.c
+    src/yyjson/yyjson.c
     ${PICOMESH_PLATFORM_TIME_SRC}
 )
 target_include_directories(picomesh_runtime PUBLIC
@@ -100,6 +97,11 @@ target_include_directories(picomesh_runtime PUBLIC
     include/uthash
     include/picohttpparser
 )
+# Vendored yyjson (single-file C JSON parser, MIT). Only the JSON shim
+# (src/picomesh/json/json.c) needs the header, so keep it PRIVATE; SYSTEM so
+# the third-party header/source don't trip the tree's -Wall -Wextra.
+target_include_directories(picomesh_runtime SYSTEM PRIVATE include/yyjson)
+set_source_files_properties(src/yyjson/yyjson.c PROPERTIES COMPILE_OPTIONS "-w")
 # Vendored MessagePack codec (cmp, MIT). SYSTEM so its header doesn't trip the
 # tree's -Wall -Wextra; the .c is third-party, compiled with warnings off.
 target_include_directories(picomesh_runtime SYSTEM PUBLIC src/cmp)
@@ -109,7 +111,7 @@ set_source_files_properties(src/cmp/cmp.c PROPERTIES COMPILE_OPTIONS "-w")
 # (codegen output target). They're reachable through the repo-wide
 # `include/` already PUBLIC-included above — no plugin-specific
 # include directories needed.
-target_link_libraries(picomesh_runtime PUBLIC co uv yaml simdjson Threads::Threads)
+target_link_libraries(picomesh_runtime PUBLIC co uv yaml Threads::Threads)
 target_compile_definitions(picomesh_runtime PUBLIC _GNU_SOURCE)
 
 # ---- codegen helper --------------------------------------------------

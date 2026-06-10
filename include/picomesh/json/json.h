@@ -1,9 +1,9 @@
-/* json — thin C ABI over simdjson + a small JSON writer.
+/* json — thin C ABI over yyjson + a small JSON writer.
  *
- * Parsing goes through simdjson; we expose a borrowed-handle API so
- * C callers don't see any C++ details. Building JSON for outbound
- * responses goes through a hand-rolled writer (simdjson is parse-
- * only) — sufficient for the limited shapes yttp / cli emit.
+ * Parsing goes through yyjson (a single-file C library); we expose a
+ * borrowed-handle API so callers depend only on this header. Building
+ * JSON for outbound responses goes through a hand-rolled writer —
+ * sufficient for the limited shapes yttp / cli emit.
  *
  * Lifetime:
  *
@@ -77,7 +77,7 @@ const struct json_value *json_array_at(const struct json_value *v, size_t idx);
 const struct json_value *json_object_get(const struct json_value *v,
                                          const char *key);
 
-/* --- writer (hand-rolled; no simdjson involved) --------------------- */
+/* --- writer (hand-rolled; independent of the parser) ---------------- */
 
 struct json_writer;
 
