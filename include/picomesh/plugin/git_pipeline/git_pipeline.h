@@ -37,7 +37,7 @@ git_pipeline_git_pipeline_lease(struct ctx *ctx, struct object *obj,
 struct picomesh_json_result
 git_pipeline_git_pipeline_lease_job(struct ctx *ctx, struct object *obj,
                                     struct yheaders *hdrs, uint32_t runner_id,
-                                    const char *labels);
+                                    const char *labels, uint32_t wait_ms);
 struct picomesh_json_result
 git_pipeline_git_pipeline_job_descriptor(struct ctx *ctx, struct object *obj,
                                          struct yheaders *hdrs,

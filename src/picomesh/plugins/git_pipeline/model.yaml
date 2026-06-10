@@ -59,6 +59,8 @@ methods:
         type: uint32_t
       - name: labels
         type: "const char *"
+      - name: wait_ms
+        type: uint32_t
   - slot: git_pipeline_job_descriptor
     domain: git_pipeline
     owning_class: git_pipeline

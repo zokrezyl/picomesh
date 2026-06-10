@@ -1,6 +1,6 @@
 /*
  * IDE emulation
- * 
+ *
  * Copyright (c) 2003-2016 Fabrice Bellard
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -21,9 +21,9 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#include "virtio.h"
 #include "iomem.h"
 #include "pci.h"
+#include "virtio.h"
 
 typedef struct IDEIFState IDEIFState;
 

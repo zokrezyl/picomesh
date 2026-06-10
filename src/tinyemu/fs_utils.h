@@ -1,6 +1,6 @@
 /*
  * Misc FS utilities
- * 
+ *
  * Copyright (c) 2016-2017 Fabrice Bellard
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -33,41 +33,36 @@
 #define FS_BLOCK_SIZE (1 << FS_BLOCK_SIZE_LOG2)
 
 typedef enum {
-    FS_ERR_OK = 0,
-    FS_ERR_GENERIC = -1,
-    FS_ERR_SYNTAX = -2,
-    FS_ERR_REVISION = -3,
-    FS_ERR_FILE_ID = -4,
-    FS_ERR_IO = -5,
-    FS_ERR_NOENT = -6,
-    FS_ERR_COUNTERS = -7,
-    FS_ERR_QUOTA = -8,
-    FS_ERR_PROTOCOL_VERSION = -9,
-    FS_ERR_HEAD = -10,
+  FS_ERR_OK = 0,
+  FS_ERR_GENERIC = -1,
+  FS_ERR_SYNTAX = -2,
+  FS_ERR_REVISION = -3,
+  FS_ERR_FILE_ID = -4,
+  FS_ERR_IO = -5,
+  FS_ERR_NOENT = -6,
+  FS_ERR_COUNTERS = -7,
+  FS_ERR_QUOTA = -8,
+  FS_ERR_PROTOCOL_VERSION = -9,
+  FS_ERR_HEAD = -10,
 } FSCommitErrorCode;
 
 typedef uint64_t FSFileID;
 
-static inline BOOL isspace_nolf(int c)
-{
-    return (c == ' ' || c == '\t');
+static inline BOOL isspace_nolf(int c) { return (c == ' ' || c == '\t'); }
+
+static inline int from_hex(int c) {
+  if (c >= '0' && c <= '9')
+    return c - '0';
+  else if (c >= 'A' && c <= 'F')
+    return c - 'A' + 10;
+  else if (c >= 'a' && c <= 'f')
+    return c - 'a' + 10;
+  else
+    return -1;
 }
 
-static inline int from_hex(int c)
-{
-    if (c >= '0' && c <= '9')
-        return c - '0';
-    else if (c >= 'A' && c <= 'F')
-        return c - 'A' + 10;
-    else if (c >= 'a' && c <= 'f')
-        return c - 'a' + 10;
-    else
-        return -1;
-}
-
-static inline uint64_t block_align(uint64_t val, uint64_t align)
-{
-    return (val + align - 1) & ~(align - 1);
+static inline uint64_t block_align(uint64_t val, uint64_t align) {
+  return (val + align - 1) & ~(align - 1);
 }
 
 void pstrcpy(char *buf, int buf_size, const char *str);

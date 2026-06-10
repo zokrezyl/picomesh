@@ -1,6 +1,6 @@
 /*
  * OpenSSL compatible AES header
- * 
+ *
  * Copyright (c) 2017 Fabrice Bellard
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -28,22 +28,22 @@
 #define AES_BLOCK_SIZE 16
 
 struct aes_key_st {
-    uint32_t rd_key[4 *(AES_MAXNR + 1)];
-    int rounds;
+  uint32_t rd_key[4 * (AES_MAXNR + 1)];
+  int rounds;
 };
 typedef struct aes_key_st AES_KEY;
 
 int AES_set_encrypt_key(const unsigned char *userKey, const int bits,
-	AES_KEY *key);
+                        AES_KEY *key);
 int AES_set_decrypt_key(const unsigned char *userKey, const int bits,
-	AES_KEY *key);
+                        AES_KEY *key);
 
 void AES_encrypt(const unsigned char *in, unsigned char *out,
-	const AES_KEY *key);
+                 const AES_KEY *key);
 void AES_decrypt(const unsigned char *in, unsigned char *out,
-	const AES_KEY *key);
+                 const AES_KEY *key);
 void AES_cbc_encrypt(const unsigned char *in, unsigned char *out,
-		     const unsigned long length, const AES_KEY *key,
-		     unsigned char *ivec, const int enc);
+                     const unsigned long length, const AES_KEY *key,
+                     unsigned char *ivec, const int enc);
 
 #endif

@@ -1,6 +1,6 @@
 /*
  * SoftFP Library
- * 
+ *
  * Copyright (c) 2016 Fabrice Bellard
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -21,54 +21,49 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#include <stdlib.h>
-#include <stdio.h>
 #include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "cutils.h"
 #include "softfp.h"
 
-static inline int clz32(uint32_t a)
-{
-    int r;
-    if (a == 0) {
-        r = 32;
-    } else {
-        r = __builtin_clz(a);
-    }
-    return r;
+static inline int clz32(uint32_t a) {
+  int r;
+  if (a == 0) {
+    r = 32;
+  } else {
+    r = __builtin_clz(a);
+  }
+  return r;
 }
 
-static inline int clz64(uint64_t a)
-{
-    int r;
-    if (a == 0) {
-        r = 64;
-    } else 
-    {
-        r = __builtin_clzll(a);
-    }
-    return r;
+static inline int clz64(uint64_t a) {
+  int r;
+  if (a == 0) {
+    r = 64;
+  } else {
+    r = __builtin_clzll(a);
+  }
+  return r;
 }
 
 #ifdef HAVE_INT128
-static inline int clz128(uint128_t a)
-{
-    int r;
-    if (a == 0) {
-        r = 128;
-    } else 
-    {
-        uint64_t ah, al;
-        ah = a >> 64;
-        al = a;
-        if (ah != 0)
-            r = __builtin_clzll(ah);
-        else
-            r = __builtin_clzll(al) + 64;
-    }
-    return r;
+static inline int clz128(uint128_t a) {
+  int r;
+  if (a == 0) {
+    r = 128;
+  } else {
+    uint64_t ah, al;
+    ah = a >> 64;
+    al = a;
+    if (ah != 0)
+      r = __builtin_clzll(ah);
+    else
+      r = __builtin_clzll(al) + 64;
+  }
+  return r;
 }
 #endif
 
@@ -84,4 +79,3 @@ static inline int clz128(uint128_t a)
 #include "softfp_template.h"
 
 #endif
-

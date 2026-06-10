@@ -2,14 +2,14 @@
 
 #define TFTP_SESSIONS_MAX 3
 
-#define TFTP_SERVER	69
+#define TFTP_SERVER 69
 
-#define TFTP_RRQ    1
-#define TFTP_WRQ    2
-#define TFTP_DATA   3
-#define TFTP_ACK    4
-#define TFTP_ERROR  5
-#define TFTP_OACK   6
+#define TFTP_RRQ 1
+#define TFTP_WRQ 2
+#define TFTP_DATA 3
+#define TFTP_ACK 4
+#define TFTP_ERROR 5
+#define TFTP_OACK 6
 
 #define TFTP_FILENAME_MAX 512
 
@@ -31,13 +31,13 @@ struct tftp_t {
 };
 
 struct tftp_session {
-    Slirp *slirp;
-    char *filename;
+  Slirp *slirp;
+  char *filename;
 
-    struct in_addr client_ip;
-    uint16_t client_port;
+  struct in_addr client_ip;
+  uint16_t client_port;
 
-    int timestamp;
+  int timestamp;
 };
 
 void tftp_input(struct mbuf *m);

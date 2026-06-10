@@ -2274,7 +2274,8 @@ rpc_result_int(struct loop *loop, const struct serve_ud *sud, const char *sid,
     struct json_doc *doc = json_parse(resp.body, resp.body_len);
     if (!doc) {
       http_response_free(&resp);
-      return PICOMESH_ERR(picomesh_int64, "rpc_result_int: response parse failed");
+      return PICOMESH_ERR(picomesh_int64,
+                          "rpc_result_int: response parse failed");
     }
     const struct json_value *root = json_doc_root(doc);
     const struct json_value *result = json_object_get(root, "result");
@@ -2286,9 +2287,9 @@ rpc_result_int(struct loop *loop, const struct serve_ud *sud, const char *sid,
     }
     /* No result value — the gateway answered with an error envelope (auth /
      * storage / not-found). Surface it as an ERROR so the page logs the real
-     * failure; returning `fallback` here would render a misleading 0/-1 as if it
-     * were live data and hide the backend problem (issue #32). Callers degrade
-     * to their own fallback for display AFTER logging. */
+     * failure; returning `fallback` here would render a misleading 0/-1 as if
+     * it were live data and hide the backend problem (issue #32). Callers
+     * degrade to their own fallback for display AFTER logging. */
     const struct json_value *err = json_object_get(root, "error");
     const char *msg =
         err ? json_as_string(json_object_get(err, "message"), NULL) : NULL;
@@ -2303,7 +2304,8 @@ rpc_result_int(struct loop *loop, const struct serve_ud *sud, const char *sid,
     http_response_free(&resp);
     if (owned)
       return PICOMESH_ERR_OWNED(picomesh_int64, owned);
-    return PICOMESH_ERR(picomesh_int64, "rpc_result_int: gateway returned no result");
+    return PICOMESH_ERR(picomesh_int64,
+                        "rpc_result_int: gateway returned no result");
   }
   http_response_free(&resp);
   return PICOMESH_OK(picomesh_int64, fallback);

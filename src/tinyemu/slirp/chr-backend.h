@@ -37,12 +37,12 @@ struct socket;
  * No corresponding "recv" callback — the host-side feed direction
  * goes through slirp_chr_input() on the host's schedule. */
 struct slirp_chr_backend_ops {
-    void (*send)(void *ctx, const void *buf, size_t len);
+  void (*send)(void *ctx, const void *buf, size_t len);
 };
 
 struct slirp_chr_backend {
-    const struct slirp_chr_backend_ops *ops;
-    void *ctx;
+  const struct slirp_chr_backend_ops *ops;
+  void *ctx;
 };
 
 /*
@@ -60,8 +60,8 @@ struct slirp_chr_backend {
  * sockets in the same slirp instance, which is what
  * slirp_find_ctl_socket and the TCP fastq lookup key on.
  */
-struct socket *slirp_chr_open(Slirp *slirp,
-                              struct in_addr guest_addr, int guest_port,
+struct socket *slirp_chr_open(Slirp *slirp, struct in_addr guest_addr,
+                              int guest_port,
                               struct slirp_chr_backend *backend);
 
 /*

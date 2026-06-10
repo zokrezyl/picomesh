@@ -1,6 +1,6 @@
 /*
  * HTTP file download
- * 
+ *
  * Copyright (c) 2016-2017 Fabrice Bellard
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -30,8 +30,8 @@
 #include "sha256.h"
 #else
 #include <openssl/aes.h>
-#include <openssl/sha.h>
 #include <openssl/evp.h>
+#include <openssl/sha.h>
 #endif
 #ifdef _WIN32
 #include <winsock2.h>
@@ -70,24 +70,20 @@ extern const uint8_t encrypted_file_magic[4];
 typedef int DecryptFileCB(void *opaque, const uint8_t *data, size_t len);
 typedef struct DecryptFileState DecryptFileState;
 
-DecryptFileState *decrypt_file_init(AES_KEY *aes_state,
-                                    DecryptFileCB *write_cb,
+DecryptFileState *decrypt_file_init(AES_KEY *aes_state, DecryptFileCB *write_cb,
                                     void *opaque);
-int decrypt_file(DecryptFileState *s, const uint8_t *data,
-                 size_t size);
+int decrypt_file(DecryptFileState *s, const uint8_t *data, size_t size);
 int decrypt_file_flush(DecryptFileState *s);
 void decrypt_file_end(DecryptFileState *s);
 
-void pbkdf2_hmac_sha256(const uint8_t *pwd, int pwd_len,
-                        const uint8_t *salt, int salt_len,
-                        int iter, int key_len, uint8_t *out);
+void pbkdf2_hmac_sha256(const uint8_t *pwd, int pwd_len, const uint8_t *salt,
+                        int salt_len, int iter, int key_len, uint8_t *out);
 
 /* XHR file */
 
 typedef void FSWGetFileCB(FSDevice *fs, FSFile *f, int64_t size, void *opaque);
 
-void fs_wget_file2(FSDevice *fs, FSFile *f, const char *url,
-                   const char *user, const char *password,
-                   FSFile *posted_file, uint64_t post_data_len,
-                   FSWGetFileCB *cb, void *opaque,
+void fs_wget_file2(FSDevice *fs, FSFile *f, const char *url, const char *user,
+                   const char *password, FSFile *posted_file,
+                   uint64_t post_data_len, FSWGetFileCB *cb, void *opaque,
                    AES_KEY *aes_state);

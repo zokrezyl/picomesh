@@ -1,6 +1,6 @@
 /*
  * VIRTIO driver
- * 
+ *
  * Copyright (c) 2016 Fabrice Bellard
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -44,15 +44,15 @@ typedef uint32_t virtio_phys_addr_t;
 #endif
 
 typedef struct {
-    /* PCI only: */
-    PCIBus *pci_bus;
-    /* MMIO only: */
-    PhysMemoryMap *mem_map;
-    uint64_t addr;
-    IRQSignal *irq;
+  /* PCI only: */
+  PCIBus *pci_bus;
+  /* MMIO only: */
+  PhysMemoryMap *mem_map;
+  uint64_t addr;
+  IRQSignal *irq;
 } VIRTIOBusDef;
 
-typedef struct VIRTIODevice VIRTIODevice; 
+typedef struct VIRTIODevice VIRTIODevice;
 
 #define VIRTIO_DEBUG_IO (1 << 0)
 #define VIRTIO_DEBUG_9P (1 << 1)
@@ -66,43 +66,37 @@ typedef void BlockDeviceCompletionFunc(void *opaque, int ret);
 typedef struct BlockDevice BlockDevice;
 
 struct BlockDevice {
-    int64_t (*get_sector_count)(BlockDevice *bs);
-    int (*read_async)(BlockDevice *bs,
-                      uint64_t sector_num, uint8_t *buf, int n,
-                      BlockDeviceCompletionFunc *cb, void *opaque);
-    int (*write_async)(BlockDevice *bs,
-                       uint64_t sector_num, const uint8_t *buf, int n,
-                       BlockDeviceCompletionFunc *cb, void *opaque);
-    void *opaque;
+  int64_t (*get_sector_count)(BlockDevice *bs);
+  int (*read_async)(BlockDevice *bs, uint64_t sector_num, uint8_t *buf, int n,
+                    BlockDeviceCompletionFunc *cb, void *opaque);
+  int (*write_async)(BlockDevice *bs, uint64_t sector_num, const uint8_t *buf,
+                     int n, BlockDeviceCompletionFunc *cb, void *opaque);
+  void *opaque;
 };
 
 VIRTIODevice *virtio_block_init(VIRTIOBusDef *bus, BlockDevice *bs);
 
 /* network device */
 
-typedef struct EthernetDevice EthernetDevice; 
+typedef struct EthernetDevice EthernetDevice;
 
 struct EthernetDevice {
-    uint8_t mac_addr[6]; /* mac address of the interface */
-    void (*write_packet)(EthernetDevice *net,
-                         const uint8_t *buf, int len);
-    void *opaque;
-    /* select-based net poll callbacks. Yetty's tinyemu fork keeps these
-     * always-present (the upstream EMSCRIPTEN gate that hid them was
-     * tied to the legacy fs_wget-only mode, which we don't use — the
-     * iframe tinyemu wasm uses slirp + select() directly). */
-    void (*select_fill)(EthernetDevice *net, int *pfd_max,
-                        fd_set *rfds, fd_set *wfds, fd_set *efds,
-                        int *pdelay);
-    void (*select_poll)(EthernetDevice *net,
-                        fd_set *rfds, fd_set *wfds, fd_set *efds,
-                        int select_ret);
-    /* the following is set by the device */
-    void *device_opaque;
-    BOOL (*device_can_write_packet)(EthernetDevice *net);
-    void (*device_write_packet)(EthernetDevice *net,
-                                const uint8_t *buf, int len);
-    void (*device_set_carrier)(EthernetDevice *net, BOOL carrier_state);
+  uint8_t mac_addr[6]; /* mac address of the interface */
+  void (*write_packet)(EthernetDevice *net, const uint8_t *buf, int len);
+  void *opaque;
+  /* select-based net poll callbacks. Yetty's tinyemu fork keeps these
+   * always-present (the upstream EMSCRIPTEN gate that hid them was
+   * tied to the legacy fs_wget-only mode, which we don't use — the
+   * iframe tinyemu wasm uses slirp + select() directly). */
+  void (*select_fill)(EthernetDevice *net, int *pfd_max, fd_set *rfds,
+                      fd_set *wfds, fd_set *efds, int *pdelay);
+  void (*select_poll)(EthernetDevice *net, fd_set *rfds, fd_set *wfds,
+                      fd_set *efds, int select_ret);
+  /* the following is set by the device */
+  void *device_opaque;
+  BOOL (*device_can_write_packet)(EthernetDevice *net);
+  void (*device_write_packet)(EthernetDevice *net, const uint8_t *buf, int len);
+  void (*device_set_carrier)(EthernetDevice *net, BOOL carrier_state);
 };
 
 VIRTIODevice *virtio_net_init(VIRTIOBusDef *bus, EthernetDevice *es);
@@ -110,9 +104,9 @@ VIRTIODevice *virtio_net_init(VIRTIOBusDef *bus, EthernetDevice *es);
 /* console device */
 
 typedef struct {
-    void *opaque;
-    void (*write_data)(void *opaque, const uint8_t *buf, int len);
-    int (*read_data)(void *opaque, uint8_t *buf, int len);
+  void *opaque;
+  void (*write_data)(void *opaque, const uint8_t *buf, int len);
+  int (*read_data)(void *opaque, uint8_t *buf, int len);
 } CharacterDevice;
 
 VIRTIODevice *virtio_console_init(VIRTIOBusDef *bus, CharacterDevice *cs);
@@ -124,9 +118,9 @@ void virtio_console_resize_event(VIRTIODevice *s, int width, int height);
 /* input device */
 
 typedef enum {
-    VIRTIO_INPUT_TYPE_KEYBOARD,
-    VIRTIO_INPUT_TYPE_MOUSE,
-    VIRTIO_INPUT_TYPE_TABLET,
+  VIRTIO_INPUT_TYPE_KEYBOARD,
+  VIRTIO_INPUT_TYPE_MOUSE,
+  VIRTIO_INPUT_TYPE_TABLET,
 } VirtioInputTypeEnum;
 
 #define VIRTIO_INPUT_ABS_SCALE 32768

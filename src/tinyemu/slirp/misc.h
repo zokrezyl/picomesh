@@ -9,11 +9,11 @@
 #define _MISC_H_
 
 struct ex_list {
-	int ex_pty;			/* Do we want a pty? */
-	struct in_addr ex_addr;		/* Server address */
-	int ex_fport;                   /* Port to telnet to */
-	const char *ex_exec;            /* Command line of what to exec */
-	struct ex_list *ex_next;
+  int ex_pty;             /* Do we want a pty? */
+  struct in_addr ex_addr; /* Server address */
+  int ex_fport;           /* Port to telnet to */
+  const char *ex_exec;    /* Command line of what to exec */
+  struct ex_list *ex_next;
 };
 
 #ifndef HAVE_STRDUP
@@ -34,21 +34,21 @@ void do_wait(int);
 #define EMU_IDENT 0x7
 #define EMU_RSH 0x8
 
-#define EMU_NOCONNECT 0x10	/* Don't connect */
+#define EMU_NOCONNECT 0x10 /* Don't connect */
 
 struct tos_t {
-    uint16_t lport;
-    uint16_t fport;
-    uint8_t tos;
-    uint8_t emu;
+  uint16_t lport;
+  uint16_t fport;
+  uint8_t tos;
+  uint8_t emu;
 };
 
 struct emu_t {
-    uint16_t lport;
-    uint16_t fport;
-    uint8_t tos;
-    uint8_t emu;
-    struct emu_t *next;
+  uint16_t lport;
+  uint16_t fport;
+  uint8_t tos;
+  uint8_t emu;
+  struct emu_t *next;
 };
 
 extern int x_port, x_server, x_display;

@@ -3,7 +3,8 @@
  *   enqueue(repo_id)                       → job_id
  *   enqueue_job(repo_id, ref, path, t)     → job_id (+ descriptor meta)
  *   lease(runner_id)                       → job_id (0 if queue empty)
- *   lease_job(runner_id, labels)           → JSON descriptor or null
+ *   lease_job(runner_id, labels, wait_ms)  → JSON descriptor or null
+ *                                            (wait_ms>0 = long-poll/hold)
  *   job_descriptor(job_id)                 → JSON descriptor or null
  *   append_log(job_id, offset, chunk)      → new log length (owner-gated)
  *   read_log(job_id)                       → log text
@@ -28,6 +29,7 @@
 #include <picomesh/core/ytrace.h>
 #include <picomesh/engine/engine.h>
 #include <picomesh/json/json.h>
+#include <picomesh/loop/loop.h>
 #include <picomesh/picoclass/class.h>
 #include <picomesh/picoclass/yheaders.h>
 #include <picomesh/plugin/git_repo/git_repo.h>
@@ -43,6 +45,15 @@
 #define PIPE_STORE "rstore_uid"  /* the uid-sharded data cluster */
 #define PIPE_DB "uid"            /* logical database within it */
 #define GP_LEASE_TTL_DEFAULT 300 /* seconds, when a job carries no timeout */
+
+/* Long-poll lease (GitLab/GitHub-style): when a runner asks lease_job to wait,
+ * the backend holds the call open, yielding its coroutine in slices so the
+ * libuv loop keeps servicing every other connection, and re-claims the queue
+ * each slice. GP_LEASE_WAIT_MAX_MS caps how long any one call may pin a
+ * coroutine; GP_LEASE_POLL_SLICE_MS bounds the pickup latency once a job is
+ * enqueued (a job becomes claimable at most one slice after it lands). */
+#define GP_LEASE_WAIT_MAX_MS 30000u
+#define GP_LEASE_POLL_SLICE_MS 500u
 
 /* No in-memory state — every op delegates to relational storage. */
 struct PICOMESH_CLASS_ANNOTATE("class@git_pipeline:git_pipeline")
@@ -500,14 +511,28 @@ git_pipeline_git_pipeline_lease_impl(struct ctx *ctx, struct object *obj,
   return gp_claim_next(&handle, hdrs, runner_id);
 }
 
+/* Build the JSON-null "no job" reply. */
+static struct picomesh_json_result gp_no_job(void) {
+  char *null_str = strdup("null");
+  return null_str ? PICOMESH_OK(picomesh_json, null_str)
+                  : PICOMESH_ERR(picomesh_json, "git_pipeline_lease_job: oom");
+}
+
 /* The runner-agent lease entry point: claims the next job and returns the full
  * descriptor (or JSON null when the queue is empty). `labels` reserved (MVP).
- */
+ *
+ * `wait_ms` selects the polling style. 0 is the classic immediate poll: claim
+ * once and reply (null if empty). A positive value enables long polling — the
+ * call is held open, re-claiming every GP_LEASE_POLL_SLICE_MS, until a job is
+ * claimed or `wait_ms` (capped at GP_LEASE_WAIT_MAX_MS) elapses. Each wait
+ * slice yields the coroutine via loop_sleep_ms, so the libuv loop keeps
+ * leasing to / enqueuing from every other connection meanwhile. The handle is
+ * re-opened per attempt so nothing relational is held across a yield. */
 PICOMESH_CLASS_ANNOTATE(
     "override@git_pipeline:git_pipeline:git_pipeline_lease_job")
 struct picomesh_json_result git_pipeline_git_pipeline_lease_job_impl(
     struct ctx *ctx, struct object *obj, struct yheaders *hdrs,
-    uint32_t runner_id, const char *labels) {
+    uint32_t runner_id, const char *labels, uint32_t wait_ms) {
   (void)ctx;
   (void)obj;
   (void)labels;
@@ -517,23 +542,45 @@ struct picomesh_json_result git_pipeline_git_pipeline_lease_job_impl(
   if (!lease_job_owns.value)
     return PICOMESH_ERR(picomesh_json,
                         "git_pipeline_lease_job: caller is not this runner");
-  struct rel_handle handle;
-  struct picomesh_void_result open_res = gp_open(&handle);
-  if (PICOMESH_IS_ERR(open_res))
-    return PICOMESH_ERR(
-        picomesh_json, "git_pipeline_lease_job: storage open failed", open_res);
-  struct picomesh_uint32_result claim_res =
-      gp_claim_next(&handle, hdrs, runner_id);
-  if (PICOMESH_IS_ERR(claim_res))
-    return PICOMESH_ERR(picomesh_json, "git_pipeline_lease_job: claim failed",
-                        claim_res);
-  if (claim_res.value == 0) {
-    char *null_str = strdup("null");
-    return null_str
-               ? PICOMESH_OK(picomesh_json, null_str)
-               : PICOMESH_ERR(picomesh_json, "git_pipeline_lease_job: oom");
+
+  if (wait_ms > GP_LEASE_WAIT_MAX_MS)
+    wait_ms = GP_LEASE_WAIT_MAX_MS;
+
+  /* A long-poll wait needs the engine loop to yield onto; resolve it once and
+   * fall back to a single immediate claim if there is no loop to sleep on. */
+  struct loop *loop = NULL;
+  if (wait_ms > 0) {
+    struct picomesh_engine *engine = picomesh_active_engine();
+    loop = engine ? picomesh_engine_loop(engine) : NULL;
   }
-  return gp_descriptor_json(&handle, hdrs, claim_res.value);
+
+  uint32_t waited_ms = 0;
+  for (;;) {
+    struct rel_handle handle;
+    struct picomesh_void_result open_res = gp_open(&handle);
+    if (PICOMESH_IS_ERR(open_res))
+      return PICOMESH_ERR(picomesh_json,
+                          "git_pipeline_lease_job: storage open failed",
+                          open_res);
+    struct picomesh_uint32_result claim_res =
+        gp_claim_next(&handle, hdrs, runner_id);
+    if (PICOMESH_IS_ERR(claim_res))
+      return PICOMESH_ERR(picomesh_json, "git_pipeline_lease_job: claim failed",
+                          claim_res);
+    if (claim_res.value != 0)
+      return gp_descriptor_json(&handle, hdrs, claim_res.value);
+
+    /* Queue empty. Stop if not long-polling, the window is spent, or we have
+     * no loop to yield onto. */
+    if (!loop || waited_ms >= wait_ms)
+      return gp_no_job();
+
+    uint32_t slice = GP_LEASE_POLL_SLICE_MS;
+    if (slice > wait_ms - waited_ms)
+      slice = wait_ms - waited_ms;
+    loop_sleep_ms(loop, slice);
+    waited_ms += slice;
+  }
 }
 
 PICOMESH_CLASS_ANNOTATE(

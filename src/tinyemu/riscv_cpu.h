@@ -1,6 +1,6 @@
 /*
  * RISCV CPU emulator
- * 
+ *
  * Copyright (c) 2016-2017 Fabrice Bellard
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -24,9 +24,9 @@
 #ifndef RISCV_CPU_H
 #define RISCV_CPU_H
 
-#include <stdlib.h>
 #include "cutils.h"
 #include "iomem.h"
+#include <stdlib.h>
 
 #define MIP_USIP (1 << 0)
 #define MIP_SSIP (1 << 1)
@@ -46,26 +46,27 @@ typedef struct RISCVCPUState RISCVCPUState;
 struct SMPState;
 
 typedef struct {
-    RISCVCPUState *(*riscv_cpu_init)(PhysMemoryMap *mem_map);
-    void (*riscv_cpu_end)(RISCVCPUState *s);
-    void (*riscv_cpu_interp)(RISCVCPUState *s, int n_cycles);
-    uint64_t (*riscv_cpu_get_cycles)(RISCVCPUState *s);
-    void (*riscv_cpu_set_mip)(RISCVCPUState *s, uint32_t mask);
-    void (*riscv_cpu_reset_mip)(RISCVCPUState *s, uint32_t mask);
-    uint32_t (*riscv_cpu_get_mip)(RISCVCPUState *s);
-    BOOL (*riscv_cpu_has_pending_irq)(RISCVCPUState *s);
-    BOOL (*riscv_cpu_get_power_down)(RISCVCPUState *s);
-    void (*riscv_cpu_set_power_down)(RISCVCPUState *s, BOOL val);
-    uint32_t (*riscv_cpu_get_misa)(RISCVCPUState *s);
-    void (*riscv_cpu_flush_tlb_write_range_ram)(RISCVCPUState *s,
-                                                uint8_t *ram_ptr, size_t ram_size);
-    void (*riscv_cpu_set_mhartid)(RISCVCPUState *s, uint64_t mhartid);
-    void (*riscv_cpu_set_smp)(RISCVCPUState *s, struct SMPState *smp);
-    struct SMPState *(*riscv_cpu_get_smp)(RISCVCPUState *s);
+  RISCVCPUState *(*riscv_cpu_init)(PhysMemoryMap *mem_map);
+  void (*riscv_cpu_end)(RISCVCPUState *s);
+  void (*riscv_cpu_interp)(RISCVCPUState *s, int n_cycles);
+  uint64_t (*riscv_cpu_get_cycles)(RISCVCPUState *s);
+  void (*riscv_cpu_set_mip)(RISCVCPUState *s, uint32_t mask);
+  void (*riscv_cpu_reset_mip)(RISCVCPUState *s, uint32_t mask);
+  uint32_t (*riscv_cpu_get_mip)(RISCVCPUState *s);
+  BOOL (*riscv_cpu_has_pending_irq)(RISCVCPUState *s);
+  BOOL (*riscv_cpu_get_power_down)(RISCVCPUState *s);
+  void (*riscv_cpu_set_power_down)(RISCVCPUState *s, BOOL val);
+  uint32_t (*riscv_cpu_get_misa)(RISCVCPUState *s);
+  void (*riscv_cpu_flush_tlb_write_range_ram)(RISCVCPUState *s,
+                                              uint8_t *ram_ptr,
+                                              size_t ram_size);
+  void (*riscv_cpu_set_mhartid)(RISCVCPUState *s, uint64_t mhartid);
+  void (*riscv_cpu_set_smp)(RISCVCPUState *s, struct SMPState *smp);
+  struct SMPState *(*riscv_cpu_get_smp)(RISCVCPUState *s);
 } RISCVCPUClass;
 
 typedef struct {
-    const RISCVCPUClass *class_ptr;
+  const RISCVCPUClass *class_ptr;
 } RISCVCPUCommonState;
 
 int riscv_cpu_get_max_xlen(void);
@@ -75,80 +76,67 @@ extern const RISCVCPUClass riscv_cpu_class64;
 extern const RISCVCPUClass riscv_cpu_class128;
 
 RISCVCPUState *riscv_cpu_init(PhysMemoryMap *mem_map, int max_xlen);
-static inline void riscv_cpu_end(RISCVCPUState *s)
-{
-    const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
-    c->riscv_cpu_end(s);
+static inline void riscv_cpu_end(RISCVCPUState *s) {
+  const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
+  c->riscv_cpu_end(s);
 }
-static inline void riscv_cpu_interp(RISCVCPUState *s, int n_cycles)
-{
-    const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
-    c->riscv_cpu_interp(s, n_cycles);
+static inline void riscv_cpu_interp(RISCVCPUState *s, int n_cycles) {
+  const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
+  c->riscv_cpu_interp(s, n_cycles);
 }
-static inline uint64_t riscv_cpu_get_cycles(RISCVCPUState *s)
-{
-    const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
-    return c->riscv_cpu_get_cycles(s);
+static inline uint64_t riscv_cpu_get_cycles(RISCVCPUState *s) {
+  const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
+  return c->riscv_cpu_get_cycles(s);
 }
-static inline void riscv_cpu_set_mip(RISCVCPUState *s, uint32_t mask)
-{
-    const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
-    c->riscv_cpu_set_mip(s, mask);
+static inline void riscv_cpu_set_mip(RISCVCPUState *s, uint32_t mask) {
+  const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
+  c->riscv_cpu_set_mip(s, mask);
 }
-static inline void riscv_cpu_reset_mip(RISCVCPUState *s, uint32_t mask)
-{
-    const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
-    c->riscv_cpu_reset_mip(s, mask);
+static inline void riscv_cpu_reset_mip(RISCVCPUState *s, uint32_t mask) {
+  const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
+  c->riscv_cpu_reset_mip(s, mask);
 }
-static inline uint32_t riscv_cpu_get_mip(RISCVCPUState *s)
-{
-    const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
-    return c->riscv_cpu_get_mip(s);
+static inline uint32_t riscv_cpu_get_mip(RISCVCPUState *s) {
+  const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
+  return c->riscv_cpu_get_mip(s);
 }
-static inline BOOL riscv_cpu_has_pending_irq(RISCVCPUState *s)
-{
-    const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
-    return c->riscv_cpu_has_pending_irq(s);
+static inline BOOL riscv_cpu_has_pending_irq(RISCVCPUState *s) {
+  const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
+  return c->riscv_cpu_has_pending_irq(s);
 }
-static inline BOOL riscv_cpu_get_power_down(RISCVCPUState *s)
-{
-    const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
-    return c->riscv_cpu_get_power_down(s);
+static inline BOOL riscv_cpu_get_power_down(RISCVCPUState *s) {
+  const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
+  return c->riscv_cpu_get_power_down(s);
 }
-static inline void riscv_cpu_set_power_down(RISCVCPUState *s, BOOL val)
-{
-    const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
-    c->riscv_cpu_set_power_down(s, val);
+static inline void riscv_cpu_set_power_down(RISCVCPUState *s, BOOL val) {
+  const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
+  c->riscv_cpu_set_power_down(s, val);
 }
-static inline uint32_t riscv_cpu_get_misa(RISCVCPUState *s)
-{
-    const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
-    return c->riscv_cpu_get_misa(s);
+static inline uint32_t riscv_cpu_get_misa(RISCVCPUState *s) {
+  const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
+  return c->riscv_cpu_get_misa(s);
 }
 static inline void riscv_cpu_flush_tlb_write_range_ram(RISCVCPUState *s,
-                                                       uint8_t *ram_ptr, size_t ram_size)
-{
-    const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
-    c->riscv_cpu_flush_tlb_write_range_ram(s, ram_ptr, ram_size);
+                                                       uint8_t *ram_ptr,
+                                                       size_t ram_size) {
+  const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
+  c->riscv_cpu_flush_tlb_write_range_ram(s, ram_ptr, ram_size);
 }
 
 /* Set hart ID (CPU number) */
-static inline void riscv_cpu_set_mhartid(RISCVCPUState *s, uint64_t mhartid)
-{
-    const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
-    c->riscv_cpu_set_mhartid(s, mhartid);
+static inline void riscv_cpu_set_mhartid(RISCVCPUState *s, uint64_t mhartid) {
+  const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
+  c->riscv_cpu_set_mhartid(s, mhartid);
 }
 
 #include "smp.h"
-static inline void riscv_cpu_set_smp(RISCVCPUState *s, SMPState *smp)
-{
-    const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
-    c->riscv_cpu_set_smp(s, smp);
+static inline void riscv_cpu_set_smp(RISCVCPUState *s, SMPState *smp) {
+  const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
+  c->riscv_cpu_set_smp(s, smp);
 }
-static inline SMPState *riscv_cpu_get_smp(RISCVCPUState *s)
-{
-    const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
-    return c->riscv_cpu_get_smp(s);
+static inline SMPState *riscv_cpu_get_smp(RISCVCPUState *s) {
+  const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;
+  return c->riscv_cpu_get_smp(s);
 }
 
 #endif /* RISCV_CPU_H */

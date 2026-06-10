@@ -496,8 +496,8 @@ static EthernetDevice *slirp_open(const VMEthEntry *e) {
     struct in_addr guest_any = {.s_addr = 0};
     for (int j = 0; j < e->hostfwd_count; j++) {
       const VMEthHostFwd *hf = &e->hostfwd[j];
-      if (slirp_add_hostfwd(slirp_state, hf->is_udp ? 1 : 0, any,
-                            hf->host_port, guest_any, hf->guest_port) < 0) {
+      if (slirp_add_hostfwd(slirp_state, hf->is_udp ? 1 : 0, any, hf->host_port,
+                            guest_any, hf->guest_port) < 0) {
         fprintf(stderr,
                 "slirp: failed to add hostfwd %s:%d -> guest:%d (port busy?)\n",
                 hf->is_udp ? "udp" : "tcp", hf->host_port, hf->guest_port);

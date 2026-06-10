@@ -40,10 +40,10 @@
 #include "elf.h"
 #include "riscv_cpu.h"
 // clang-format on
-#include <pthread.h>
-#include <stdatomic.h>
 #include "smp.h"
 #include "ydebug.h"
+#include <pthread.h>
+#include <stdatomic.h>
 static pthread_mutex_t plic_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t htif_mutex = PTHREAD_MUTEX_INITIALIZER;
 #define PLIC_LOCK() pthread_mutex_lock(&plic_mutex)
@@ -72,9 +72,9 @@ typedef struct RISCVMachine {
   _Atomic uint64_t timecmp[MAX_CPUS]; /* timer compare per CPU */
   /* PLIC */
   uint32_t plic_pending_irq;
-  uint32_t plic_served_irq[MAX_CPUS * 2];  /* per-context (M + S per CPU) */
-  uint32_t plic_enable[MAX_CPUS * 2];      /* per-context enable bits */
-  IRQSignal plic_irq[32]; /* IRQ 0 is not used */
+  uint32_t plic_served_irq[MAX_CPUS * 2]; /* per-context (M + S per CPU) */
+  uint32_t plic_enable[MAX_CPUS * 2];     /* per-context enable bits */
+  IRQSignal plic_irq[32];                 /* IRQ 0 is not used */
   /* HTIF */
   uint64_t htif_tohost, htif_fromhost;
   uint64_t htif_addr; /* dynamically detected from ELF .htif section */
@@ -120,7 +120,8 @@ static uint64_t rtc_get_time(RISCVMachine *m) {
     uint64_t max_cycles = 0;
     for (int i = 0; i < m->num_cpus; i++) {
       uint64_t c = riscv_cpu_get_cycles(m->cpu_state[i]);
-      if (c > max_cycles) max_cycles = c;
+      if (c > max_cycles)
+        max_cycles = c;
     }
     val = max_cycles / RTC_FREQ_DIV;
   }
@@ -294,19 +295,19 @@ static void clint_write(void *opaque, uint32_t offset, uint32_t val,
   if (offset < 0x4000) {
     cpu_id = offset >> 2;
     if (cpu_id < m->num_cpus) {
-      ydebug("SYNC: CLINT cpu%d MSIP write val=%d mip_before=0x%x",
-             cpu_id, val & 1, riscv_cpu_get_mip(m->cpu_state[cpu_id]));
+      ydebug("SYNC: CLINT cpu%d MSIP write val=%d mip_before=0x%x", cpu_id,
+             val & 1, riscv_cpu_get_mip(m->cpu_state[cpu_id]));
       atomic_store(&m->msip[cpu_id], val & 1);
       atomic_thread_fence(memory_order_seq_cst);
       if (val & 1) {
         riscv_cpu_set_mip(m->cpu_state[cpu_id], MIP_MSIP);
-        ydebug("SYNC: CLINT cpu%d MSIP SET mip_after=0x%x",
-               cpu_id, riscv_cpu_get_mip(m->cpu_state[cpu_id]));
-        smp_wakeup_cpu(m->smp, cpu_id);  /* Wake CPU from WFI */
+        ydebug("SYNC: CLINT cpu%d MSIP SET mip_after=0x%x", cpu_id,
+               riscv_cpu_get_mip(m->cpu_state[cpu_id]));
+        smp_wakeup_cpu(m->smp, cpu_id); /* Wake CPU from WFI */
       } else {
         riscv_cpu_reset_mip(m->cpu_state[cpu_id], MIP_MSIP);
-        ydebug("SYNC: CLINT cpu%d MSIP CLEAR mip_after=0x%x",
-               cpu_id, riscv_cpu_get_mip(m->cpu_state[cpu_id]));
+        ydebug("SYNC: CLINT cpu%d MSIP CLEAR mip_after=0x%x", cpu_id,
+               riscv_cpu_get_mip(m->cpu_state[cpu_id]));
       }
     }
   }
@@ -321,14 +322,14 @@ static void clint_write(void *opaque, uint32_t offset, uint32_t val,
       else
         tc = (tc & 0xffffffff) | ((uint64_t)val << 32);
       atomic_store(&m->timecmp[cpu_id], tc);
-      ydebug("SYNC: CLINT cpu%d TIMECMP %s old=0x%llx new=0x%llx rtc=0x%llx mip_before=0x%x",
-             cpu_id, (offset & 4) ? "HIGH" : "LOW",
-             (unsigned long long)old_tc, (unsigned long long)tc,
-             (unsigned long long)rtc_get_time(m),
+      ydebug("SYNC: CLINT cpu%d TIMECMP %s old=0x%llx new=0x%llx rtc=0x%llx "
+             "mip_before=0x%x",
+             cpu_id, (offset & 4) ? "HIGH" : "LOW", (unsigned long long)old_tc,
+             (unsigned long long)tc, (unsigned long long)rtc_get_time(m),
              riscv_cpu_get_mip(m->cpu_state[cpu_id]));
       riscv_cpu_reset_mip(m->cpu_state[cpu_id], MIP_MTIP);
-      ydebug("SYNC: CLINT cpu%d MTIP CLEAR mip_after=0x%x",
-             cpu_id, riscv_cpu_get_mip(m->cpu_state[cpu_id]));
+      ydebug("SYNC: CLINT cpu%d MTIP CLEAR mip_after=0x%x", cpu_id,
+             riscv_cpu_get_mip(m->cpu_state[cpu_id]));
     }
   }
 }
@@ -341,28 +342,35 @@ static void plic_update_mip(RISCVMachine *s) {
   for (i = 0; i < s->num_cpus; i++) {
     int s_ctx = i * 2;
     int m_ctx = i * 2 + 1;
-    m_pending = s->plic_pending_irq & s->plic_enable[m_ctx] & ~s->plic_served_irq[m_ctx];
-    s_pending = s->plic_pending_irq & s->plic_enable[s_ctx] & ~s->plic_served_irq[s_ctx];
+    m_pending = s->plic_pending_irq & s->plic_enable[m_ctx] &
+                ~s->plic_served_irq[m_ctx];
+    s_pending = s->plic_pending_irq & s->plic_enable[s_ctx] &
+                ~s->plic_served_irq[s_ctx];
     uint32_t old_mip = riscv_cpu_get_mip(s->cpu_state[i]);
-    if ((call_count < 100) || (call_count % 10000) == 0 || m_pending || s_pending) {
-      ydebug("SYNC: PLIC_UPD cpu%d pend=0x%x en_s=0x%x en_m=0x%x srv_s=0x%x srv_m=0x%x m_pend=0x%x s_pend=0x%x",
-             i, s->plic_pending_irq, s->plic_enable[s_ctx], s->plic_enable[m_ctx],
-             s->plic_served_irq[s_ctx], s->plic_served_irq[m_ctx], m_pending, s_pending);
+    if ((call_count < 100) || (call_count % 10000) == 0 || m_pending ||
+        s_pending) {
+      ydebug("SYNC: PLIC_UPD cpu%d pend=0x%x en_s=0x%x en_m=0x%x srv_s=0x%x "
+             "srv_m=0x%x m_pend=0x%x s_pend=0x%x",
+             i, s->plic_pending_irq, s->plic_enable[s_ctx],
+             s->plic_enable[m_ctx], s->plic_served_irq[s_ctx],
+             s->plic_served_irq[m_ctx], m_pending, s_pending);
     }
     if (m_pending) {
       riscv_cpu_set_mip(s->cpu_state[i], MIP_MEIP);
-      ydebug("SYNC: PLIC cpu%d MEIP SET pend=0x%x mip 0x%x->0x%x",
-             i, m_pending, old_mip, riscv_cpu_get_mip(s->cpu_state[i]));
-      ydebug("SYNC: PLIC cpu%d WAKEUP_MEIP pd=%d", i, riscv_cpu_get_power_down(s->cpu_state[i]));
+      ydebug("SYNC: PLIC cpu%d MEIP SET pend=0x%x mip 0x%x->0x%x", i, m_pending,
+             old_mip, riscv_cpu_get_mip(s->cpu_state[i]));
+      ydebug("SYNC: PLIC cpu%d WAKEUP_MEIP pd=%d", i,
+             riscv_cpu_get_power_down(s->cpu_state[i]));
       smp_wakeup_cpu(s->smp, i);
     } else {
       riscv_cpu_reset_mip(s->cpu_state[i], MIP_MEIP);
     }
     if (s_pending) {
       riscv_cpu_set_mip(s->cpu_state[i], MIP_SEIP);
-      ydebug("SYNC: PLIC cpu%d SEIP SET pend=0x%x mip 0x%x->0x%x",
-             i, s_pending, old_mip, riscv_cpu_get_mip(s->cpu_state[i]));
-      ydebug("SYNC: PLIC cpu%d WAKEUP_SEIP pd=%d", i, riscv_cpu_get_power_down(s->cpu_state[i]));
+      ydebug("SYNC: PLIC cpu%d SEIP SET pend=0x%x mip 0x%x->0x%x", i, s_pending,
+             old_mip, riscv_cpu_get_mip(s->cpu_state[i]));
+      ydebug("SYNC: PLIC cpu%d WAKEUP_SEIP pd=%d", i,
+             riscv_cpu_get_power_down(s->cpu_state[i]));
       smp_wakeup_cpu(s->smp, i);
     } else {
       riscv_cpu_reset_mip(s->cpu_state[i], MIP_SEIP);
@@ -392,7 +400,7 @@ static uint32_t plic_read(void *opaque, uint32_t offset, int size_log2) {
     if (context < s->num_cpus * 2 && word_offset == 0) {
       val = s->plic_enable[context];
     } else {
-      val = 0;  /* Out of bounds or word 1+ (no IRQs there) */
+      val = 0; /* Out of bounds or word 1+ (no IRQs there) */
     }
   }
   /* Per-hart context registers at 0x200000 + context * 0x1000 */
@@ -405,13 +413,15 @@ static uint32_t plic_read(void *opaque, uint32_t offset, int size_log2) {
         val = 0;
       } else if (local_off == 4) {
         /* Claim register - return highest pending IRQ for THIS context */
-        /* PLIC bit layout: bit N = interrupt source N, so return bit position directly */
-        mask = s->plic_pending_irq & s->plic_enable[context] & ~s->plic_served_irq[context];
+        /* PLIC bit layout: bit N = interrupt source N, so return bit position
+         * directly */
+        mask = s->plic_pending_irq & s->plic_enable[context] &
+               ~s->plic_served_irq[context];
         if (mask != 0) {
           i = ctz32(mask);
           s->plic_served_irq[context] |= 1 << i;
           plic_update_mip(s);
-          val = i;  /* bit N = IRQ N */
+          val = i; /* bit N = IRQ N */
         } else {
           val = 0;
         }
@@ -442,7 +452,8 @@ static void plic_write(void *opaque, uint32_t offset, uint32_t val,
     uint32_t ctx_offset = offset - PLIC_ENABLE_BASE;
     context = ctx_offset / PLIC_ENABLE_STRIDE;
     uint32_t word_offset = (ctx_offset % PLIC_ENABLE_STRIDE) / 4;
-    ydebug("SYNC: PLIC_WR_EN off=0x%x ctx=%d word=%d val=0x%x", offset, context, word_offset, val);
+    ydebug("SYNC: PLIC_WR_EN off=0x%x ctx=%d word=%d val=0x%x", offset, context,
+           word_offset, val);
     if (context < s->num_cpus * 2 && word_offset == 0) {
       s->plic_enable[context] = val;
       ydebug("SYNC: PLIC_EN_SET ctx=%d val=0x%x", context, val);
@@ -477,7 +488,8 @@ static void plic_set_irq(void *opaque, int irq_num, int state) {
   PLIC_LOCK();
   /* PLIC bit layout: bit N = interrupt source N (source 0 is reserved) */
   mask = 1 << irq_num;
-  ydebug("PLIC: set_irq irq=%d state=%d pending=0x%x mask=0x%x", irq_num, state, s->plic_pending_irq, mask);
+  ydebug("PLIC: set_irq irq=%d state=%d pending=0x%x mask=0x%x", irq_num, state,
+         s->plic_pending_irq, mask);
   if (state)
     s->plic_pending_irq |= mask;
   else
@@ -683,8 +695,8 @@ static void fdt_prop_tab_str(FDTState *s, const char *prop_name, ...) {
  * in the /memreserve/ table — the kernel keeps its hands off these
  * regions. Used to keep Linux's page allocator out of the OpenSBI
  * runtime so virtio-blk DMA can't clobber it. */
-int fdt_output(FDTState *s, uint8_t *dst,
-               const uint64_t (*reserve)[2], int reserve_count) {
+int fdt_output(FDTState *s, uint8_t *dst, const uint64_t (*reserve)[2],
+               int reserve_count) {
   struct fdt_header *h;
   struct fdt_reserve_entry *re;
   int dt_struct_size;
@@ -718,7 +730,7 @@ int fdt_output(FDTState *s, uint8_t *dst,
   }
   h->off_mem_rsvmap = cpu_to_be32(pos);
   for (i = 0; i < reserve_count; i++) {
-    put_be64(dst + pos,     reserve[i][0]);
+    put_be64(dst + pos, reserve[i][0]);
     put_be64(dst + pos + 8, reserve[i][1]);
     pos += sizeof(struct fdt_reserve_entry);
   }
@@ -929,8 +941,8 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst, uint64_t kernel_start,
    * bios image is not enough: OpenSBI's runtime scratch + stacks live
    * just above the static image, so cover the full 2 MiB up to the
    * kernel base. */
-  uint64_t reserve_size = (kernel_start > bios_addr) ?
-      (kernel_start - bios_addr) : bios_size;
+  uint64_t reserve_size =
+      (kernel_start > bios_addr) ? (kernel_start - bios_addr) : bios_size;
   uint64_t reserve_tab[1][2] = {{bios_addr, reserve_size}};
   size = fdt_output(s, dst, bios_size > 0 ? reserve_tab : NULL,
                     bios_size > 0 ? 1 : 0);
@@ -1309,14 +1321,15 @@ static int riscv_machine_get_sleep_duration(VirtMachine *s1, int delay) {
       uint64_t tc = atomic_load(&m->timecmp[i]);
       uint64_t rtc = rtc_get_time(m);
       if (rtc >= tc) {
-        ydebug("SYNC: TIMER cpu%d FIRE rtc=0x%llx tc=0x%llx mip=0x%x",
-               i, (unsigned long long)rtc, (unsigned long long)tc,
+        ydebug("SYNC: TIMER cpu%d FIRE rtc=0x%llx tc=0x%llx mip=0x%x", i,
+               (unsigned long long)rtc, (unsigned long long)tc,
                riscv_cpu_get_mip(cpu));
         riscv_cpu_set_mip(cpu, MIP_MTIP);
-        smp_wakeup_cpu(m->smp, i);  /* Wake CPU thread from condvar sleep */
+        smp_wakeup_cpu(m->smp, i); /* Wake CPU thread from condvar sleep */
         timer_set_count++;
       } else {
-        /* Only update delay if the difference fits in int64_t and is reasonable */
+        /* Only update delay if the difference fits in int64_t and is reasonable
+         */
         uint64_t diff = tc - rtc;
         if (diff < (uint64_t)INT64_MAX) {
           delay1 = (int64_t)diff / (RTC_FREQ / 1000);
@@ -1359,10 +1372,10 @@ static int riscv_machine_get_sleep_duration(VirtMachine *s1, int delay) {
     if ((call_count % 1000) == 0) {
       uint64_t rtc = rtc_get_time(m);
       uint64_t tc0 = atomic_load(&m->timecmp[0]);
-      ydebug("SYNC: MAINLOOP idle=%d rtc=0x%llx delay=%d boot=%d tc0=0x%llx gap=%lld",
+      ydebug("SYNC: MAINLOOP idle=%d rtc=0x%llx delay=%d boot=%d tc0=0x%llx "
+             "gap=%lld",
              all_idle, (unsigned long long)rtc, delay, booting,
-             (unsigned long long)tc0,
-             (long long)(tc0 - rtc));
+             (unsigned long long)tc0, (long long)(tc0 - rtc));
     }
   }
 
@@ -1442,27 +1455,26 @@ void riscv_cpu_thread_func(SMPCPUThread *t) {
     BOOL pd = riscv_cpu_get_power_down(cpu);
     BOOL has_irq = riscv_cpu_has_pending_irq(cpu);
     int wp = t->wakeup_pending;
-    ydebug("SYNC: cpu%d CHECK pd=%d irq=%d wp=%d mip=0x%x",
-           t->cpu_id, pd, has_irq, wp, riscv_cpu_get_mip(cpu));
-    while (riscv_cpu_get_power_down(cpu) &&
-           !riscv_cpu_has_pending_irq(cpu) &&
-           !t->wakeup_pending &&
-           atomic_load(&t->running)) {
+    ydebug("SYNC: cpu%d CHECK pd=%d irq=%d wp=%d mip=0x%x", t->cpu_id, pd,
+           has_irq, wp, riscv_cpu_get_mip(cpu));
+    while (riscv_cpu_get_power_down(cpu) && !riscv_cpu_has_pending_irq(cpu) &&
+           !t->wakeup_pending && atomic_load(&t->running)) {
       ydebug("SYNC: cpu%d SLEEP mip=0x%x", t->cpu_id, riscv_cpu_get_mip(cpu));
       pthread_cond_wait(&t->wakeup_cond, &t->wakeup_mutex);
-      ydebug("SYNC: cpu%d WOKE wp=%d mip=0x%x",
-             t->cpu_id, t->wakeup_pending, riscv_cpu_get_mip(cpu));
+      ydebug("SYNC: cpu%d WOKE wp=%d mip=0x%x", t->cpu_id, t->wakeup_pending,
+             riscv_cpu_get_mip(cpu));
     }
     BOOL was_signaled = t->wakeup_pending;
     t->wakeup_pending = 0;
 
     if (riscv_cpu_has_pending_irq(cpu) || was_signaled) {
-      ydebug("SYNC: cpu%d RESUME irq=%d sig=%d mip=0x%x",
-             t->cpu_id, riscv_cpu_has_pending_irq(cpu), was_signaled,
+      ydebug("SYNC: cpu%d RESUME irq=%d sig=%d mip=0x%x", t->cpu_id,
+             riscv_cpu_has_pending_irq(cpu), was_signaled,
              riscv_cpu_get_mip(cpu));
       riscv_cpu_set_power_down(cpu, FALSE);
     } else if (pd) {
-      ydebug("SYNC: cpu%d STAY_HALTED mip=0x%x", t->cpu_id, riscv_cpu_get_mip(cpu));
+      ydebug("SYNC: cpu%d STAY_HALTED mip=0x%x", t->cpu_id,
+             riscv_cpu_get_mip(cpu));
     }
     pthread_mutex_unlock(&t->wakeup_mutex);
 

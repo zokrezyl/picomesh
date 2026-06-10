@@ -16,7 +16,8 @@ typedef struct picomesh_uint32_result (
 typedef struct picomesh_uint32_result (*git_pipeline_git_pipeline_lease_fn)(
     struct ctx *, struct object *, struct yheaders *, uint32_t);
 typedef struct picomesh_json_result (*git_pipeline_git_pipeline_lease_job_fn)(
-    struct ctx *, struct object *, struct yheaders *, uint32_t, const char *);
+    struct ctx *, struct object *, struct yheaders *, uint32_t, const char *,
+    uint32_t);
 typedef struct picomesh_json_result (
     *git_pipeline_git_pipeline_job_descriptor_fn)(struct ctx *, struct object *,
                                                   struct yheaders *, uint32_t);

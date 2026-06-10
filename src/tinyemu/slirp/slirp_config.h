@@ -10,7 +10,8 @@
 #define DO_KEEPALIVE 0
 
 /* Define to MAX interfaces you expect to use at once */
-/* MAX_INTERFACES determines the max. TOTAL number of interfaces (SLIP and PPP) */
+/* MAX_INTERFACES determines the max. TOTAL number of interfaces (SLIP and PPP)
+ */
 /* MAX_PPP_INTERFACES determines max. number of PPP interfaces */
 #define MAX_INTERFACES 1
 #define MAX_PPP_INTERFACES 1
@@ -83,7 +84,7 @@
 #undef HAVE_SYS_BITYPES_H
 
 /* Define if the machine is big endian */
-//#undef HOST_WORDS_BIGENDIAN
+// #undef HOST_WORDS_BIGENDIAN
 
 /* Define if you have readv */
 #undef HAVE_READV
@@ -119,10 +120,10 @@
 #undef HAVE_SYS_STROPTS_H
 
 /* Define to whatever your compiler thinks inline should be */
-//#define inline inline
+// #define inline inline
 
 /* Define to whatever your compiler thinks const should be */
-//#define const const
+// #define const const
 
 /* Define if your compiler doesn't like prototypes */
 #undef NO_PROTOTYPES

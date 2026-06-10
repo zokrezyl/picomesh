@@ -1,6 +1,6 @@
 /*
  * x86 CPU emulator
- * 
+ *
  * Copyright (c) 2011-2017 Fabrice Bellard
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -42,10 +42,10 @@ typedef struct X86CPUState X86CPUState;
 #define X86_CPU_SEG_IDT 9
 
 typedef struct {
-    uint16_t sel;
-    uint16_t flags;
-    uint32_t base;
-    uint32_t limit;
+  uint16_t sel;
+  uint16_t flags;
+  uint32_t base;
+  uint32_t limit;
 } X86CPUSeg;
 
 X86CPUState *x86_cpu_init(PhysMemoryMap *mem_map);
@@ -58,13 +58,11 @@ void x86_cpu_set_seg(X86CPUState *s, int seg, const X86CPUSeg *sd);
 void x86_cpu_set_get_hard_intno(X86CPUState *s,
                                 int (*get_hard_intno)(void *opaque),
                                 void *opaque);
-void x86_cpu_set_get_tsc(X86CPUState *s,
-                         uint64_t (*get_tsc)(void *opaque),
+void x86_cpu_set_get_tsc(X86CPUState *s, uint64_t (*get_tsc)(void *opaque),
                          void *opaque);
-void x86_cpu_set_port_io(X86CPUState *s, 
-                         DeviceReadFunc *port_read, DeviceWriteFunc *port_write,
-                         void *opaque);
+void x86_cpu_set_port_io(X86CPUState *s, DeviceReadFunc *port_read,
+                         DeviceWriteFunc *port_write, void *opaque);
 int64_t x86_cpu_get_cycles(X86CPUState *s);
 BOOL x86_cpu_get_power_down(X86CPUState *s);
-void x86_cpu_flush_tlb_write_range_ram(X86CPUState *s,
-                                       uint8_t *ram_ptr, size_t ram_size);
+void x86_cpu_flush_tlb_write_range_ram(X86CPUState *s, uint8_t *ram_ptr,
+                                       size_t ram_size);

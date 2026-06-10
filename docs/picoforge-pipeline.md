@@ -1,125 +1,144 @@
-# Picoforge CI/CD — pipeline file contract and roadmap (issue #33)
+# Picoforge CI/CD — GitHub Actions pipelines (issue #33)
 
-This documents the **`.picoforge.yml`** pipeline-file contract (the first
-sequencing step of issue #33) and records which CI/CD foundations are landed
-versus tracked.
+Picoforge's pipeline files use **GitHub Actions semantics**: a repository's
+pipelines are `.github/workflows/*.yml` workflows, the same files GitHub runs.
+(GitLab `.gitlab-ci.yml` semantics are planned as a second front end behind the
+same job/descriptor model — see the roadmap.) The goal is to run real, basic
+workflows — e.g. this repo's `build-3rdparty-*` workflows and the sibling
+`../yetty` project's `cmake-multi-platform` workflow.
 
-The architecture boundary is unchanged (CLAUDE.md): the webapp stays
-browser-facing, the gateway stays the public API/auth boundary, and runners stay
-**external clients polling the gateway** — never inbound mesh services.
+The architecture boundary is unchanged (CLAUDE.md): the webapp is browser-facing,
+the gateway is the public API/auth boundary, and runners are **external clients
+polling the gateway** — never inbound mesh services.
 
-## `.picoforge.yml` — the pipeline file contract
+## The engine
 
-A repository describes its pipeline in a `.picoforge.yml` at the repo root. The
-runner fetches it for the leased commit and executes it. The contract is
-intentionally small for the MVP and forward-compatible with stages, matrices,
-and retries.
+`tools/picoforge/runner-agent/gha.py` is a self-contained GitHub Actions
+workflow engine (parser + expression evaluator + executor). It runs standalone
+and is also the runner-agent's executor.
 
-```yaml
-# .picoforge.yml
-version: 1                      # contract version (required)
+```sh
+# Inspect / dry-run
+gha.py parse .github/workflows/build-3rdparty-libco.yml
+gha.py jobs  .github/workflows/build-3rdparty-libco.yml --event push
 
-env:                            # pipeline-wide environment (optional)
-  CI: "true"
-
-stages: [build, test]           # ordered stage names (optional; default: one
-                                # implicit stage running every job in file order)
-
-jobs:
-  build:
-    stage: build                # which stage (must be in `stages` if present)
-    image: ""                   # execution image/toolchain hint (optional)
-    labels: [linux, amd64]      # runner-selection labels (optional) — a runner
-                                # leases a job only if it advertises ALL labels
-    timeout: 600                # seconds; overrides the per-job lease TTL
-    env:                        # job-scoped env (merged over pipeline env)
-      BUILD_TYPE: release
-    commands:                   # the shell commands, run in order, from a clean
-      - make build              # checkout of the leased commit
-    artifacts:                  # paths to upload after success (optional)
-      - build/out/
-  test:
-    stage: test
-    needs: [build]              # intra-pipeline ordering beyond stages (optional)
-    commands:
-      - make test
-
-secrets_policy: none            # none | inherit | named — how repo/namespace
-                                # secrets are exposed to job env (default: none)
+# Execute a job from a checkout of THIS repo
+gha.py run   .github/workflows/build-3rdparty-libco.yml \
+             --event workflow_dispatch --repo "$PWD" --ref HEAD --job resolve
 ```
 
-Field rules:
+Exit code is 0 iff every executed job succeeded.
 
-- `version` is required and must be `1`.
-- A job MUST have `commands` (non-empty list of strings).
-- `timeout` is seconds; absent → the enqueue-time per-job timeout (default 300).
-- `labels` are matched against the runner's advertised labels: a runner leases a
-  job only when it advertises every label the job requires (label matching is on
-  the roadmap below; today `labels` is recorded and echoed but not yet enforced
-  at lease time).
-- Unknown top-level keys are rejected (fail fast on typos), unknown job keys are
-  reserved for forward compatibility and ignored with a warning.
+### Supported GitHub Actions subset
 
-## Execution-ready job descriptor
+- **Triggers** — `on:` as a string, list, or mapping (the YAML 1.1 `on:`→`true`
+  key gotcha is handled). Event-name match selects whether a workflow fires;
+  branch/tag/path globs are advisory in the MVP.
+- **Jobs** — `needs` (string or list) drives a topological order; a job whose
+  dependency did not succeed is skipped. `runs-on` is recorded (informational).
+- **Matrix** — `strategy.matrix` is expanded to the cartesian product of its
+  list axes, honoring `include`/`exclude`; one job-run per combination.
+- **Steps** — `run:` executes in `bash -eo pipefail` by default (or the step
+  `shell`: `sh`/`python`/explicit). `uses: actions/checkout@*` clones the repo
+  into the workspace at the requested ref/sha. `working-directory`, per-step and
+  per-job `env`, and step `id` are honored.
+- **The GitHub environment contract** — every step gets `GITHUB_WORKSPACE`,
+  `GITHUB_SHA`, `GITHUB_REF`, `GITHUB_REF_NAME`, `GITHUB_EVENT_NAME`,
+  `GITHUB_REPOSITORY`, `GITHUB_OUTPUT`, `GITHUB_ENV`, `GITHUB_PATH`,
+  `GITHUB_STEP_SUMMARY`, `RUNNER_OS`, `RUNNER_TEMP`, `CI`, `GITHUB_ACTIONS`.
+  Writing `name=value` (or the `name<<EOF` heredoc) to `$GITHUB_OUTPUT` becomes
+  `steps.<id>.outputs.<name>`; `$GITHUB_ENV` is merged into the env of later
+  steps; `$GITHUB_PATH` is prepended to `PATH`. Job `outputs:` are resolved from
+  the step context and exposed to dependents as `needs.<job>.outputs.<name>`.
+- **Expressions** — `${{ … }}` over the `github`, `matrix`, `env`, `steps`,
+  `needs`, `runner`, `strategy`, `job` contexts, with the operators
+  `== != > < >= <= && || !` and the functions `format`, `contains`,
+  `startsWith`, `endsWith`, `join`, `toJSON`, `fromJSON`, `success`, `failure`,
+  `always`, `cancelled` (`hashFiles` returns "" in the MVP). `if:` on jobs and
+  steps is evaluated (wrapped `${{ }}` or bare).
+- **Failure semantics** — a failing step fails the job; later steps are skipped
+  unless gated by an `if:` that uses `failure()`/`always()`.
 
-`git_pipeline.lease_job(runner_id, labels)` returns an **immutable descriptor**
-for the claimed job (or JSON `null` when the queue is empty), authenticated by
-the runner's token. Current fields:
+### Not supported (skipped, never silently passed)
 
-```json
-{
-  "job_id": 12, "repo_id": 99, "runner_id": 7, "status": 1,
-  "ref": "refs/heads/main", "pipeline_path": ".picoforge.yml",
-  "attempt": 1, "timeout": 600, "lease_expiry": 1718050000
-}
-```
+- Marketplace `uses:` actions other than `actions/checkout` are **logged as
+  SKIPPED** — the `run:` steps still execute. So a workflow that relies on, e.g.,
+  `softprops/action-gh-release` to upload assets will run its build steps and
+  skip the upload, rather than failing or pretending success. (Roadmap: a
+  pluggable action-shim registry for the common actions.)
+- Container/service jobs, reusable workflows (job-level `uses:`), `concurrency`,
+  `permissions`, and real secret injection (secrets resolve to empty).
+- Branch/tag/path trigger filtering, caching (`actions/cache`), and artifact
+  upload/download actions.
 
-- `attempt` (gh#33) is the run-attempt counter: it starts at 1 and is
-  incremented every time `requeue_expired` reclaims a timed-out lease, so retries
-  are distinguishable and a future max-attempts policy can fail a job that keeps
-  expiring instead of requeuing it forever.
-- Still to enrich (tracked below): the resolved **commit SHA** for `ref`, an
-  explicit **repo clone location**, the **pipeline content / blob SHA**, and the
-  **env/secrets policy** resolved for the run.
+A workflow only runs green to completion if the runner host actually has the
+toolchain its `run:` steps need (compilers, `apt`, …); the engine provides the
+GitHub-Actions execution *semantics*, not an Ubuntu image.
+
+## Runner integration
+
+The runner-agent (`runner-agent.py`) detects a workflow job and executes it
+through the engine, streaming every line to `git_pipeline.append_log`. A leased
+job descriptor is treated as a workflow when it carries `workflow_content` (the
+YAML text) or a `pipeline_path` under `.github/workflows`. Descriptor fields the
+runner consumes:
+
+| field | meaning |
+|---|---|
+| `workflow_content` | the workflow YAML (read by the mesh from the repo at the ref) |
+| `pipeline_path` | fallback path to the workflow file (dev/local shared disk) |
+| `repo_url` / `repo_path` | clone source for `actions/checkout` |
+| `sha`, `ref`, `event` | the triggering commit / ref / event name |
+| `job` | optional single job to run (else all jobs) |
+
+Non-workflow descriptors still run the legacy shell stub, so existing smoke
+flows are unaffected.
+
+## Execution-ready job descriptor (mesh side)
+
+`git_pipeline.lease_job` returns an immutable descriptor authenticated by the
+runner token. Current fields: `job_id, repo_id, runner_id, status, ref,
+pipeline_path, attempt, timeout, lease_expiry`. `attempt` is the run-attempt
+counter (incremented by `requeue_expired`).
+
+**Remaining mesh wiring to make workflow runs fully mesh-driven** (tracked):
+`lease_job` should also populate `workflow_content` (via `git_repo.read_file` at
+the ref), the resolved `sha` (a `git_repo` ref→SHA resolver), a `repo_url`/
+`repo_path` clone source, and the `event`. Until then, workflows run via the
+standalone engine CLI against a local checkout, and the runner runs a workflow
+the moment a descriptor carries those fields.
 
 ## Runner authorization (enforced today)
 
-Runner identity is the verified token JWT (`runner:<id>` + the runner group), and
-every lifecycle method is gated on it — there is no `uid==0` or
-client-supplied-id bypass:
-
-- `lease` / `lease_job` require the caller's runner token to match the
-  `runner_id` it leases as (`gp_caller_owns`).
-- `append_log` / `complete_job` / `read_log` / `job_descriptor` require the
-  caller to **actively own the job's lease** (or reporter+ on the repo namespace
-  for reads) — a runner cannot append to or complete a job it does not hold.
-- The transitions are single atomic SQL UPDATEs, so a double-complete or a
-  racing requeue affects zero rows the second time.
+Runner identity is the verified token JWT (`runner:<id>` + the runner group);
+every lifecycle method is gated on it (no `uid==0` / client-supplied-id bypass):
+`lease`/`lease_job` require the caller's token to match the `runner_id`;
+`append_log`/`complete_job`/`read_log` require the caller to actively own the
+job's lease. Transitions are single atomic SQL UPDATEs (double-complete / racing
+requeue affect zero rows the second time).
 
 ## Roadmap status
 
-Landed (this issue's foundations):
+Landed:
 
-- [x] `.picoforge.yml` contract defined (this document).
-- [x] `lease_job` returns an immutable descriptor; `attempt` (run-attempt
-      counter) added to the data model + descriptor; `requeue_expired` bumps it.
-- [x] Runner authorization: lease/append/complete are owner-gated on the
-      verified runner token (issue #30 carried this; documented here).
+- [x] GitHub Actions engine: parser, expression evaluator, matrix, `needs`,
+      `run:`/`checkout`, `$GITHUB_OUTPUT`/`$GITHUB_ENV`/`$GITHUB_PATH`, job
+      outputs, `if:` — runs this repo's and ../yetty's workflows' `run:` steps.
+- [x] Runner-agent executes a workflow descriptor through the engine, streaming
+      logs to `append_log`.
+- [x] `attempt` run-counter in the data model + descriptor.
+- [x] Runner authorization (owner-gated lease/append/complete).
 
-Tracked / sequenced (not yet implemented):
+Tracked / sequenced:
 
-1. `.picoforge.yml` parser + validation in the runner; reject malformed files.
-2. Descriptor enrichment: resolved commit SHA, repo clone location, pipeline
-   blob SHA/content, resolved env/secrets policy.
-3. Isolated per-job workspace: fetch/checkout the exact commit, run from a clean
-   dir, archive/clean up afterward.
-4. Artifact storage: gateway-mediated chunked upload/download, keyed by job/run.
-5. Data model: evolve `pipeline_runs` toward run/job/step before matrix + retries.
-6. Label matching enforced at lease time (a runner leases only jobs whose labels
-   it advertises).
-7. Runner admin UI: create/revoke tokens, runner list, labels, last heartbeat,
-   current job, disabled status.
-8. Triggers beyond manual enqueue: push-triggered, then scheduled and MR runs.
-9. Deployment primitives: environments, deployment records, approvals, history.
-10. CI observability: queue depth, lease latency, job duration, failure rate,
-    heartbeat age, requeue count, log-append errors.
+1. Mesh descriptor enrichment: `workflow_content` + resolved `sha` + clone
+   source + `event` (so a queued run is self-contained).
+2. Pluggable `uses:` action shims (checkout exists; add cache, upload-artifact,
+   gh-release, setup-* as needed).
+3. Push/tag-triggered enqueue (read `.github/workflows/*` on push, match `on:`,
+   enqueue the matching workflow); then scheduled and PR triggers.
+4. Isolated container execution + an Ubuntu-like toolchain image.
+5. Artifact storage (gateway-mediated chunked upload/download).
+6. run/job/step data model for matrix fan-out + retries; lease-time label
+   matching; runner admin UI; deployment environments; CI observability.
+7. GitLab `.gitlab-ci.yml` front end behind the same descriptor model.

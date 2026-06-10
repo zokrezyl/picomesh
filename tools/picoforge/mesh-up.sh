@@ -833,6 +833,22 @@ cj2=$(curl -sS --max-time 10 -XPOST "http://127.0.0.1:${WEB}/_rpc" \
       -d "{\"path\":\"git_pipeline.git_pipeline.complete_job\",\"args\":[${JOB_ID2},0,\"ok\"]}")
 expect_contains 'runner2 complete_job (own job) → 1' "$cj2" '"result":1'
 
+# Long-poll lease (GitLab/GitHub-runner style): with the queue empty, a
+# lease_job that asks to wait holds open server-side; a job enqueued mid-wait is
+# delivered on the SAME held call, not a later poll. Enqueue ~1s into a 4s wait.
+( sleep 1
+  curl -sS --max-time 10 -o /dev/null -b $SIDE_COOKIES -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+       -H "$JSONH" -d '{"path":"git_pipeline.git_pipeline.enqueue_job","args":['"$PIPE_REPO"',"refs/heads/longpoll","",60]}' ) &
+lp=$(curl -sS --max-time 10 -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+     -H "Authorization: Bearer ${RUNNER_TOKEN}" -H "$JSONH" \
+     -d "{\"path\":\"git_pipeline.git_pipeline.lease_job\",\"args\":[${RUNNER_ID},\"linux\",4000]}")
+wait
+expect_contains 'long-poll lease_job delivers a job enqueued mid-wait' "$lp" 'refs/heads/longpoll'
+LP_JOB=$(printf '%s' "$lp" | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"]["job_id"])' 2>/dev/null)
+curl -sS --max-time 10 -o /dev/null -XPOST "http://127.0.0.1:${WEB}/_rpc" \
+     -H "Authorization: Bearer ${RUNNER_TOKEN}" -H "$JSONH" \
+     -d "{\"path\":\"git_pipeline.git_pipeline.complete_job\",\"args\":[${LP_JOB},0,\"longpoll ok\"]}"
+
 # Drive the REAL runner-agent.py once, end to end: a fresh job is queued, the
 # agent leases it, runs the stub build, streams logs, and completes it.
 curl -sS --max-time 10 -o /dev/null -b $SIDE_COOKIES -XPOST "http://127.0.0.1:${WEB}/_rpc" \

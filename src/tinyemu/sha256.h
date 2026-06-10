@@ -1,6 +1,6 @@
 /*
  * OpenSSL compatible SHA256 header
- * 
+ *
  * Copyright (c) 2017 Fabrice Bellard
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -27,9 +27,9 @@
 #define SHA256_DIGEST_LENGTH 32
 
 typedef struct {
-    uint64_t length;
-    uint32_t state[8], curlen;
-    uint8_t buf[64];
+  uint64_t length;
+  uint32_t state[8], curlen;
+  uint8_t buf[64];
 } SHA256_CTX;
 
 void SHA256_Init(SHA256_CTX *s);
