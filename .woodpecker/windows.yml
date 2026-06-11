@@ -35,14 +35,12 @@ steps:
     image: cmd
     commands:
       # build.bat locates Visual Studio via vswhere, sources vcvarsall x64 so
-      # cl.exe + the MSVC libs are on PATH (the agent's bare cmd shell has no
-      # vcvars), then runs the Ninja + cl configure/build. cl is pinned so
-      # cmake never auto-picks a clang/gcc — the .lib 3rdparty archives are
-      # MSVC-ABI and the root CMakeLists forces the dynamic msvcrt (/MD) to
-      # match them. A POSIX shell on PATH is still required for the 3rdparty
-      # from-source fallback.
+      # cl.exe is on PATH (the agent's bare cmd shell has no vcvars), then
+      # configures with Ninja + cl and builds the picoforge-runner target.
+      # The Windows deliverable is the standalone CI runner, not the full
+      # POSIX mesh — the runner is a pure gateway client (curl + yyjson).
       - call build-tools\windows\build.bat
-      - dir build-desktop-release\picomesh.exe build-desktop-release\picoforge-webapp.exe
+      - dir build-desktop-release\picoforge-runner.exe
 
   # Workspace lives under %TEMP%\woodpecker-local-NNN and is cleaned when the
   # pipeline ends; the local backend also sandboxes %USERPROFILE% into that
@@ -54,8 +52,7 @@ steps:
     commands:
       - set "DEST=C:\Users\misi\woodpecker-artifacts\picomesh\windows\%CI_PIPELINE_NUMBER%"
       - mkdir "%DEST%" 2>nul
-      - copy /Y build-desktop-release\picomesh.exe "%DEST%\"
-      - copy /Y build-desktop-release\picoforge-webapp.exe "%DEST%\"
+      - copy /Y build-desktop-release\picoforge-runner.exe "%DEST%\"
       # Flat-copy any DLLs the build stages (3rdparty runtime deps) next to
       # the executables so they run standalone from the artifact dir.
       - for /r build-desktop-release %%f in (*.dll) do @copy /Y "%%f" "%DEST%\" >nul

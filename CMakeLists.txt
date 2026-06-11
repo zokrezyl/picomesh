@@ -396,5 +396,18 @@ target_include_directories(picotrace PRIVATE
     include/picohttpparser
 )
 
+# ---- picoforge-runner (standalone CI runner) -------------------------
+#
+# An INDEPENDENT executable, deliberately NOT linked against picomesh_runtime
+# or any plugin: the runner is a pure gateway client (curl subprocess + JSON),
+# with no mesh, libuv, or raw-socket dependency. That minimal surface is what
+# lets it build on Windows where the full mesh does not. Its only linked
+# dependency is the vendored single-file yyjson.
+add_executable(picoforge-runner
+    src/picomesh/runner_agent/main.c
+    src/yyjson/yyjson.c
+)
+target_include_directories(picoforge-runner PRIVATE include/yyjson)
+
 # ---- tests (smoke) ---------------------------------------------------
 add_subdirectory(tests)

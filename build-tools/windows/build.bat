@@ -44,7 +44,11 @@ if errorlevel 1 (
 cmake -S . -B build-desktop-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl
 if errorlevel 1 exit /b 1
 
-cmake --build build-desktop-release --parallel
+rem The Windows deliverable is the standalone CI runner (picoforge-runner): a
+rem pure gateway client (curl subprocess + yyjson) with no mesh / socket
+rem dependency. Build only that target — the full POSIX-targeted mesh is not
+rem ported to MSVC and is not needed on a Windows build agent.
+cmake --build build-desktop-release --parallel --target picoforge-runner
 if errorlevel 1 exit /b 1
 
 echo build.bat: build complete
