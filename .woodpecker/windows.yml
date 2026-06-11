@@ -34,14 +34,14 @@ steps:
   build:
     image: cmd
     commands:
-      # Configure + build the release variant with Ninja + MSVC cl.exe.
-      # Pin CMAKE_C_COMPILER=cl so cmake never auto-picks a clang/gcc that
-      # happens to be on PATH — the .lib 3rdparty archives are MSVC-ABI and
-      # only cl-built objects link them. The root CMakeLists forces the
-      # dynamic msvcrt runtime (/MD) to match those libs. A POSIX shell on
-      # PATH is required for the 3rdparty from-source fallback (see gap).
-      - cmake -S . -B build-desktop-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl
-      - cmake --build build-desktop-release --parallel
+      # build.bat locates Visual Studio via vswhere, sources vcvarsall x64 so
+      # cl.exe + the MSVC libs are on PATH (the agent's bare cmd shell has no
+      # vcvars), then runs the Ninja + cl configure/build. cl is pinned so
+      # cmake never auto-picks a clang/gcc — the .lib 3rdparty archives are
+      # MSVC-ABI and the root CMakeLists forces the dynamic msvcrt (/MD) to
+      # match them. A POSIX shell on PATH is still required for the 3rdparty
+      # from-source fallback.
+      - call build-tools\windows\build.bat
       - dir build-desktop-release\picomesh.exe build-desktop-release\picoforge-webapp.exe
 
   # Workspace lives under %TEMP%\woodpecker-local-NNN and is cleaned when the

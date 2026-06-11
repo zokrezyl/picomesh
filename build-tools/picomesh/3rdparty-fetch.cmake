@@ -57,10 +57,19 @@ file(MAKE_DIRECTORY "${PICOMESH_3RDPARTY_OUTPUT_DIR}")
 
 function(picomesh_3rdparty_target_platform OUT_VAR)
     if(APPLE)
-        if(CMAKE_OSX_ARCHITECTURES MATCHES "x86_64")
-            set(_P "macos-x86_64")
-        else()
+        # Honour an explicit single-arch request; otherwise follow the HOST
+        # arch. The old code defaulted to arm64 whenever CMAKE_OSX_ARCHITECTURES
+        # was unset, which fetched arm64 libs on an x86_64 (Intel/Rosetta) host
+        # and failed the link with "found architecture 'arm64', required
+        # architecture 'x86_64'".
+        if(CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
             set(_P "macos-arm64")
+        elseif(CMAKE_OSX_ARCHITECTURES MATCHES "x86_64")
+            set(_P "macos-x86_64")
+        elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+            set(_P "macos-arm64")
+        else()
+            set(_P "macos-x86_64")
         endif()
     elseif(WIN32)
         set(_P "windows-x86_64")
