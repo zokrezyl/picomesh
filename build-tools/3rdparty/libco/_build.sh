@@ -101,7 +101,12 @@ windows-x86_64)
         echo "windows-x86_64 requires MSVC cl on PATH (run vcvarsall x64)" >&2; exit 1; }
     CC=cl
     AR=lib
-    CFLAGS_BASE="/nologo /O2 /MD /DLIBCO_MP /D_CRT_SECURE_NO_WARNINGS"
+    # /std:c17 makes MSVC define __STDC__, which gates libco settings.h's
+    # _MSC_VER branch that maps thread_local -> __declspec(thread) and
+    # alignas -> __declspec(align(...)). Without it neither the C nor C++
+    # branch is taken and `thread_local`/`alignas` stay undefined keywords,
+    # so amd64.c fails to compile under LIBCO_MP.
+    CFLAGS_BASE="/nologo /O2 /MD /std:c17 /DLIBCO_MP /D_CRT_SECURE_NO_WARNINGS"
     CFLAGS_EXTRA=""
     ;;
 *)

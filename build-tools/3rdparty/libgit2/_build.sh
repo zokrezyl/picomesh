@@ -51,7 +51,11 @@ if [ ! -f "$TARBALL_CACHE" ]; then
 fi
 if [ ! -d "$SRC_DIR" ]; then
     echo "==> extracting"
-    tar -C "$WORK_DIR" -xzf "$TARBALL_CACHE"
+    # libgit2's source tree carries symlinks under tests/resources/ that GNU
+    # tar cannot recreate on Windows (no symlink privilege), which aborts the
+    # whole extraction. We build with BUILD_TESTS=OFF, so the test tree is
+    # never needed — exclude it everywhere for a uniform, portable extract.
+    tar -C "$WORK_DIR" --exclude='*/tests/*' -xzf "$TARBALL_CACHE"
 fi
 rm -rf "$STAGE" "$BUILD_DIR"
 mkdir -p "$STAGE" "$BUILD_DIR"
