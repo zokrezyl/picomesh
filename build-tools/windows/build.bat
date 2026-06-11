@@ -41,7 +41,16 @@ if errorlevel 1 (
   )
 )
 
-cmake -S . -B build-desktop-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl
+rem CMake's file(DOWNLOAD ...) uses its bundled libcurl, which on Windows
+rem ships WITHOUT a CA bundle — so the 3rdparty-fetch HTTPS pulls fail with
+rem "peer certificate cannot be authenticated" and (wrongly) fall back to a
+rem from-source build. Point CMAKE_TLS_CAINFO at Mozilla's cacert.pem (ships
+rem with Strawberry Perl, preinstalled on the agent) so the verified download
+rem works — no TLS loosening, no source build. Same approach as yetty.
+set "CMAKE_CA_ARG="
+if exist "C:\Strawberry\perl\vendor\lib\Mozilla\CA\cacert.pem" set "CMAKE_CA_ARG=-DCMAKE_TLS_CAINFO=C:/Strawberry/perl/vendor/lib/Mozilla/CA/cacert.pem"
+
+cmake -S . -B build-desktop-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl %CMAKE_CA_ARG%
 if errorlevel 1 exit /b 1
 
 rem The Windows deliverable is the standalone CI runner (picoforge-runner): a
