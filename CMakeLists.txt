@@ -61,6 +61,12 @@ include(build-tools/picomesh/libs/libcurl.cmake)
 if(WIN32)
     set(PICOMESH_PLATFORM_TIME_SRC   src/picomesh/platform/time/windows.c)
     set(PICOMESH_PLATFORM_RANDOM_SRC src/picomesh/platform/random/windows.c)
+    # POSIX compat shims (pthread.h, strings.h) ahead of everything so the
+    # POSIX-targeted sources resolve those includes to Win32 mappings under
+    # MSVC without per-file changes. The names don't exist in the MSVC SDK,
+    # so this shadows nothing.
+    include_directories(BEFORE
+        "${CMAKE_CURRENT_SOURCE_DIR}/build-tools/picomesh/win-compat")
 else()
     set(PICOMESH_PLATFORM_TIME_SRC   src/picomesh/platform/time/posix.c)
     set(PICOMESH_PLATFORM_RANDOM_SRC src/picomesh/platform/random/posix.c)
