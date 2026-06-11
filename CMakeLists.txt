@@ -48,13 +48,15 @@ include(build-tools/picomesh/libs/libcurl.cmake)
 # ---- platform backend selection -------------------------------------
 #
 # platform abstractions get one backend file per platform. Backends
-# under src/picomesh/platform/<module>/<platform>.c. Today only `time`
-# is platform-split; future modules (paths, threads, sockets) follow
+# under src/picomesh/platform/<module>/<platform>.c. `time` and `random`
+# are platform-split; future modules (paths, threads, sockets) follow
 # the same shape.
 if(WIN32)
-    set(PICOMESH_PLATFORM_TIME_SRC src/picomesh/platform/time/windows.c)
+    set(PICOMESH_PLATFORM_TIME_SRC   src/picomesh/platform/time/windows.c)
+    set(PICOMESH_PLATFORM_RANDOM_SRC src/picomesh/platform/random/windows.c)
 else()
-    set(PICOMESH_PLATFORM_TIME_SRC src/picomesh/platform/time/posix.c)
+    set(PICOMESH_PLATFORM_TIME_SRC   src/picomesh/platform/time/posix.c)
+    set(PICOMESH_PLATFORM_RANDOM_SRC src/picomesh/platform/random/posix.c)
 endif()
 
 # ---- picomesh runtime ---------------------------------------------------
@@ -103,6 +105,7 @@ add_library(picomesh_runtime STATIC
     src/picomesh/json/json.c
     src/yyjson/yyjson.c
     ${PICOMESH_PLATFORM_TIME_SRC}
+    ${PICOMESH_PLATFORM_RANDOM_SRC}
 )
 target_include_directories(picomesh_runtime PUBLIC
     include

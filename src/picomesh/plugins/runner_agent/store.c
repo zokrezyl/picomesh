@@ -32,17 +32,16 @@
 #include <picomesh/json/json.h>
 #include <picomesh/picoclass/class.h>
 #include <picomesh/picoclass/yheaders.h>
+#include <picomesh/platform/random.h>
 #include <picomesh/plugin/sharded_storage/sharded_storage.h>
 #include <picomesh/plugin/token_issuer/token_issuer.h>
 #include <picomesh/security/jwt.h>
 #include <picomesh/security/sha256.h>
 
-#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/random.h>
 
 #define RA_CTX "runner_agent"
 
@@ -129,16 +128,8 @@ static int ra_alloc_token(char *out, size_t cap) {
   if (cap < 4 + 32 + 1)
     return 0;
   uint8_t raw[16];
-  size_t got = 0;
-  while (got < sizeof(raw)) {
-    ssize_t read_len = getrandom(raw + got, sizeof(raw) - got, 0);
-    if (read_len < 0) {
-      if (errno == EINTR)
-        continue;
-      return 0;
-    }
-    got += (size_t)read_len;
-  }
+  if (picomesh_platform_random_bytes(raw, sizeof(raw)) != 0)
+    return 0;
   static const char hex[] = "0123456789abcdef";
   memcpy(out, "rnr_", 4);
   size_t k = 4;

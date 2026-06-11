@@ -23,6 +23,7 @@
 #include <picomesh/engine/engine.h>
 #include <picomesh/picoclass/class.h>
 #include <picomesh/picoclass/yheaders.h>
+#include <picomesh/platform/random.h>
 #include <picomesh/platform/time.h>
 #include <picomesh/plugin/accounts/accounts.h>
 #include <picomesh/plugin/password_authn/password_authn.h>
@@ -30,12 +31,10 @@
 #include <picomesh/security/jwt.h>
 #include <picomesh/security/secret.h>
 
-#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/random.h>
 
 #define TI_DDL                                                                 \
   "CREATE TABLE IF NOT EXISTS refresh_tokens("                                 \
@@ -69,16 +68,8 @@ static struct picomesh_void_result ti_open(struct rel_handle *rel_handle,
  * randomness is unavailable — a refresh token is a bearer secret. */
 static int alloc_refresh_token(char *out, size_t cap) {
   uint8_t raw[16];
-  size_t got = 0;
-  while (got < sizeof(raw)) {
-    ssize_t read_len = getrandom(raw + got, sizeof(raw) - got, 0);
-    if (read_len < 0) {
-      if (errno == EINTR)
-        continue;
-      return 0;
-    }
-    got += (size_t)read_len;
-  }
+  if (picomesh_platform_random_bytes(raw, sizeof(raw)) != 0)
+    return 0;
   static const char hex[] = "0123456789abcdef";
   size_t k = 0;
   for (size_t i = 0; i < sizeof(raw) && k + 2 < cap; ++i) {

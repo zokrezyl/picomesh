@@ -11,13 +11,12 @@
 #include <picomesh/picoclass/class.h>
 #include <picomesh/picoclass/rpc.h>
 #include <picomesh/picoclass/yheaders.h>
+#include <picomesh/platform/random.h>
 
-#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include <sys/random.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -77,26 +76,13 @@ static int ytel_bytes_all_zero(const uint8_t *bytes, size_t n) {
 }
 
 static void ytel_fill_random(uint8_t *bytes, size_t n) {
-  /* Prefer the kernel CSPRNG; retry partial reads and EINTR. */
-  size_t off = 0;
-  while (off < n) {
-    ssize_t got = getrandom(bytes + off, n - off, 0);
-    if (got > 0) {
-      off += (size_t)got;
-      continue;
-    }
-    if (got < 0 && errno == EINTR)
-      continue;
-    break;
-  }
-  if (off == n)
+  /* Prefer the kernel CSPRNG. */
+  if (picomesh_platform_random_bytes(bytes, n) == 0)
     return;
-  /* Fallback for the remainder: trace/span ids are correlation ids, not
-   * secrets, so a clock/pid-seeded PRNG is acceptable when getrandom is
-   * unavailable. */
-  uint64_t seed =
-      ytel_mono_ns() ^ ((uint64_t)getpid() << 32) ^ (uint64_t)(off + 1);
-  for (size_t i = off; i < n; ++i) {
+  /* Fallback: trace/span ids are correlation ids, not secrets, so a
+   * clock/pid-seeded PRNG is acceptable when the CSPRNG is unavailable. */
+  uint64_t seed = ytel_mono_ns() ^ ((uint64_t)getpid() << 32) ^ 1u;
+  for (size_t i = 0; i < n; ++i) {
     seed = seed * 6364136223846793005ull + 1442695040888963407ull;
     bytes[i] = (uint8_t)(seed >> 33);
   }
