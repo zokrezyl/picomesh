@@ -15,9 +15,15 @@ endif()
 
 picomesh_3rdparty_fetch(libcurl _CURL_DIR)
 
-set(_CURL_LIB "${_CURL_DIR}/lib/libcurl.a")
-if(NOT EXISTS "${_CURL_LIB}")
-    message(FATAL_ERROR "libcurl: ${_CURL_LIB} missing")
+set(_CURL_LIB "")
+foreach(_CAND libcurl.a libcurl.lib)  # .a on POSIX, .lib on MSVC
+    if(EXISTS "${_CURL_DIR}/lib/${_CAND}")
+        set(_CURL_LIB "${_CURL_DIR}/lib/${_CAND}")
+        break()
+    endif()
+endforeach()
+if(NOT _CURL_LIB)
+    message(FATAL_ERROR "libcurl: no libcurl.a/.lib under ${_CURL_DIR}/lib")
 endif()
 if(NOT EXISTS "${_CURL_DIR}/include/curl/curl.h")
     message(FATAL_ERROR "libcurl: include/curl/curl.h missing")

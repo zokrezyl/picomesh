@@ -9,9 +9,15 @@ endif()
 
 picomesh_3rdparty_fetch(libsqlite3 _SJ_DIR)
 
-set(_SJ_LIB "${_SJ_DIR}/lib/libsqlite3.a")
-if(NOT EXISTS "${_SJ_LIB}")
-    message(FATAL_ERROR "sqlite3: ${_SJ_LIB} missing")
+set(_SJ_LIB "")
+foreach(_CAND libsqlite3.a libsqlite3.lib)  # .a on POSIX, .lib on MSVC
+    if(EXISTS "${_SJ_DIR}/lib/${_CAND}")
+        set(_SJ_LIB "${_SJ_DIR}/lib/${_CAND}")
+        break()
+    endif()
+endforeach()
+if(NOT _SJ_LIB)
+    message(FATAL_ERROR "sqlite3: no libsqlite3.a/.lib under ${_SJ_DIR}/lib")
 endif()
 if(NOT EXISTS "${_SJ_DIR}/include/sqlite3.h")
     message(FATAL_ERROR "sqlite3: include/sqlite3.h missing")

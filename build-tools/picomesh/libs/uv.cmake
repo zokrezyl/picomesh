@@ -12,7 +12,7 @@ endif()
 picomesh_3rdparty_fetch(libuv _LIBUV_DIR)
 
 set(_LIBUV_LIB "")
-foreach(_CAND libuv_a.a libuv.a)
+foreach(_CAND libuv_a.a libuv.a libuv.lib uv_a.lib)  # .a on POSIX, .lib on MSVC
     if(EXISTS "${_LIBUV_DIR}/lib/${_CAND}")
         set(_LIBUV_LIB "${_LIBUV_DIR}/lib/${_CAND}")
         break()

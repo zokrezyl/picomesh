@@ -10,9 +10,15 @@ endif()
 
 picomesh_3rdparty_fetch(libmdbx _LM_DIR)
 
-set(_LM_LIB "${_LM_DIR}/lib/libmdbx.a")
-if(NOT EXISTS "${_LM_LIB}")
-    message(FATAL_ERROR "libmdbx: ${_LM_LIB} missing")
+set(_LM_LIB "")
+foreach(_CAND libmdbx.a libmdbx.lib)  # .a on POSIX, .lib on MSVC
+    if(EXISTS "${_LM_DIR}/lib/${_CAND}")
+        set(_LM_LIB "${_LM_DIR}/lib/${_CAND}")
+        break()
+    endif()
+endforeach()
+if(NOT _LM_LIB)
+    message(FATAL_ERROR "libmdbx: no libmdbx.a/.lib under ${_LM_DIR}/lib")
 endif()
 if(NOT EXISTS "${_LM_DIR}/include/mdbx.h")
     message(FATAL_ERROR "libmdbx: include/mdbx.h missing")

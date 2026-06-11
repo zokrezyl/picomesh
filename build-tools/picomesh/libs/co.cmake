@@ -12,9 +12,15 @@ endif()
 
 picomesh_3rdparty_fetch(libco _LIBCO_DIR)
 
-set(_LIBCO_LIB "${_LIBCO_DIR}/lib/libco.a")
-if(NOT EXISTS "${_LIBCO_LIB}")
-    message(FATAL_ERROR "libco: ${_LIBCO_LIB} not present after fetch")
+set(_LIBCO_LIB "")
+foreach(_CAND libco.a libco.lib)  # .a on POSIX, .lib on MSVC
+    if(EXISTS "${_LIBCO_DIR}/lib/${_CAND}")
+        set(_LIBCO_LIB "${_LIBCO_DIR}/lib/${_CAND}")
+        break()
+    endif()
+endforeach()
+if(NOT _LIBCO_LIB)
+    message(FATAL_ERROR "libco: no libco.a/libco.lib under ${_LIBCO_DIR}/lib")
 endif()
 if(NOT EXISTS "${_LIBCO_DIR}/include/libco.h")
     message(FATAL_ERROR "libco: include/libco.h missing after fetch")

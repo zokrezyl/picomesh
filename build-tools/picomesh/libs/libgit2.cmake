@@ -12,9 +12,15 @@ endif()
 
 picomesh_3rdparty_fetch(libgit2 _LG_DIR)
 
-set(_LG_LIB "${_LG_DIR}/lib/libgit2.a")
-if(NOT EXISTS "${_LG_LIB}")
-    message(FATAL_ERROR "libgit2: ${_LG_LIB} missing")
+set(_LG_LIB "")
+foreach(_CAND libgit2.a git2.lib)  # .a on POSIX, git2.lib on MSVC
+    if(EXISTS "${_LG_DIR}/lib/${_CAND}")
+        set(_LG_LIB "${_LG_DIR}/lib/${_CAND}")
+        break()
+    endif()
+endforeach()
+if(NOT _LG_LIB)
+    message(FATAL_ERROR "libgit2: no libgit2.a/git2.lib under ${_LG_DIR}/lib")
 endif()
 if(NOT EXISTS "${_LG_DIR}/include/git2.h")
     message(FATAL_ERROR "libgit2: include/git2.h missing")
