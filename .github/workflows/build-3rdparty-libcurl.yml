@@ -57,7 +57,7 @@ jobs:
           - { target: linux-aarch64,  os: ubuntu-latest }
           - { target: linux-riscv64,  os: ubuntu-latest }
           - { target: macos-arm64,    os: macos-14 }
-          - { target: macos-x86_64,   os: macos-13 }
+          - { target: macos-x86_64,   os: macos-14 }   # cross-compile x86_64 on Apple Silicon (macos-13 is scarce)
           - { target: windows-x86_64, os: windows-latest }
     steps:
       - uses: actions/checkout@v4
