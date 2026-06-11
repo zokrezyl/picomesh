@@ -41,18 +41,25 @@ jobs:
 
   build:
     needs: resolve
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - linux-x86_64
-          - linux-aarch64
-          - linux-riscv64
+        # Each target builds on its native runner so the published tarball is a
+        # real per-OS/per-arch artifact — the mesh fetches these instead of
+        # building any 3rdparty lib from source on the deploy host.
+        include:
+          - { target: linux-x86_64,   os: ubuntu-latest }
+          - { target: linux-aarch64,  os: ubuntu-latest }
+          - { target: linux-riscv64,  os: ubuntu-latest }
+          - { target: macos-arm64,    os: macos-14 }
+          - { target: macos-x86_64,   os: macos-13 }
+          - { target: windows-x86_64, os: windows-latest }
     steps:
       - uses: actions/checkout@v4
 
-      - name: install build deps
+      - name: install linux deps
+        if: runner.os == 'Linux'
         run: |
           set -euo pipefail
           sudo apt-get update -y
@@ -63,7 +70,22 @@ jobs:
           esac
           sudo apt-get install -y --no-install-recommends $pkgs
 
+      - name: install macos deps
+        if: runner.os == 'macOS'
+        run: brew install ninja   # cmake, clang, perl, make ship with the runner
+
+      - name: set up MSVC (windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: install windows deps
+        if: runner.os == 'Windows'
+        run: choco install ninja nasm -y --no-progress
+
       - name: build openssl for ${{ matrix.target }}
+        shell: bash
         run: |
           mkdir -p out
           TARGET_PLATFORM="${{ matrix.target }}" \

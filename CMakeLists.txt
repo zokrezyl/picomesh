@@ -11,6 +11,13 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Emit the vendored 3rdparty IMPORTED-target include dirs as -I, not -isystem.
+# Their headers (e.g. <libco.h>) MUST win over a same-named header sitting in a
+# default system dir on the build host — e.g. a stray Homebrew /usr/local/
+# include/libco.h, whose 3-arg co_create() would otherwise shadow our vendored
+# 2-arg one and break the build. -I dirs are searched before any system dir.
+set(CMAKE_NO_SYSTEM_FROM_IMPORTED ON)
+
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
