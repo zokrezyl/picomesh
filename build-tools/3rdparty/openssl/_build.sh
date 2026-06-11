@@ -96,9 +96,13 @@ linux-riscv64)
     ;;
 macos-x86_64)
     CFG_TARGET="darwin64-x86_64-cc"
+    # Force Apple's ar/ranlib so a Homebrew GNU binutils on PATH can't produce
+    # a GNU-format archive that Apple's ld rejects.
+    export AR=/usr/bin/ar RANLIB=/usr/bin/ranlib
     ;;
 macos-arm64)
     CFG_TARGET="darwin64-arm64-cc"
+    export AR=/usr/bin/ar RANLIB=/usr/bin/ranlib
     ;;
 windows-x86_64)
     # Native MSVC — caller must have vcvarsall'd the shell (x64). openssl's

@@ -82,11 +82,16 @@ linux-riscv64)
     AR="${CROSS_PREFIX}ar"
     ;;
 macos-x86_64)
+    # AR=/usr/bin/ar forces Apple's archiver over a GNU binutils ar that may
+    # sit earlier on PATH (Homebrew); a GNU-format .a has a '/' member Apple's
+    # ld rejects ("archive member '/' not a mach-o file").
     CC=clang
+    AR=/usr/bin/ar
     CFLAGS_EXTRA="-arch x86_64"
     ;;
 macos-arm64)
     CC=clang
+    AR=/usr/bin/ar
     CFLAGS_EXTRA="-arch arm64"
     ;;
 windows-x86_64)
